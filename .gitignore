@@ -1,0 +1,19 @@
+# --- Node / frontend ---
+node_modules/
+web/dist/
+*.local
+
+# --- .NET / backend ---
+bin/
+obj/
+*.user
+
+# --- Segreti: config locale con credenziali DB e chiave JWT ---
+appsettings.json
+appsettings.*.json
+!appsettings.example.json
+
+# --- varie ---
+.vs/
+.DS_Store
+Thumbs.db
