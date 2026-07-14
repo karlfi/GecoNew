@@ -135,6 +135,42 @@ const nuovaPassword = ref('')
 const nuovo = ref(false)
 const salvataggio = ref(false)
 
+// --- collezioni N:N (Gruppi, Famiglie, Processi, Filiali abilitate) ---
+const relazioni = reactive({ gruppi: [], profili: [], processi: [], filiali: [] })
+const comuni = ref([])
+const comuniCaricati = ref(false)
+const addGruppo = ref(null)
+const addProfilo = ref(null)
+const addFiliale = ref(null)
+const addProcesso = reactive({ idProcesso: null, belfiore: null })
+
+function resetRelazioni() {
+  relazioni.gruppi = []; relazioni.profili = []; relazioni.processi = []; relazioni.filiali = []
+  addGruppo.value = null; addProfilo.value = null; addFiliale.value = null
+  addProcesso.idProcesso = null; addProcesso.belfiore = null
+}
+async function caricaRelazioni(id) {
+  try { const { data } = await api.get(`/utenti/${id}/relazioni`); Object.assign(relazioni, data) }
+  catch { /* ignore */ }
+}
+async function caricaComuni() {
+  if (comuniCaricati.value) return
+  try { const { data } = await api.get('/utenti/comuni'); comuni.value = data; comuniCaricati.value = true } catch {}
+}
+async function addRel(coll, body, reset) {
+  try {
+    await api.post(`/utenti/${edit.value.IdUtente}/${coll}`, body)
+    await caricaRelazioni(edit.value.IdUtente)
+    reset && reset()
+  } catch (e) {
+    toast.add({ severity: 'error', summary: 'Errore', detail: e.response?.data?.errore ?? 'Operazione fallita', life: 4000 })
+  }
+}
+async function delRel(coll, id) {
+  try { await api.delete(`/utenti/${coll}/${id}`); await caricaRelazioni(edit.value.IdUtente) }
+  catch (e) { toast.add({ severity: 'error', summary: 'Errore', detail: e.response?.data?.errore ?? 'Operazione fallita', life: 4000 }) }
+}
+
 function toDate(v) { if (!v) return null; const d = new Date(v); return isNaN(d) ? null : d }
 function toIso(d) {
   if (!(d instanceof Date) || isNaN(d)) return null
@@ -148,6 +184,7 @@ async function apriNuovo() {
   for (const s of SEZIONI) for (const c of s.campi) r[c.k] = null
   r.IdUtente = null
   edit.value = r
+  resetRelazioni()
   dialog.value = true
 }
 async function apriModifica(riga) {
@@ -157,6 +194,8 @@ async function apriModifica(riga) {
     const { data } = await api.get(`/utenti/${riga.IdUtente}`)
     for (const k of CAMPI_DATA) if (data[k]) data[k] = toDate(data[k])
     edit.value = data
+    resetRelazioni()
+    await caricaRelazioni(riga.IdUtente)
     dialog.value = true
   } catch (e) {
     toast.add({ severity: 'error', summary: 'Errore', detail: 'Impossibile aprire l\'utente', life: 4000 })
@@ -238,6 +277,10 @@ function fmtData(v) {
       <Tabs value="0">
         <TabList>
           <Tab v-for="(s, i) in SEZIONI" :key="s.nome" :value="String(i)">{{ s.nome }}</Tab>
+          <Tab value="rel-g">Gruppi</Tab>
+          <Tab value="rel-f">Famiglie</Tab>
+          <Tab value="rel-p">Processi</Tab>
+          <Tab value="rel-fi">Filiali abilitate</Tab>
           <Tab value="pwd">Password</Tab>
         </TabList>
         <TabPanels>
@@ -256,6 +299,76 @@ function fmtData(v) {
               </div>
             </div>
           </TabPanel>
+          <TabPanel value="rel-g">
+            <div v-if="!edit.IdUtente" class="rel-hint">Salva prima l'utente per gestire i gruppi.</div>
+            <template v-else>
+              <div class="rel-add">
+                <Select v-model="addGruppo" :options="lookups.gruppi" optionValue="idGruppo" optionLabel="gruppo" filter placeholder="Aggiungi gruppo..." />
+                <Button icon="pi pi-plus" :disabled="!addGruppo" @click="addRel('gruppi', { idGruppo: addGruppo }, () => addGruppo = null)" />
+              </div>
+              <ul class="rel-lista">
+                <li v-for="r in relazioni.gruppi" :key="r.id">
+                  <span>{{ r.gruppo }}</span>
+                  <Button icon="pi pi-trash" text rounded size="small" severity="danger" @click="delRel('gruppi', r.id)" />
+                </li>
+                <li v-if="!relazioni.gruppi.length" class="rel-vuoto">Nessun gruppo</li>
+              </ul>
+            </template>
+          </TabPanel>
+
+          <TabPanel value="rel-f">
+            <div v-if="!edit.IdUtente" class="rel-hint">Salva prima l'utente per gestire le famiglie.</div>
+            <template v-else>
+              <div class="rel-add">
+                <Select v-model="addProfilo" :options="lookups.famiglie" optionValue="codFamiglia" optionLabel="famiglia" placeholder="Aggiungi famiglia..." />
+                <Button icon="pi pi-plus" :disabled="!addProfilo" @click="addRel('profili', { codFamiglia: addProfilo }, () => addProfilo = null)" />
+              </div>
+              <ul class="rel-lista">
+                <li v-for="r in relazioni.profili" :key="r.id">
+                  <span>{{ r.famiglia ?? r.codFamiglia }}</span>
+                  <Button icon="pi pi-trash" text rounded size="small" severity="danger" @click="delRel('profili', r.id)" />
+                </li>
+                <li v-if="!relazioni.profili.length" class="rel-vuoto">Nessuna famiglia</li>
+              </ul>
+            </template>
+          </TabPanel>
+
+          <TabPanel value="rel-p">
+            <div v-if="!edit.IdUtente" class="rel-hint">Salva prima l'utente per gestire i processi.</div>
+            <template v-else>
+              <div class="rel-add rel-add-proc">
+                <Select v-model="addProcesso.idProcesso" :options="lookups.processi" optionValue="idProcesso" optionLabel="processo" filter placeholder="Processo..." />
+                <Select v-model="addProcesso.belfiore" :options="comuni" optionValue="belfiore" optionLabel="label" filter showClear placeholder="Comune (opzionale)" @show="caricaComuni" />
+                <Button icon="pi pi-plus" :disabled="!addProcesso.idProcesso"
+                        @click="addRel('processi', { idProcesso: addProcesso.idProcesso, belfiore: addProcesso.belfiore }, () => { addProcesso.idProcesso = null; addProcesso.belfiore = null })" />
+              </div>
+              <ul class="rel-lista">
+                <li v-for="r in relazioni.processi" :key="r.id">
+                  <span>{{ r.processo }}<template v-if="r.comune"> — {{ r.comune }}</template></span>
+                  <Button icon="pi pi-trash" text rounded size="small" severity="danger" @click="delRel('processi', r.id)" />
+                </li>
+                <li v-if="!relazioni.processi.length" class="rel-vuoto">Nessun processo</li>
+              </ul>
+            </template>
+          </TabPanel>
+
+          <TabPanel value="rel-fi">
+            <div v-if="!edit.IdUtente" class="rel-hint">Salva prima l'utente per gestire le filiali abilitate.</div>
+            <template v-else>
+              <div class="rel-add">
+                <Select v-model="addFiliale" :options="lookups.filiali" optionValue="idFiliale" optionLabel="filiale" filter placeholder="Aggiungi filiale..." />
+                <Button icon="pi pi-plus" :disabled="!addFiliale" @click="addRel('filiali', { idFiliale: addFiliale }, () => addFiliale = null)" />
+              </div>
+              <ul class="rel-lista">
+                <li v-for="r in relazioni.filiali" :key="r.id">
+                  <span>{{ r.filiale }}</span>
+                  <Button icon="pi pi-trash" text rounded size="small" severity="danger" @click="delRel('filiali', r.id)" />
+                </li>
+                <li v-if="!relazioni.filiali.length" class="rel-vuoto">Nessuna filiale aggiuntiva</li>
+              </ul>
+            </template>
+          </TabPanel>
+
           <TabPanel value="pwd">
             <div class="pwd-box">
               <p>
@@ -295,4 +408,12 @@ function fmtData(v) {
 .pwd-box { max-width: 360px; display: flex; flex-direction: column; gap: .4rem; }
 .pwd-box p { color: #666; font-size: .85rem; }
 .pwd-box :deep(.p-password), .pwd-box :deep(.p-password-input) { width: 100%; }
+.rel-hint { color: #888; font-style: italic; padding: .5rem 0; }
+.rel-add { display: flex; gap: .5rem; margin-bottom: .75rem; }
+.rel-add :deep(.p-select) { flex: 1; }
+.rel-add-proc { flex-wrap: wrap; }
+.rel-add-proc :deep(.p-select) { min-width: 200px; }
+.rel-lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .25rem; }
+.rel-lista li { display: flex; align-items: center; justify-content: space-between; padding: .3rem .6rem; background: var(--p-surface-50); border-radius: 6px; font-size: .9rem; }
+.rel-lista .rel-vuoto { justify-content: center; color: #999; background: none; font-style: italic; }
 </style>

@@ -7,6 +7,8 @@ web/dist/
 bin/
 obj/
 *.user
+api/wwwroot/
+publish/
 
 # --- Segreti: config locale con credenziali DB e chiave JWT ---
 appsettings.json

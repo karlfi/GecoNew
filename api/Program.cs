@@ -38,6 +38,12 @@ builder.Services.AddCors(o => o.AddDefaultPolicy(p => p
 
 var app = builder.Build();
 
+// Frontend servito dalla stessa API (porta unica, niente IIS): in produzione il
+// contenuto di web/dist viene copiato in wwwroot. In sviluppo wwwroot e' vuoto e
+// il frontend gira su Vite (5173) che fa da proxy su /api -> qui.
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
 app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
@@ -71,6 +77,12 @@ var ConfigTabelle = new Dictionary<string, string>(StringComparer.OrdinalIgnoreC
     ["gruppi"] = "GRUPPI",
     ["aziende"] = "AZIENDE",
     ["filiali"] = "FILIALI",
+    ["clienti"] = "CLIENTI",
+    ["tracciati"] = "FILE_TRACCIATO",
+    ["fornitori"] = "FORNITORI",
+    ["lista"] = "LISTA_VALORI",
+    ["mittenti"] = "MITTENTI",
+    ["stati"] = "SPED_STATI",
     ["interrogazioni"] = "INTERROGAZIONI",
     ["menu"] = "MENU_ELEMENTI"
 };
@@ -81,10 +93,13 @@ bool TipoTesto(string t) => t is "char" or "varchar" or "nchar" or "nvarchar" or
 
 async Task<List<ColMeta>> LoadColonne(SqlConnection cn, string tabella)
 {
+    // I CAST sono necessari: ColMeta e' un record posizionale e Dapper pretende che i tipi
+    // letti combacino col costruttore. sys.columns.max_length e' smallint (->int) e il flag
+    // PK e' un'espressione int (->bit/bool). Senza cast la materializzazione fallisce.
     var rows = await cn.QueryAsync<ColMeta>(@"
-        SELECT c.name AS Col, ty.name AS Tipo, c.max_length AS MaxLen,
+        SELECT c.name AS Col, ty.name AS Tipo, CAST(c.max_length AS int) AS MaxLen,
                c.is_nullable AS Nullable, c.is_identity AS Identita,
-               CASE WHEN pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS Pk
+               CAST(CASE WHEN pk.column_id IS NOT NULL THEN 1 ELSE 0 END AS bit) AS Pk
         FROM sys.columns c
         JOIN sys.types ty ON ty.user_type_id = c.user_type_id
         LEFT JOIN (
@@ -273,7 +288,46 @@ app.MapGet("/api/dashboard/punteggi", async (ClaimsPrincipal user) =>
               FROM V_DW_punteggiGiorno WHERE IDFILIALE = @id ORDER BY Data",
             new { id = idFiliale });
 
-        return Results.Ok(new { idFiliale, mese, giorno });
+        // azienda della filiale corrente
+        var idAzienda = await cn.ExecuteScalarAsync<int?>(
+            "SELECT IdAzienda FROM FILIALI WHERE IDFILIALE = @id", new { id = idFiliale });
+        var aziendaNome = await cn.ExecuteScalarAsync<string>(
+            "SELECT Azienda FROM AZIENDE WHERE IdAzienda = @a", new { a = idAzienda });
+
+        // aggregato AZIENDA: somma punteggi e giornate su tutte le filiali attive,
+        // media pesata = somma punteggi / somma giornate (NON media delle medie)
+        var meseAzienda = await cn.QueryAsync(
+            @"SELECT m.mese, SUM(m.Punteggio) AS punteggio, SUM(m.Giornate) AS giornate,
+                     CASE WHEN SUM(m.Giornate) > 0 THEN CONVERT(int, SUM(m.Punteggio)/SUM(m.Giornate)) ELSE 0 END AS media
+              FROM V_DW_punteggiMese m
+              JOIN FILIALI f ON f.IDFILIALE = m.IDFILIALE
+              WHERE f.IdAzienda = @a AND f.DataChiusura IS NULL
+              GROUP BY m.mese ORDER BY m.mese", new { a = idAzienda });
+
+        var giornoAzienda = await cn.QueryAsync(
+            @"SELECT CONVERT(varchar(10), g.Data, 23) AS data, SUM(g.Punteggio) AS punteggio, SUM(g.Giornate) AS giornate,
+                     CASE WHEN SUM(g.Giornate) > 0 THEN CONVERT(int, SUM(g.Punteggio)/SUM(g.Giornate)) ELSE 0 END AS media
+              FROM V_DW_punteggiGiorno g
+              JOIN FILIALI f ON f.IDFILIALE = g.IDFILIALE
+              WHERE f.IdAzienda = @a AND f.DataChiusura IS NULL
+              GROUP BY g.Data ORDER BY g.Data", new { a = idAzienda });
+
+        // confronto filiali attive dell'azienda sull'ultimo mese disponibile
+        var meseLabel = await cn.ExecuteScalarAsync<string>("SELECT MAX(mese) FROM V_DW_punteggiMese");
+        var confrontoFiliali = await cn.QueryAsync(
+            @"SELECT m.IDFILIALE AS idFiliale, f.FILIALE AS filiale, m.Punteggio AS punteggio,
+                     m.Media AS media, m.Giornate AS giornate
+              FROM V_DW_punteggiMese m
+              JOIN FILIALI f ON f.IDFILIALE = m.IDFILIALE
+              WHERE f.IdAzienda = @a AND f.DataChiusura IS NULL AND m.mese = @mese
+              ORDER BY m.Punteggio DESC", new { a = idAzienda, mese = meseLabel });
+
+        return Results.Ok(new
+        {
+            idFiliale, mese, giorno,
+            idAzienda, aziendaNome, meseLabel,
+            meseAzienda, giornoAzienda, confrontoFiliali
+        });
     }
     catch (SqlException ex)
     {
@@ -474,7 +528,9 @@ app.MapPost("/api/config/{key}", async (string key, JsonElement body) =>
     var par = new DynamicParameters();
     foreach (var prop in body.EnumerateObject())
         if (validi.ContainsKey(prop.Name))
-            par.Add(prop.Name, JsonToClr(prop.Value));
+            // TrimEnd: alcune colonne legacy hanno spazi finali nel nome (es. MITTENTI."CODICE_FISCALE ");
+            // un nome di parametro SQL non puo' contenere spazi, quindi lo si normalizza. No-op per tutte le altre.
+            par.Add(prop.Name.TrimEnd(), JsonToClr(prop.Value));
 
     try
     {
@@ -656,8 +712,81 @@ app.MapGet("/api/utenti/lookups", async () =>
     var clienti = await cn.QueryAsync("SELECT IdCliente AS idCliente, RagioneSociale AS ragioneSociale FROM CLIENTI ORDER BY RagioneSociale");
     var aziende = await cn.QueryAsync("SELECT IdAzienda AS idAzienda, Azienda AS azienda FROM AZIENDE ORDER BY Azienda");
     var padri = await cn.QueryAsync("SELECT IdUtente AS idUtente, ISNULL(NULLIF(Nome,''), Utente) + ' (' + Utente + ')' AS label FROM UTENTI WHERE DataFine IS NULL ORDER BY label");
-    return Results.Ok(new { ruoli, filiali, clienti, aziende, padri });
+    var gruppi = await cn.QueryAsync("SELECT IdGruppo AS idGruppo, Gruppo AS gruppo FROM GRUPPI ORDER BY Gruppo");
+    var processi = await cn.QueryAsync("SELECT IdProcesso AS idProcesso, Processo AS processo FROM PROCESSI ORDER BY Processo");
+    var famiglie = await cn.QueryAsync("SELECT CodFamiglia AS codFamiglia, FamigliaDiProdotto AS famiglia FROM PROD_FAMIGLIE ORDER BY FamigliaDiProdotto");
+    return Results.Ok(new { ruoli, filiali, clienti, aziende, padri, gruppi, processi, famiglie });
 }).RequireAuthorization();
+
+// Comuni (lookup pesante, caricato a richiesta per il Belfiore dei processi)
+app.MapGet("/api/utenti/comuni", async () =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var comuni = await cn.QueryAsync(
+        @"SELECT BELFIORE AS belfiore, DENOMINAZIONE + ' (' + ISNULL(SIGLAPROV,'') + ')' AS label
+          FROM GEO_Comune WHERE DataFine IS NULL ORDER BY DENOMINAZIONE");
+    return Results.Ok(comuni);
+}).RequireAuthorization();
+
+// Tutte le associazioni N:N dell'utente
+app.MapGet("/api/utenti/{id:int}/relazioni", async (int id) =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var gruppi = await cn.QueryAsync(@"
+        SELECT ug.IdUtenteGruppo AS id, ug.IdGruppo AS idGruppo, g.Gruppo AS gruppo
+        FROM UTENTI_GRUPPI ug JOIN GRUPPI g ON g.IdGruppo = ug.IdGruppo
+        WHERE ug.IdUtente = @id ORDER BY g.Gruppo", new { id });
+    var profili = await cn.QueryAsync(@"
+        SELECT up.IdUtentiProfili AS id, up.CodFamiglia AS codFamiglia, f.FamigliaDiProdotto AS famiglia
+        FROM UTENTI_PROFILI up LEFT JOIN PROD_FAMIGLIE f ON f.CodFamiglia = up.CodFamiglia
+        WHERE up.IdUtente = @id ORDER BY f.FamigliaDiProdotto", new { id });
+    var processi = await cn.QueryAsync(@"
+        SELECT pr.IdUtentiProcessi AS id, pr.IdProcesso AS idProcesso, p.Processo AS processo,
+               pr.Belfiore AS belfiore, c.DENOMINAZIONE AS comune
+        FROM UTENTI_PROCESSI pr LEFT JOIN PROCESSI p ON p.IdProcesso = pr.IdProcesso
+        LEFT JOIN GEO_Comune c ON c.BELFIORE = pr.Belfiore
+        WHERE pr.IdUtente = @id ORDER BY p.Processo", new { id });
+    var filiali = await cn.QueryAsync(@"
+        SELECT uf.IdUtenteFiliale AS id, uf.IdFiliale AS idFiliale, f.FILIALE AS filiale
+        FROM UTENTI_FILIALI uf JOIN FILIALI f ON f.IDFILIALE = uf.IdFiliale
+        WHERE uf.IdUtente = @id ORDER BY f.FILIALE", new { id });
+    return Results.Ok(new { gruppi, profili, processi, filiali });
+}).RequireAuthorization();
+
+// Add/Del per ciascuna collezione (tramite SP AI_)
+async Task<IResult> EseguiRelazione(string sp, object par)
+{
+    await using var cn = new SqlConnection(ConnString());
+    try
+    {
+        await cn.ExecuteAsync(sp, par, commandType: CommandType.StoredProcedure);
+        return Results.Ok(new { ok = true });
+    }
+    catch (SqlException ex)
+    {
+        return Results.Json(new { errore = ex.Message }, statusCode: StatusCodes.Status400BadRequest);
+    }
+}
+
+app.MapPost("/api/utenti/{id:int}/gruppi", (int id, GruppoReq r) =>
+    EseguiRelazione("dbo.AI_UTENTI_GRUPPI_Add", new { IdUtente = id, IdGruppo = r.IdGruppo })).RequireAuthorization();
+app.MapDelete("/api/utenti/gruppi/{relId:int}", (int relId) =>
+    EseguiRelazione("dbo.AI_UTENTI_GRUPPI_Del", new { IdUtenteGruppo = relId })).RequireAuthorization();
+
+app.MapPost("/api/utenti/{id:int}/profili", (int id, ProfiloReq r) =>
+    EseguiRelazione("dbo.AI_UTENTI_PROFILI_Add", new { IdUtente = id, CodFamiglia = r.CodFamiglia })).RequireAuthorization();
+app.MapDelete("/api/utenti/profili/{relId:int}", (int relId) =>
+    EseguiRelazione("dbo.AI_UTENTI_PROFILI_Del", new { IdUtentiProfili = relId })).RequireAuthorization();
+
+app.MapPost("/api/utenti/{id:int}/processi", (int id, ProcessoReq r) =>
+    EseguiRelazione("dbo.AI_UTENTI_PROCESSI_Add", new { IdUtente = id, r.IdProcesso, r.Belfiore })).RequireAuthorization();
+app.MapDelete("/api/utenti/processi/{relId:int}", (int relId) =>
+    EseguiRelazione("dbo.AI_UTENTI_PROCESSI_Del", new { IdUtentiProcessi = relId })).RequireAuthorization();
+
+app.MapPost("/api/utenti/{id:int}/filiali", (int id, FilialeReq r) =>
+    EseguiRelazione("dbo.AI_UTENTI_FILIALI_Add", new { IdUtente = id, IdFiliale = r.IdFiliale })).RequireAuthorization();
+app.MapDelete("/api/utenti/filiali/{relId:int}", (int relId) =>
+    EseguiRelazione("dbo.AI_UTENTI_FILIALI_Del", new { IdUtenteFiliale = relId })).RequireAuthorization();
 
 // Salvataggio utente via SP (password solo se passata in NuovaPassword)
 app.MapPost("/api/utenti", async (JsonElement body) =>
@@ -684,9 +813,17 @@ app.MapPost("/api/utenti", async (JsonElement body) =>
     }
 }).RequireAuthorization();
 
+// SPA fallback: ogni rotta non-API (router in history mode: /, /login, ...) torna
+// index.html, che poi gestisce il routing lato client. Le /api/* sono gia' mappate sopra.
+app.MapFallbackToFile("index.html");
+
 app.Run();
 
 record LoginRequest(string Utente, string Password);
 record EseguiInterrogazioneRequest(int IdQuery, string? SWhere);
 record CambiaFilialeRequest(int IdFiliale);
 record ColMeta(string Col, string Tipo, int MaxLen, bool Nullable, bool Identita, bool Pk);
+record GruppoReq(int IdGruppo);
+record ProfiloReq(string CodFamiglia);
+record ProcessoReq(int IdProcesso, string? Belfiore);
+record FilialeReq(int IdFiliale);

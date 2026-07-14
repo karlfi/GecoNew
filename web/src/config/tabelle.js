@@ -8,12 +8,20 @@ export const CONFIG_TABELLE = {
   Processi: { key: 'processi', titolo: 'Processi' },
   Gruppi: { key: 'gruppi', titolo: 'Gruppi' },
   Aziende: { key: 'aziende', titolo: 'Aziende' },
-  Filiali: { key: 'filiali', titolo: 'Filiali' }
+  Filiali: { key: 'filiali', titolo: 'Filiali' },
+  Clienti: { key: 'clienti', titolo: 'Clienti' },
+  'FILE TRACCIATO': { key: 'tracciati', titolo: 'File tracciato' },
+  Fornitori: { key: 'fornitori', titolo: 'Fornitori' },
+  Lista: { key: 'lista', titolo: 'Lista valori' },
+  Mittenti: { key: 'mittenti', titolo: 'Mittenti' },
+  Stati: { key: 'stati', titolo: 'Stati' }
 }
 
 const TITOLI = {
   coperture: 'Coperture', prodotti: 'Prodotti', listini: 'Listini', processi: 'Processi',
-  gruppi: 'Gruppi', aziende: 'Aziende', filiali: 'Filiali'
+  gruppi: 'Gruppi', aziende: 'Aziende', filiali: 'Filiali',
+  clienti: 'Clienti', tracciati: 'File tracciato', fornitori: 'Fornitori',
+  lista: 'Lista valori', mittenti: 'Mittenti', stati: 'Stati'
 }
 
 export function configDaVideata(videata) {

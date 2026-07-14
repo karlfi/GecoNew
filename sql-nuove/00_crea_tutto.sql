@@ -523,6 +523,318 @@ END
 GO
 
 -- ----------------------------------------------------------
+-- AI_CLIENTI_Save.sql
+-- ----------------------------------------------------------
+-- Upsert generato dallo schema di [CLIENTI]. Scritture solo via SP (prefisso AI_).
+CREATE OR ALTER PROCEDURE dbo.AI_CLIENTI_Save
+    @IdCliente int = NULL,
+    @IdAzienda int = NULL,
+    @RagioneSociale varchar(250) = NULL,
+    @CIG varchar(50) = NULL,
+    @Descrizione varchar(500) = NULL,
+    @PartitaIva varchar(50) = NULL,
+    @CodSDI varchar(50) = NULL,
+    @PEC varchar(50) = NULL,
+    @Indirizzo varchar(250) = NULL,
+    @CAP varchar(5) = NULL,
+    @Comune varchar(250) = NULL,
+    @Prov varchar(2) = NULL,
+    @Nazione varchar(5) = NULL,
+    @Telefono varchar(50) = NULL,
+    @Email varchar(50) = NULL,
+    @DataFine date = NULL,
+    @CodiceCliente varchar(50) = NULL,
+    @Gestionale varchar(50) = NULL,
+    @InvioEmailEventi int = NULL,
+    @EmailPrefattura varchar(2000) = NULL,
+    @Demo int = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF @IdCliente IS NULL OR @IdCliente = 0
+    BEGIN
+        INSERT INTO [CLIENTI] ([IdAzienda], [RagioneSociale], [CIG], [Descrizione], [PartitaIva], [CodSDI], [PEC], [Indirizzo], [CAP], [Comune], [Prov], [Nazione], [Telefono], [Email], [DataFine], [CodiceCliente], [Gestionale], [InvioEmailEventi], [EmailPrefattura], [Demo])
+        VALUES (@IdAzienda, @RagioneSociale, @CIG, @Descrizione, @PartitaIva, @CodSDI, @PEC, @Indirizzo, @CAP, @Comune, @Prov, @Nazione, @Telefono, @Email, @DataFine, @CodiceCliente, @Gestionale, @InvioEmailEventi, @EmailPrefattura, @Demo);
+        SELECT CAST(SCOPE_IDENTITY() AS int) AS id;
+    END
+    ELSE
+    BEGIN
+        UPDATE [CLIENTI] SET
+            [IdAzienda] = @IdAzienda,
+            [RagioneSociale] = @RagioneSociale,
+            [CIG] = @CIG,
+            [Descrizione] = @Descrizione,
+            [PartitaIva] = @PartitaIva,
+            [CodSDI] = @CodSDI,
+            [PEC] = @PEC,
+            [Indirizzo] = @Indirizzo,
+            [CAP] = @CAP,
+            [Comune] = @Comune,
+            [Prov] = @Prov,
+            [Nazione] = @Nazione,
+            [Telefono] = @Telefono,
+            [Email] = @Email,
+            [DataFine] = @DataFine,
+            [CodiceCliente] = @CodiceCliente,
+            [Gestionale] = @Gestionale,
+            [InvioEmailEventi] = @InvioEmailEventi,
+            [EmailPrefattura] = @EmailPrefattura,
+            [Demo] = @Demo
+        WHERE [IdCliente] = @IdCliente;
+        SELECT @IdCliente AS id;
+    END
+END
+GO
+
+-- ----------------------------------------------------------
+-- AI_FILE_TRACCIATO_Save.sql
+-- ----------------------------------------------------------
+-- Upsert generato dallo schema di [FILE_TRACCIATO]. Scritture solo via SP (prefisso AI_).
+CREATE OR ALTER PROCEDURE dbo.AI_FILE_TRACCIATO_Save
+    @IdTracciato int = NULL,
+    @Tracciato varchar(50) = NULL,
+    @IdUtente int = NULL,
+    @IdCliente int = NULL,
+    @Separatore varchar(50) = NULL,
+    @ColonneTotali int = NULL,
+    @infoTracciato varchar(250) = NULL,
+    @RigheIntestazione int = NULL,
+    @RigheFooter int = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF @IdTracciato IS NULL OR @IdTracciato = 0
+    BEGIN
+        INSERT INTO [FILE_TRACCIATO] ([Tracciato], [IdUtente], [IdCliente], [Separatore], [ColonneTotali], [infoTracciato], [RigheIntestazione], [RigheFooter])
+        VALUES (@Tracciato, @IdUtente, @IdCliente, @Separatore, @ColonneTotali, @infoTracciato, @RigheIntestazione, @RigheFooter);
+        SELECT CAST(SCOPE_IDENTITY() AS int) AS id;
+    END
+    ELSE
+    BEGIN
+        UPDATE [FILE_TRACCIATO] SET
+            [Tracciato] = @Tracciato,
+            [IdUtente] = @IdUtente,
+            [IdCliente] = @IdCliente,
+            [Separatore] = @Separatore,
+            [ColonneTotali] = @ColonneTotali,
+            [infoTracciato] = @infoTracciato,
+            [RigheIntestazione] = @RigheIntestazione,
+            [RigheFooter] = @RigheFooter
+        WHERE [IdTracciato] = @IdTracciato;
+        SELECT @IdTracciato AS id;
+    END
+END
+GO
+
+-- ----------------------------------------------------------
+-- AI_FORNITORI_Save.sql
+-- ----------------------------------------------------------
+-- Upsert generato dallo schema di [FORNITORI]. Scritture solo via SP (prefisso AI_).
+CREATE OR ALTER PROCEDURE dbo.AI_FORNITORI_Save
+    @ID int = NULL,
+    @Fornitore varchar(255) = NULL,
+    @Tipo int = NULL,
+    @CPCODICE varchar(20) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF @ID IS NULL OR @ID = 0
+    BEGIN
+        INSERT INTO [FORNITORI] ([Fornitore], [Tipo], [CPCODICE])
+        VALUES (@Fornitore, @Tipo, @CPCODICE);
+        SELECT CAST(SCOPE_IDENTITY() AS int) AS id;
+    END
+    ELSE
+    BEGIN
+        UPDATE [FORNITORI] SET
+            [Fornitore] = @Fornitore,
+            [Tipo] = @Tipo,
+            [CPCODICE] = @CPCODICE
+        WHERE [ID] = @ID;
+        SELECT @ID AS id;
+    END
+END
+GO
+
+-- ----------------------------------------------------------
+-- AI_LISTA_VALORI_Save.sql
+-- ----------------------------------------------------------
+-- Upsert generato dallo schema di [LISTA_VALORI]. Scritture solo via SP (prefisso AI_).
+CREATE OR ALTER PROCEDURE dbo.AI_LISTA_VALORI_Save
+    @IdListaValori int = NULL,
+    @Lista varchar(50) = NULL,
+    @Valore varchar(500) = NULL,
+    @Codice varchar(50) = NULL,
+    @Ordine int = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF @IdListaValori IS NULL OR @IdListaValori = 0
+    BEGIN
+        INSERT INTO [LISTA_VALORI] ([Lista], [Valore], [Codice], [Ordine])
+        VALUES (@Lista, @Valore, @Codice, @Ordine);
+        SELECT CAST(SCOPE_IDENTITY() AS int) AS id;
+    END
+    ELSE
+    BEGIN
+        UPDATE [LISTA_VALORI] SET
+            [Lista] = @Lista,
+            [Valore] = @Valore,
+            [Codice] = @Codice,
+            [Ordine] = @Ordine
+        WHERE [IdListaValori] = @IdListaValori;
+        SELECT @IdListaValori AS id;
+    END
+END
+GO
+
+-- ----------------------------------------------------------
+-- AI_MITTENTI_Save.sql
+-- ----------------------------------------------------------
+-- Upsert generato dallo schema di [MITTENTI]. Scritture solo via SP (prefisso AI_).
+-- Nota: la tabella non ha PK dichiarata; la chiave logica e' l'identity IdMittente.
+-- Nota: la colonna [CODICE_FISCALE ] ha uno SPAZIO finale nel nome (legacy). Il parametro
+--       e' @CODICE_FISCALE (senza spazio, il backend fa TrimEnd sui nomi); la colonna
+--       viene referenziata con le parentesi quadre comprensive dello spazio.
+CREATE OR ALTER PROCEDURE dbo.AI_MITTENTI_Save
+    @IdMittente int = NULL,
+    @UFFICIOSPEDITORE varchar(250) = NULL,
+    @FILIALECOMPETENZA varchar(250) = NULL,
+    @COMUNE varchar(250) = NULL,
+    @PROV varchar(2) = NULL,
+    @INDIRIZZO varchar(250) = NULL,
+    @NOTE1 varchar(250) = NULL,
+    @CAP varchar(250) = NULL,
+    @NOTE2 varchar(250) = NULL,
+    @NomeControlloReportistica varchar(250) = NULL,
+    @EmailControlloReportistica varchar(250) = NULL,
+    @Telefonocontrolloreportistica varchar(250) = NULL,
+    @NomeControlloReportistica2 varchar(250) = NULL,
+    @EmailControlloReportistica2 varchar(250) = NULL,
+    @Telefonocontrolloreportistica2 varchar(250) = NULL,
+    @CODICE_FISCALE varchar(250) = NULL,
+    @CODICE_UNIVOCO varchar(250) = NULL,
+    @idFilialeDistribuzione int = NULL,
+    @idCliente int = NULL,
+    @LU int = NULL,
+    @MA int = NULL,
+    @ME int = NULL,
+    @GI int = NULL,
+    @VE int = NULL,
+    @SA int = NULL,
+    @idStpRepFunz int = NULL,
+    @email_mittente varchar(250) = NULL,
+    @Responsabile_operativo varchar(250) = NULL,
+    @Email_operativa varchar(250) = NULL,
+    @Resp_amministrativo varchar(250) = NULL,
+    @Email_amministrativo varchar(250) = NULL,
+    @idUfficioMitt int = NULL,
+    @DescScontrino varchar(200) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF @IdMittente IS NULL OR @IdMittente = 0
+    BEGIN
+        INSERT INTO [MITTENTI] ([UFFICIOSPEDITORE], [FILIALECOMPETENZA], [COMUNE], [PROV], [INDIRIZZO], [NOTE1], [CAP], [NOTE2], [NomeControlloReportistica], [EmailControlloReportistica], [Telefonocontrolloreportistica], [NomeControlloReportistica2], [EmailControlloReportistica2], [Telefonocontrolloreportistica2], [CODICE_FISCALE ], [CODICE_UNIVOCO], [idFilialeDistribuzione], [idCliente], [LU], [MA], [ME], [GI], [VE], [SA], [idStpRepFunz], [email_mittente], [Responsabile_operativo], [Email_operativa], [Resp_amministrativo], [Email_amministrativo], [idUfficioMitt], [DescScontrino])
+        VALUES (@UFFICIOSPEDITORE, @FILIALECOMPETENZA, @COMUNE, @PROV, @INDIRIZZO, @NOTE1, @CAP, @NOTE2, @NomeControlloReportistica, @EmailControlloReportistica, @Telefonocontrolloreportistica, @NomeControlloReportistica2, @EmailControlloReportistica2, @Telefonocontrolloreportistica2, @CODICE_FISCALE, @CODICE_UNIVOCO, @idFilialeDistribuzione, @idCliente, @LU, @MA, @ME, @GI, @VE, @SA, @idStpRepFunz, @email_mittente, @Responsabile_operativo, @Email_operativa, @Resp_amministrativo, @Email_amministrativo, @idUfficioMitt, @DescScontrino);
+        SELECT CAST(SCOPE_IDENTITY() AS int) AS id;
+    END
+    ELSE
+    BEGIN
+        UPDATE [MITTENTI] SET
+            [UFFICIOSPEDITORE] = @UFFICIOSPEDITORE,
+            [FILIALECOMPETENZA] = @FILIALECOMPETENZA,
+            [COMUNE] = @COMUNE,
+            [PROV] = @PROV,
+            [INDIRIZZO] = @INDIRIZZO,
+            [NOTE1] = @NOTE1,
+            [CAP] = @CAP,
+            [NOTE2] = @NOTE2,
+            [NomeControlloReportistica] = @NomeControlloReportistica,
+            [EmailControlloReportistica] = @EmailControlloReportistica,
+            [Telefonocontrolloreportistica] = @Telefonocontrolloreportistica,
+            [NomeControlloReportistica2] = @NomeControlloReportistica2,
+            [EmailControlloReportistica2] = @EmailControlloReportistica2,
+            [Telefonocontrolloreportistica2] = @Telefonocontrolloreportistica2,
+            [CODICE_FISCALE ] = @CODICE_FISCALE,
+            [CODICE_UNIVOCO] = @CODICE_UNIVOCO,
+            [idFilialeDistribuzione] = @idFilialeDistribuzione,
+            [idCliente] = @idCliente,
+            [LU] = @LU,
+            [MA] = @MA,
+            [ME] = @ME,
+            [GI] = @GI,
+            [VE] = @VE,
+            [SA] = @SA,
+            [idStpRepFunz] = @idStpRepFunz,
+            [email_mittente] = @email_mittente,
+            [Responsabile_operativo] = @Responsabile_operativo,
+            [Email_operativa] = @Email_operativa,
+            [Resp_amministrativo] = @Resp_amministrativo,
+            [Email_amministrativo] = @Email_amministrativo,
+            [idUfficioMitt] = @idUfficioMitt,
+            [DescScontrino] = @DescScontrino
+        WHERE [IdMittente] = @IdMittente;
+        SELECT @IdMittente AS id;
+    END
+END
+GO
+
+-- ----------------------------------------------------------
+-- AI_SPED_STATI_Save.sql  (pagina "Stati")
+-- ----------------------------------------------------------
+-- Upsert di [SPED_STATI]. PK = STATO (varchar, codice digitato per i nuovi record);
+-- IdStato e' un identity SEPARATO (non si tocca). L'upsert si decide per ESISTENZA di STATO.
+CREATE OR ALTER PROCEDURE dbo.AI_SPED_STATI_Save
+    @STATO varchar(50) = NULL,
+    @Descrizione varchar(50) = NULL,
+    @CodGruppoStati varchar(5) = NULL,
+    @DescrizioneCliente varchar(50) = NULL,
+    @VisibileCliente int = NULL,
+    @CodEsitoAder varchar(2) = NULL,
+    @CodConsip varchar(50) = NULL,
+    @ADER4 varchar(50) = NULL,
+    @ADER4_Motivo varchar(1) = NULL,
+    @Bloccante int = NULL,
+    @CodSNEM varchar(50) = NULL,
+    @CodADEX varchar(4) = NULL,
+    @IdStato int = NULL          -- identity: accettato dal frontend ma mai scritto
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF @STATO IS NULL OR LTRIM(RTRIM(@STATO)) = ''
+    BEGIN
+        RAISERROR('Il codice STATO e'' obbligatorio.', 16, 1);
+        RETURN;
+    END
+
+    IF NOT EXISTS (SELECT 1 FROM [SPED_STATI] WHERE [STATO] = @STATO)
+    BEGIN
+        INSERT INTO [SPED_STATI] ([STATO], [Descrizione], [CodGruppoStati], [DescrizioneCliente], [VisibileCliente], [CodEsitoAder], [CodConsip], [ADER4], [ADER4_Motivo], [Bloccante], [CodSNEM], [CodADEX])
+        VALUES (@STATO, @Descrizione, @CodGruppoStati, @DescrizioneCliente, @VisibileCliente, @CodEsitoAder, @CodConsip, @ADER4, @ADER4_Motivo, @Bloccante, @CodSNEM, @CodADEX);
+    END
+    ELSE
+    BEGIN
+        UPDATE [SPED_STATI] SET
+            [Descrizione] = @Descrizione,
+            [CodGruppoStati] = @CodGruppoStati,
+            [DescrizioneCliente] = @DescrizioneCliente,
+            [VisibileCliente] = @VisibileCliente,
+            [CodEsitoAder] = @CodEsitoAder,
+            [CodConsip] = @CodConsip,
+            [ADER4] = @ADER4,
+            [ADER4_Motivo] = @ADER4_Motivo,
+            [Bloccante] = @Bloccante,
+            [CodSNEM] = @CodSNEM,
+            [CodADEX] = @CodADEX
+        WHERE [STATO] = @STATO;
+    END
+
+    SELECT (SELECT [IdStato] FROM [SPED_STATI] WHERE [STATO] = @STATO) AS id;
+END
+GO
+
+-- ----------------------------------------------------------
 -- AI_INTERROGAZIONI_Save.sql
 -- ----------------------------------------------------------
 -- Upsert generato dallo schema di [INTERROGAZIONI]. Scritture solo via SP (prefisso AI_).
@@ -766,6 +1078,87 @@ END
 GO
 
 -- ----------------------------------------------------------
+-- AI_UTENTI_Relazioni.sql
+-- ----------------------------------------------------------
+-- =============================================================
+-- Associazioni N:N dell'utente (collezioni figlie della pagina Utenti):
+-- Gruppi, Famiglie di prodotti, Processi, Filiali abilitate.
+-- Add: inserisce se non già presente. Del: cancella per chiave dell'associazione.
+-- =============================================================
+
+-- ---- Gruppi (UTENTI_GRUPPI) ----
+CREATE OR ALTER PROCEDURE dbo.AI_UTENTI_GRUPPI_Add @IdUtente int, @IdGruppo int
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF NOT EXISTS (SELECT 1 FROM UTENTI_GRUPPI WHERE IdUtente = @IdUtente AND IdGruppo = @IdGruppo)
+        INSERT INTO UTENTI_GRUPPI (IdUtente, IdGruppo) VALUES (@IdUtente, @IdGruppo);
+END
+GO
+CREATE OR ALTER PROCEDURE dbo.AI_UTENTI_GRUPPI_Del @IdUtenteGruppo int
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DELETE FROM UTENTI_GRUPPI WHERE IdUtenteGruppo = @IdUtenteGruppo;
+END
+GO
+
+-- ---- Famiglie di prodotti (UTENTI_PROFILI) ----
+CREATE OR ALTER PROCEDURE dbo.AI_UTENTI_PROFILI_Add @IdUtente int, @CodFamiglia varchar(5)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF NOT EXISTS (SELECT 1 FROM UTENTI_PROFILI WHERE IdUtente = @IdUtente AND CodFamiglia = @CodFamiglia)
+        INSERT INTO UTENTI_PROFILI (IdUtente, CodFamiglia) VALUES (@IdUtente, @CodFamiglia);
+END
+GO
+CREATE OR ALTER PROCEDURE dbo.AI_UTENTI_PROFILI_Del @IdUtentiProfili int
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DELETE FROM UTENTI_PROFILI WHERE IdUtentiProfili = @IdUtentiProfili;
+END
+GO
+
+-- ---- Processi (UTENTI_PROCESSI), con eventuale comune Belfiore ----
+CREATE OR ALTER PROCEDURE dbo.AI_UTENTI_PROCESSI_Add @IdUtente int, @IdProcesso int, @Belfiore varchar(5) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF NOT EXISTS (SELECT 1 FROM UTENTI_PROCESSI
+                   WHERE IdUtente = @IdUtente AND IdProcesso = @IdProcesso
+                     AND ISNULL(Belfiore,'') = ISNULL(@Belfiore,''))
+        INSERT INTO UTENTI_PROCESSI (IdUtente, IdProcesso, Belfiore)
+        VALUES (@IdUtente, @IdProcesso, @Belfiore);
+END
+GO
+CREATE OR ALTER PROCEDURE dbo.AI_UTENTI_PROCESSI_Del @IdUtentiProcessi int
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DELETE FROM UTENTI_PROCESSI WHERE IdUtentiProcessi = @IdUtentiProcessi;
+END
+GO
+
+-- ---- Filiali abilitate (UTENTI_FILIALI) ----
+CREATE OR ALTER PROCEDURE dbo.AI_UTENTI_FILIALI_Add @IdUtente int, @IdFiliale int
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF NOT EXISTS (SELECT 1 FROM UTENTI_FILIALI WHERE IdUtente = @IdUtente AND IdFiliale = @IdFiliale)
+        INSERT INTO UTENTI_FILIALI (IdUtente, IdFiliale) VALUES (@IdUtente, @IdFiliale);
+END
+GO
+CREATE OR ALTER PROCEDURE dbo.AI_UTENTI_FILIALI_Del @IdUtenteFiliale int
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DELETE FROM UTENTI_FILIALI WHERE IdUtenteFiliale = @IdUtenteFiliale;
+END
+GO
+GO
+
+-- ----------------------------------------------------------
 -- AI_SPED_WORKFLOW_Save.sql
 -- ----------------------------------------------------------
 -- Upsert generato dallo schema di [SPED_WORKFLOW]. Scritture solo via SP (prefisso AI_).
@@ -907,6 +1300,12 @@ UPDATE MENU_ELEMENTI SET Link = '/config/processi'  WHERE Videata = 'Processi';
 UPDATE MENU_ELEMENTI SET Link = '/config/gruppi'    WHERE Videata = 'Gruppi';
 UPDATE MENU_ELEMENTI SET Link = '/config/aziende'   WHERE Videata = 'Aziende';
 UPDATE MENU_ELEMENTI SET Link = '/config/filiali'   WHERE Videata = 'Filiali';
+UPDATE MENU_ELEMENTI SET Link = '/config/clienti'   WHERE Videata = 'Clienti';
+UPDATE MENU_ELEMENTI SET Link = '/config/tracciati' WHERE Videata = 'FILE TRACCIATO';
+UPDATE MENU_ELEMENTI SET Link = '/config/fornitori' WHERE Videata = 'Fornitori';
+UPDATE MENU_ELEMENTI SET Link = '/config/lista'     WHERE Videata = 'Lista';
+UPDATE MENU_ELEMENTI SET Link = '/config/mittenti'  WHERE Videata = 'Mittenti';
+UPDATE MENU_ELEMENTI SET Link = '/config/stati'     WHERE Videata = 'Stati';
 
 -- Editor avanzati
 UPDATE MENU_ELEMENTI SET Link = '/interrogazioni-editor' WHERE Videata = 'ModificaInterrogazioni';
@@ -932,9 +1331,23 @@ GRANT EXECUTE ON dbo.AI_PROCESSI_Save TO claude;
 GRANT EXECUTE ON dbo.AI_GRUPPI_Save TO claude;
 GRANT EXECUTE ON dbo.AI_AZIENDE_Save TO claude;
 GRANT EXECUTE ON dbo.AI_FILIALI_Save TO claude;
+GRANT EXECUTE ON dbo.AI_CLIENTI_Save TO claude;
+GRANT EXECUTE ON dbo.AI_FILE_TRACCIATO_Save TO claude;
+GRANT EXECUTE ON dbo.AI_FORNITORI_Save TO claude;
+GRANT EXECUTE ON dbo.AI_LISTA_VALORI_Save TO claude;
+GRANT EXECUTE ON dbo.AI_MITTENTI_Save TO claude;
+GRANT EXECUTE ON dbo.AI_SPED_STATI_Save TO claude;
 GRANT EXECUTE ON dbo.AI_INTERROGAZIONI_Save TO claude;
 GRANT EXECUTE ON dbo.AI_MENU_ELEMENTI_Save TO claude;
 GRANT EXECUTE ON dbo.AI_UTENTI_Save TO claude;
+GRANT EXECUTE ON dbo.AI_UTENTI_GRUPPI_Add TO claude;
+GRANT EXECUTE ON dbo.AI_UTENTI_GRUPPI_Del TO claude;
+GRANT EXECUTE ON dbo.AI_UTENTI_PROFILI_Add TO claude;
+GRANT EXECUTE ON dbo.AI_UTENTI_PROFILI_Del TO claude;
+GRANT EXECUTE ON dbo.AI_UTENTI_PROCESSI_Add TO claude;
+GRANT EXECUTE ON dbo.AI_UTENTI_PROCESSI_Del TO claude;
+GRANT EXECUTE ON dbo.AI_UTENTI_FILIALI_Add TO claude;
+GRANT EXECUTE ON dbo.AI_UTENTI_FILIALI_Del TO claude;
 GRANT EXECUTE ON dbo.AI_SPED_WORKFLOW_Save TO claude;
 GRANT EXECUTE ON dbo.AI_SPED_AZIONI_Save TO claude;
 GRANT EXECUTE ON dbo.ElencoFiliali TO claude;

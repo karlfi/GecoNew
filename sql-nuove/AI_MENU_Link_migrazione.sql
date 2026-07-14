@@ -17,6 +17,12 @@ UPDATE MENU_ELEMENTI SET Link = '/config/processi'  WHERE Videata = 'Processi';
 UPDATE MENU_ELEMENTI SET Link = '/config/gruppi'    WHERE Videata = 'Gruppi';
 UPDATE MENU_ELEMENTI SET Link = '/config/aziende'   WHERE Videata = 'Aziende';
 UPDATE MENU_ELEMENTI SET Link = '/config/filiali'   WHERE Videata = 'Filiali';
+UPDATE MENU_ELEMENTI SET Link = '/config/clienti'   WHERE Videata = 'Clienti';
+UPDATE MENU_ELEMENTI SET Link = '/config/tracciati' WHERE Videata = 'FILE TRACCIATO';
+UPDATE MENU_ELEMENTI SET Link = '/config/fornitori' WHERE Videata = 'Fornitori';
+UPDATE MENU_ELEMENTI SET Link = '/config/lista'     WHERE Videata = 'Lista';
+UPDATE MENU_ELEMENTI SET Link = '/config/mittenti'  WHERE Videata = 'Mittenti';
+UPDATE MENU_ELEMENTI SET Link = '/config/stati'     WHERE Videata = 'Stati';
 
 -- Editor avanzati
 UPDATE MENU_ELEMENTI SET Link = '/interrogazioni-editor' WHERE Videata = 'ModificaInterrogazioni';
