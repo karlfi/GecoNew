@@ -32,5 +32,41 @@ UPDATE MENU_ELEMENTI SET Link = '/utenti'                WHERE Videata = 'Listau
 -- Editor workflow / azioni (macchina a stati per processo)
 UPDATE MENU_ELEMENTI SET Link = '/workflow' WHERE Videata IN ('Azionenuova', 'Processi Azioni');
 
+-- Consultazione azioni per processo (videata legacy "Azioni (OLD)")
+UPDATE MENU_ELEMENTI SET Link = '/azioni' WHERE Videata = 'Azioni';
+
+-- Tracking spedizioni per barcode (voci "Ricerca Barcode" / "Tracking Barcode")
+UPDATE MENU_ELEMENTI SET Link = '/tracking' WHERE Videata = 'Ricerca Barcode';
+
+-- Contatori giornalieri di filiale ("Attivita Filiali")
+UPDATE MENU_ELEMENTI SET Link = '/attivita-filiali' WHERE Videata = 'Attivitafiliale';
+
+-- Griglia giornaliera driver ("Attivita Dipendenti")
+UPDATE MENU_ELEMENTI SET Link = '/attivita-dipendenti' WHERE Videata = 'Inserimento Attivita';
+
+-- Creazione bolle di trasferimento ("DDT - creazione")
+UPDATE MENU_ELEMENTI SET Link = '/ddt' WHERE Videata = 'Bollainterna';
+
+-- Esegui Comando (voci di menu con Videata='Eseguicomando', es. Testo Comando Diretto;
+-- le azioni pagina# delle interrogazioni la raggiungono senza Link)
+UPDATE MENU_ELEMENTI SET Link = '/esegui-comando' WHERE Videata = 'Eseguicomando';
+
+-- Esiti (pagina operativa cardine: ~114 voci di menu, ognuna coi propri Parametri)
+UPDATE MENU_ELEMENTI SET Link = '/esiti' WHERE Videata = 'Esiti';
+
+-- Creazione giri su Mappa
+UPDATE MENU_ELEMENTI SET Link = '/giri-mappa' WHERE Videata = 'Sped2mappe';
+
 -- Dashboard
 UPDATE MENU_ELEMENTI SET Link = '/dashboard' WHERE Videata = 'Dashboard';
+
+-- Export CSV per HR (pagina NUOVA, senza videata legacy): voce in coda al
+-- gruppo "Gestione Dipendenti" (IdMenuElemento 1460)
+IF NOT EXISTS (SELECT 1 FROM MENU_ELEMENTI WHERE Link = '/export-hr')
+  INSERT INTO MENU_ELEMENTI (ParentID, [Text], Link, Sorting)
+  VALUES (1460, 'Export CSV per HR', '/export-hr', 30);
+
+-- Carica UNILAV (pagina NUOVA): assunzione da PDF Comunicazione Obbligatoria
+IF NOT EXISTS (SELECT 1 FROM MENU_ELEMENTI WHERE Link = '/unilav')
+  INSERT INTO MENU_ELEMENTI (ParentID, [Text], Link, Sorting)
+  VALUES (1460, 'Carica UNILAV (PDF)', '/unilav', 31);

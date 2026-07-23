@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Build + deploy di Ge.C.O. Web (API .NET + frontend Vue) su una destinazione
+  Build + deploy di Speedy Web (API .NET + frontend Vue) su una destinazione
   (locale o UNC). Gemello di TNOT\deploy\deploy.ps1, adattato a .NET.
 
 .DESCRIPTION

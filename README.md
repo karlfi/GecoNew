@@ -1,8 +1,8 @@
-# Ge.C.O. Web — nuova interfaccia
+# Speedy Web — nuova interfaccia
 
-Riscrittura delle **interfacce** del gestionale Ge.C.O. Web (legacy Instant Developer / ASP.NET)
-sul **database esistente, lasciato intatto**. Non è un nuovo gestionale: è una nuova UI che
-parla con lo stesso DB.
+Riscrittura delle **interfacce** del gestionale legacy Ge.C.O. Web (Instant Developer / ASP.NET)
+sul **database esistente, lasciato intatto**. Non è un nuovo gestionale: è una nuova UI —
+**Speedy Web** — che parla con lo stesso DB.
 
 ---
 

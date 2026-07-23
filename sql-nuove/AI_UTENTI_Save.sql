@@ -60,6 +60,20 @@ CREATE OR ALTER PROCEDURE dbo.AI_UTENTI_Save
     @Cod_iMile varchar(100) = NULL,
     @tokenAutoLogin varchar(50) = NULL,
     @tokenRegistrazione varchar(50) = NULL,
+    @Cittadinanza varchar(100) = NULL,
+    @LuogoNascita varchar(100) = NULL,
+    @TitoloStudio varchar(100) = NULL,
+    @TipoContratto varchar(100) = NULL,
+    @DataFineContratto date = NULL,
+    @OreSettimanali decimal(4,1) = NULL,
+    @CCNL varchar(100) = NULL,
+    @SoggiornoTipo varchar(100) = NULL,
+    @SoggiornoNumero varchar(100) = NULL,
+    @SoggiornoMotivo varchar(100) = NULL,
+    @SoggiornoScadenza date = NULL,
+    @SoggiornoQuestura varchar(100) = NULL,
+    @UnilavCodice varchar(100) = NULL,
+    @UnilavData datetime = NULL,
     @NuovaPassword varchar(250) = NULL
 AS
 BEGIN
@@ -68,8 +82,8 @@ BEGIN
         ELSE CONVERT(char(32), HASHBYTES('MD5', @NuovaPassword), 2) END;
     IF @IdUtente IS NULL OR @IdUtente = 0
     BEGIN
-        INSERT INTO [UTENTI] ([Utente], [Email], [Nome], [CodiceFiscale], [IdRuolo], [IdUtentePadre], [LoginErrors], [DataUltimoAccesso], [IdFiliale], [DataInizio], [DataFine], [RECHASH], [RECDATA], [IdCliente], [codAppLogin], [IdMezzo_Default], [CodPoste], [CodADER4], [Telefono], [CERT_ProfiloCertificatore], [CERT_CertificatoValido], [CERT_IdUtenteCertificatore], [CERT_Alias], [CERT_PIN], [CERT_Tentativi], [CERT_StatoNascita], [CERT_uniqueidentifier], [CERT_DataRevoca], [CERT_DataSospensione], [CERT_SerialNumber], [CERT_DataScadenza], [CERT_TempSospeso], [CodADER], [FotoTessera], [FirmaEstesa], [FirmaSigla], [flagFirma], [idAziendaFatt], [Partime], [IndirizzoRes], [CapRes], [ComuneRes], [ProvRes], [Matricola], [DataNascita], [GiorniLavorativi], [OrarioLavoro], [Livello], [Mansione], [Iban], [NumeroScarpe], [TagliaAbbigliamento], [Note], [Stato], [Colore], [Cod_iMile], [tokenAutoLogin], [tokenRegistrazione], [Pass])
-        VALUES (@Utente, @Email, @Nome, @CodiceFiscale, @IdRuolo, @IdUtentePadre, @LoginErrors, @DataUltimoAccesso, @IdFiliale, @DataInizio, @DataFine, @RECHASH, @RECDATA, @IdCliente, @codAppLogin, @IdMezzo_Default, @CodPoste, @CodADER4, @Telefono, @CERT_ProfiloCertificatore, @CERT_CertificatoValido, @CERT_IdUtenteCertificatore, @CERT_Alias, @CERT_PIN, @CERT_Tentativi, @CERT_StatoNascita, @CERT_uniqueidentifier, @CERT_DataRevoca, @CERT_DataSospensione, @CERT_SerialNumber, @CERT_DataScadenza, @CERT_TempSospeso, @CodADER, @FotoTessera, @FirmaEstesa, @FirmaSigla, @flagFirma, @idAziendaFatt, @Partime, @IndirizzoRes, @CapRes, @ComuneRes, @ProvRes, @Matricola, @DataNascita, @GiorniLavorativi, @OrarioLavoro, @Livello, @Mansione, @Iban, @NumeroScarpe, @TagliaAbbigliamento, @Note, @Stato, @Colore, @Cod_iMile, @tokenAutoLogin, @tokenRegistrazione, @hash);
+        INSERT INTO [UTENTI] ([Utente], [Email], [Nome], [CodiceFiscale], [IdRuolo], [IdUtentePadre], [LoginErrors], [DataUltimoAccesso], [IdFiliale], [DataInizio], [DataFine], [RECHASH], [RECDATA], [IdCliente], [codAppLogin], [IdMezzo_Default], [CodPoste], [CodADER4], [Telefono], [CERT_ProfiloCertificatore], [CERT_CertificatoValido], [CERT_IdUtenteCertificatore], [CERT_Alias], [CERT_PIN], [CERT_Tentativi], [CERT_StatoNascita], [CERT_uniqueidentifier], [CERT_DataRevoca], [CERT_DataSospensione], [CERT_SerialNumber], [CERT_DataScadenza], [CERT_TempSospeso], [CodADER], [FotoTessera], [FirmaEstesa], [FirmaSigla], [flagFirma], [idAziendaFatt], [Partime], [IndirizzoRes], [CapRes], [ComuneRes], [ProvRes], [Matricola], [DataNascita], [GiorniLavorativi], [OrarioLavoro], [Livello], [Mansione], [Iban], [NumeroScarpe], [TagliaAbbigliamento], [Note], [Stato], [Colore], [Cod_iMile], [tokenAutoLogin], [tokenRegistrazione], [Cittadinanza], [LuogoNascita], [TitoloStudio], [TipoContratto], [DataFineContratto], [OreSettimanali], [CCNL], [SoggiornoTipo], [SoggiornoNumero], [SoggiornoMotivo], [SoggiornoScadenza], [SoggiornoQuestura], [UnilavCodice], [UnilavData], [Pass])
+        VALUES (@Utente, @Email, @Nome, @CodiceFiscale, @IdRuolo, @IdUtentePadre, @LoginErrors, @DataUltimoAccesso, @IdFiliale, @DataInizio, @DataFine, @RECHASH, @RECDATA, @IdCliente, @codAppLogin, @IdMezzo_Default, @CodPoste, @CodADER4, @Telefono, @CERT_ProfiloCertificatore, @CERT_CertificatoValido, @CERT_IdUtenteCertificatore, @CERT_Alias, @CERT_PIN, @CERT_Tentativi, @CERT_StatoNascita, @CERT_uniqueidentifier, @CERT_DataRevoca, @CERT_DataSospensione, @CERT_SerialNumber, @CERT_DataScadenza, @CERT_TempSospeso, @CodADER, @FotoTessera, @FirmaEstesa, @FirmaSigla, @flagFirma, @idAziendaFatt, @Partime, @IndirizzoRes, @CapRes, @ComuneRes, @ProvRes, @Matricola, @DataNascita, @GiorniLavorativi, @OrarioLavoro, @Livello, @Mansione, @Iban, @NumeroScarpe, @TagliaAbbigliamento, @Note, @Stato, @Colore, @Cod_iMile, @tokenAutoLogin, @tokenRegistrazione, @Cittadinanza, @LuogoNascita, @TitoloStudio, @TipoContratto, @DataFineContratto, @OreSettimanali, @CCNL, @SoggiornoTipo, @SoggiornoNumero, @SoggiornoMotivo, @SoggiornoScadenza, @SoggiornoQuestura, @UnilavCodice, @UnilavData, @hash);
         SELECT CAST(SCOPE_IDENTITY() AS int) AS id;
     END
     ELSE
@@ -133,6 +147,20 @@ BEGIN
             [Cod_iMile] = @Cod_iMile,
             [tokenAutoLogin] = @tokenAutoLogin,
             [tokenRegistrazione] = @tokenRegistrazione,
+            [Cittadinanza] = @Cittadinanza,
+            [LuogoNascita] = @LuogoNascita,
+            [TitoloStudio] = @TitoloStudio,
+            [TipoContratto] = @TipoContratto,
+            [DataFineContratto] = @DataFineContratto,
+            [OreSettimanali] = @OreSettimanali,
+            [CCNL] = @CCNL,
+            [SoggiornoTipo] = @SoggiornoTipo,
+            [SoggiornoNumero] = @SoggiornoNumero,
+            [SoggiornoMotivo] = @SoggiornoMotivo,
+            [SoggiornoScadenza] = @SoggiornoScadenza,
+            [SoggiornoQuestura] = @SoggiornoQuestura,
+            [UnilavCodice] = @UnilavCodice,
+            [UnilavData] = @UnilavData,
             [Pass] = CASE WHEN @NuovaPassword IS NULL THEN [Pass] ELSE @hash END
         WHERE [IdUtente] = @IdUtente;
         SELECT @IdUtente AS id;

@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================================
-REM Installa Ge.C.O. Web (API .NET + frontend, porta unica) come servizio Windows
+REM Installa Speedy Web (API .NET + frontend, porta unica) come servizio Windows
 REM tramite NSSM. Eseguire come Amministratore. Richiede NSSM (https://nssm.cc).
 REM
 REM Porta: 5180 (definita in appsettings.json -> Urls). NON sovrapporre a TNOT (3001).

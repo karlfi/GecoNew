@@ -4,6 +4,8 @@ import { useToast } from 'primevue/usetoast'
 import api from '../api'
 import { useNavStore } from '../stores/nav'
 import { parseAzioneQuery } from '../lib/parametri'
+import { navDaVideata } from '../config/tabelle'
+import Dialog from 'primevue/dialog'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import ContextMenu from 'primevue/contextmenu'
@@ -161,7 +163,7 @@ const vociCm = computed(() => {
     .map(x => ({
       label: x.m[3] || x.m[0],
       icon: ICONE[x.m[1].toLowerCase()],
-      command: () => eseguiAzione(x.m[1].toLowerCase(), x.valore)
+      command: () => eseguiAzione(x.m[1].toLowerCase(), x.valore, x.m[3] || x.m[0])
     }))
 })
 
@@ -170,7 +172,42 @@ function onRowContextMenu(ev) {
   if (colonneAzione.value.length) cm.value.show(ev.originalEvent)
 }
 
-function eseguiAzione(tipo, valore) {
+// --- visore in dialog per report (PDF) e pagine web ---
+const visore = ref({ visibile: false, titolo: '', src: '', urlEsterno: '', caricamento: false })
+let blobCorrente = null
+
+function apriEsterno() {
+  if (visore.value.urlEsterno) window.open(visore.value.urlEsterno, '_blank')
+}
+function chiudiVisore() {
+  visore.value.visibile = false
+  if (blobCorrente) { URL.revokeObjectURL(blobCorrente); blobCorrente = null }
+}
+
+// Il report server non e' raggiungibile dai client: il PDF lo scarica l'API
+// (proxy /api/report) e qui lo si mostra in un frame via blob URL.
+async function apriReport(valore, etichetta) {
+  visore.value = { visibile: true, titolo: etichetta, src: '', urlEsterno: '', caricamento: true }
+  try {
+    const { data } = await api.get('/report', {
+      params: { src: valore },
+      responseType: 'blob'
+    })
+    if (blobCorrente) URL.revokeObjectURL(blobCorrente)
+    blobCorrente = URL.createObjectURL(data)
+    visore.value.src = blobCorrente
+  } catch (e) {
+    chiudiVisore()
+    // l'errore JSON arriva come blob: lo si decodifica per il messaggio
+    let msg = 'Errore nella generazione del report'
+    try { msg = JSON.parse(await e.response?.data?.text())?.errore ?? msg } catch {}
+    toast.add({ severity: 'error', summary: etichetta, detail: msg, life: 5000 })
+  } finally {
+    visore.value.caricamento = false
+  }
+}
+
+function eseguiAzione(tipo, valore, etichetta) {
   if (tipo === 'query') {
     // valore cella: "1020| and x.IdUtente=123" (numero secco prima del |)
     const { idQuery, sWhere } = parseAzioneQuery(valore)
@@ -181,12 +218,22 @@ function eseguiAzione(tipo, valore) {
     nav.drill({ tipo: 'interrogazioni', idQuery, sWhere })
     return
   }
-  toast.add({
-    severity: 'info',
-    summary: tipo,
-    detail: 'Comportamento non ancora implementato',
-    life: 2500
-  })
+  if (tipo === 'report') {
+    // valore cella: "<nome>.fr3|par=valore|..." (URL composto dal ReportServer, lato API)
+    apriReport(valore, etichetta)
+    return
+  }
+  if (tipo === 'web') {
+    // valore cella: URL pubblico completo -> frame nella pagina (+ apertura esterna)
+    visore.value = { visibile: true, titolo: etichetta, src: valore, urlEsterno: valore, caricamento: false }
+    return
+  }
+  if (tipo === 'pagina') {
+    // valore cella: "Videata#Parametri" -> stesso routing delle voci di menu
+    const [videata, ...resto] = valore.split('#')
+    nav.drill(navDaVideata(videata, resto.join('#')))
+    return
+  }
 }
 </script>
 
@@ -276,6 +323,27 @@ function eseguiAzione(tipo, valore) {
     </DataTable>
 
     <ContextMenu ref="cm" :model="vociCm" />
+
+    <!-- visore report PDF / pagina web -->
+    <Dialog
+      :visible="visore.visibile"
+      @update:visible="v => { if (!v) chiudiVisore() }"
+      modal maximizable
+      :header="visore.titolo"
+      :style="{ width: '80vw', height: '85vh' }"
+      contentClass="visore-contenuto"
+    >
+      <div v-if="visore.caricamento" class="centro"><ProgressSpinner /></div>
+      <iframe v-else-if="visore.src" :src="visore.src" class="visore-frame" />
+      <template #footer>
+        <Button
+          v-if="visore.urlEsterno"
+          label="Apri in nuova scheda" icon="pi pi-external-link" text
+          @click="apriEsterno"
+        />
+        <Button label="Chiudi" @click="chiudiVisore" />
+      </template>
+    </Dialog>
   </div>
 </template>
 
@@ -333,5 +401,17 @@ function eseguiAzione(tipo, valore) {
 .filtro-colonna {
   width: 100%;
   min-width: 5rem;
+}
+:global(.visore-contenuto) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.visore-frame {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 60vh;
+  border: 0;
 }
 </style>

@@ -1,5 +1,5 @@
 -- ============================================================
--- Ge.C.O. Web - oggetti SQL della nuova webapp (prefisso AI_)
+-- Speedy Web - oggetti SQL della nuova webapp (prefisso AI_)
 -- Script idempotente: si puo' rieseguire per creare/aggiornare tutto.
 -- Genera SP + compila MENU_ELEMENTI.Link + permessi EXECUTE.
 -- ============================================================
@@ -933,8 +933,33 @@ END
 GO
 
 -- ----------------------------------------------------------
+-- ============================================================
+-- COLONNE AGGIUNTE ALLO SCHEMA LEGACY (idempotenti)
+-- UTENTI: dati UNILAV/permesso di soggiorno (luglio 2026);
+-- FILIALI: id filiale nel gestionale HR Speedy.
+-- ============================================================
+IF COL_LENGTH('dbo.UTENTI', 'Cittadinanza') IS NULL
+    ALTER TABLE dbo.UTENTI ADD
+        Cittadinanza        varchar(100) NULL,
+        LuogoNascita        varchar(100) NULL,
+        TitoloStudio        varchar(100) NULL,
+        TipoContratto       varchar(100) NULL,
+        DataFineContratto   date         NULL,
+        OreSettimanali      decimal(4,1) NULL,
+        CCNL                varchar(100) NULL,
+        SoggiornoTipo       varchar(100) NULL,
+        SoggiornoNumero     varchar(100) NULL,
+        SoggiornoMotivo     varchar(100) NULL,
+        SoggiornoScadenza   date         NULL,
+        SoggiornoQuestura   varchar(100) NULL,
+        UnilavCodice        varchar(100) NULL,
+        UnilavData          datetime     NULL;
+GO
+IF COL_LENGTH('dbo.FILIALI', 'IdFiliale_HRSpeedy') IS NULL
+    ALTER TABLE dbo.FILIALI ADD IdFiliale_HRSpeedy int NULL;
+GO
+
 -- AI_UTENTI_Save.sql
--- ----------------------------------------------------------
 -- AI_UTENTI_Save: upsert utente. La password si imposta SOLO passando @NuovaPassword
 -- (hash MD5 server-side, come AI_AuthLogin). In update, se @NuovaPassword e' NULL la Pass resta invariata.
 CREATE OR ALTER PROCEDURE dbo.AI_UTENTI_Save
@@ -997,6 +1022,20 @@ CREATE OR ALTER PROCEDURE dbo.AI_UTENTI_Save
     @Cod_iMile varchar(100) = NULL,
     @tokenAutoLogin varchar(50) = NULL,
     @tokenRegistrazione varchar(50) = NULL,
+    @Cittadinanza varchar(100) = NULL,
+    @LuogoNascita varchar(100) = NULL,
+    @TitoloStudio varchar(100) = NULL,
+    @TipoContratto varchar(100) = NULL,
+    @DataFineContratto date = NULL,
+    @OreSettimanali decimal(4,1) = NULL,
+    @CCNL varchar(100) = NULL,
+    @SoggiornoTipo varchar(100) = NULL,
+    @SoggiornoNumero varchar(100) = NULL,
+    @SoggiornoMotivo varchar(100) = NULL,
+    @SoggiornoScadenza date = NULL,
+    @SoggiornoQuestura varchar(100) = NULL,
+    @UnilavCodice varchar(100) = NULL,
+    @UnilavData datetime = NULL,
     @NuovaPassword varchar(250) = NULL
 AS
 BEGIN
@@ -1005,8 +1044,8 @@ BEGIN
         ELSE CONVERT(char(32), HASHBYTES('MD5', @NuovaPassword), 2) END;
     IF @IdUtente IS NULL OR @IdUtente = 0
     BEGIN
-        INSERT INTO [UTENTI] ([Utente], [Email], [Nome], [CodiceFiscale], [IdRuolo], [IdUtentePadre], [LoginErrors], [DataUltimoAccesso], [IdFiliale], [DataInizio], [DataFine], [RECHASH], [RECDATA], [IdCliente], [codAppLogin], [IdMezzo_Default], [CodPoste], [CodADER4], [Telefono], [CERT_ProfiloCertificatore], [CERT_CertificatoValido], [CERT_IdUtenteCertificatore], [CERT_Alias], [CERT_PIN], [CERT_Tentativi], [CERT_StatoNascita], [CERT_uniqueidentifier], [CERT_DataRevoca], [CERT_DataSospensione], [CERT_SerialNumber], [CERT_DataScadenza], [CERT_TempSospeso], [CodADER], [FotoTessera], [FirmaEstesa], [FirmaSigla], [flagFirma], [idAziendaFatt], [Partime], [IndirizzoRes], [CapRes], [ComuneRes], [ProvRes], [Matricola], [DataNascita], [GiorniLavorativi], [OrarioLavoro], [Livello], [Mansione], [Iban], [NumeroScarpe], [TagliaAbbigliamento], [Note], [Stato], [Colore], [Cod_iMile], [tokenAutoLogin], [tokenRegistrazione], [Pass])
-        VALUES (@Utente, @Email, @Nome, @CodiceFiscale, @IdRuolo, @IdUtentePadre, @LoginErrors, @DataUltimoAccesso, @IdFiliale, @DataInizio, @DataFine, @RECHASH, @RECDATA, @IdCliente, @codAppLogin, @IdMezzo_Default, @CodPoste, @CodADER4, @Telefono, @CERT_ProfiloCertificatore, @CERT_CertificatoValido, @CERT_IdUtenteCertificatore, @CERT_Alias, @CERT_PIN, @CERT_Tentativi, @CERT_StatoNascita, @CERT_uniqueidentifier, @CERT_DataRevoca, @CERT_DataSospensione, @CERT_SerialNumber, @CERT_DataScadenza, @CERT_TempSospeso, @CodADER, @FotoTessera, @FirmaEstesa, @FirmaSigla, @flagFirma, @idAziendaFatt, @Partime, @IndirizzoRes, @CapRes, @ComuneRes, @ProvRes, @Matricola, @DataNascita, @GiorniLavorativi, @OrarioLavoro, @Livello, @Mansione, @Iban, @NumeroScarpe, @TagliaAbbigliamento, @Note, @Stato, @Colore, @Cod_iMile, @tokenAutoLogin, @tokenRegistrazione, @hash);
+        INSERT INTO [UTENTI] ([Utente], [Email], [Nome], [CodiceFiscale], [IdRuolo], [IdUtentePadre], [LoginErrors], [DataUltimoAccesso], [IdFiliale], [DataInizio], [DataFine], [RECHASH], [RECDATA], [IdCliente], [codAppLogin], [IdMezzo_Default], [CodPoste], [CodADER4], [Telefono], [CERT_ProfiloCertificatore], [CERT_CertificatoValido], [CERT_IdUtenteCertificatore], [CERT_Alias], [CERT_PIN], [CERT_Tentativi], [CERT_StatoNascita], [CERT_uniqueidentifier], [CERT_DataRevoca], [CERT_DataSospensione], [CERT_SerialNumber], [CERT_DataScadenza], [CERT_TempSospeso], [CodADER], [FotoTessera], [FirmaEstesa], [FirmaSigla], [flagFirma], [idAziendaFatt], [Partime], [IndirizzoRes], [CapRes], [ComuneRes], [ProvRes], [Matricola], [DataNascita], [GiorniLavorativi], [OrarioLavoro], [Livello], [Mansione], [Iban], [NumeroScarpe], [TagliaAbbigliamento], [Note], [Stato], [Colore], [Cod_iMile], [tokenAutoLogin], [tokenRegistrazione], [Cittadinanza], [LuogoNascita], [TitoloStudio], [TipoContratto], [DataFineContratto], [OreSettimanali], [CCNL], [SoggiornoTipo], [SoggiornoNumero], [SoggiornoMotivo], [SoggiornoScadenza], [SoggiornoQuestura], [UnilavCodice], [UnilavData], [Pass])
+        VALUES (@Utente, @Email, @Nome, @CodiceFiscale, @IdRuolo, @IdUtentePadre, @LoginErrors, @DataUltimoAccesso, @IdFiliale, @DataInizio, @DataFine, @RECHASH, @RECDATA, @IdCliente, @codAppLogin, @IdMezzo_Default, @CodPoste, @CodADER4, @Telefono, @CERT_ProfiloCertificatore, @CERT_CertificatoValido, @CERT_IdUtenteCertificatore, @CERT_Alias, @CERT_PIN, @CERT_Tentativi, @CERT_StatoNascita, @CERT_uniqueidentifier, @CERT_DataRevoca, @CERT_DataSospensione, @CERT_SerialNumber, @CERT_DataScadenza, @CERT_TempSospeso, @CodADER, @FotoTessera, @FirmaEstesa, @FirmaSigla, @flagFirma, @idAziendaFatt, @Partime, @IndirizzoRes, @CapRes, @ComuneRes, @ProvRes, @Matricola, @DataNascita, @GiorniLavorativi, @OrarioLavoro, @Livello, @Mansione, @Iban, @NumeroScarpe, @TagliaAbbigliamento, @Note, @Stato, @Colore, @Cod_iMile, @tokenAutoLogin, @tokenRegistrazione, @Cittadinanza, @LuogoNascita, @TitoloStudio, @TipoContratto, @DataFineContratto, @OreSettimanali, @CCNL, @SoggiornoTipo, @SoggiornoNumero, @SoggiornoMotivo, @SoggiornoScadenza, @SoggiornoQuestura, @UnilavCodice, @UnilavData, @hash);
         SELECT CAST(SCOPE_IDENTITY() AS int) AS id;
     END
     ELSE
@@ -1070,6 +1109,20 @@ BEGIN
             [Cod_iMile] = @Cod_iMile,
             [tokenAutoLogin] = @tokenAutoLogin,
             [tokenRegistrazione] = @tokenRegistrazione,
+            [Cittadinanza] = @Cittadinanza,
+            [LuogoNascita] = @LuogoNascita,
+            [TitoloStudio] = @TitoloStudio,
+            [TipoContratto] = @TipoContratto,
+            [DataFineContratto] = @DataFineContratto,
+            [OreSettimanali] = @OreSettimanali,
+            [CCNL] = @CCNL,
+            [SoggiornoTipo] = @SoggiornoTipo,
+            [SoggiornoNumero] = @SoggiornoNumero,
+            [SoggiornoMotivo] = @SoggiornoMotivo,
+            [SoggiornoScadenza] = @SoggiornoScadenza,
+            [SoggiornoQuestura] = @SoggiornoQuestura,
+            [UnilavCodice] = @UnilavCodice,
+            [UnilavData] = @UnilavData,
             [Pass] = CASE WHEN @NuovaPassword IS NULL THEN [Pass] ELSE @hash END
         WHERE [IdUtente] = @IdUtente;
         SELECT @IdUtente AS id;
@@ -1279,6 +1332,630 @@ END
 GO
 
 -- ----------------------------------------------------------
+-- AI_Azioni_Save.sql  (SP della pagina Azioni (OLD))
+-- ----------------------------------------------------------
+-- =============================================================
+-- SP della pagina "Azioni (OLD)" (AzioniView) — prefisso AI_Azioni_.
+-- Tre stored, una per riquadro della videata:
+--   AI_Azioni_SaveAzione          upsert su SPED_AZIONI (+ aggancio al processo in insert)
+--   AI_Azioni_SaveWorkflow        upsert su SPED_WORKFLOW
+--   AI_Azioni_SaveProcessoAzione  upsert su PROCESSI_AZIONI
+--
+-- Convenzione flag legacy (InDe): -1 = vero, 0/NULL = falso.
+-- NB: Chiedi_Scatola e ControlloData NON sono flag (valori 2,3,4 e -9..1).
+-- =============================================================
+
+-- Upsert azione: @IdAzione NULL = insert (e se @IdProcesso e' valorizzato la
+-- collega subito al processo in PROCESSI_AZIONI); altrimenti update.
+-- Restituisce IdAzione.
+CREATE OR ALTER PROCEDURE dbo.AI_Azioni_SaveAzione
+    @IdAzione           int          = NULL,
+    @Azione             varchar(50),
+    @Stato_Inizio       varchar(50)  = NULL,
+    @Stato_Fine         varchar(50)  = NULL,
+    @IdProcessi         varchar(50)  = NULL,
+    @TipoDistinta       varchar(50)  = NULL,
+    @WebReport          varchar(50)  = NULL,
+    @CodFamigliaAzione  varchar(5)   = NULL,
+    @Ordine             int          = NULL,
+    @Chiedi_Operatore   int          = NULL,
+    @Chiedi_Citta       int          = NULL,
+    @Chiedi_Filiale     int          = NULL,
+    @Chiedi_Distinta    int          = NULL,
+    @Chiedi_FilialeDest int          = NULL,
+    @Chiedi_FilialeGiac int          = NULL,
+    @Chiedi_Resi        int          = NULL,
+    @Chiedi_Terzi       int          = NULL,
+    @Chiedi_Scatola     int          = NULL,
+    @Attivo             int          = NULL,
+    @EsitoFinale        int          = NULL,
+    @AggiornaSpedizione int          = NULL,
+    @Forzabile          int          = NULL,
+    @PortaSuPalmare     int          = NULL,
+    @ForzaFiliale       int          = NULL,
+    @IdProdottoGenerato int          = NULL,
+    @MantieniDataPrec   int          = NULL,
+    @Descrizione        varchar(1000) = NULL,
+    @MaxAtti            int          = NULL,
+    @ControlloData      int          = NULL,
+    @Param1_Tipo        varchar(50)  = NULL,
+    @Param1_Desc        varchar(50)  = NULL,
+    @Chiedi_Cartolina   int          = NULL,
+    @AttiChiusi         int          = NULL,
+    @IdProcesso         int          = NULL   -- solo in insert: processo a cui collegare l'azione
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF LTRIM(RTRIM(ISNULL(@Azione, ''))) = ''
+    BEGIN
+        RAISERROR('Il nome dell''azione e'' obbligatorio', 16, 1);
+        RETURN;
+    END
+
+    IF @IdAzione IS NULL
+    BEGIN
+        INSERT INTO [SPED_AZIONI] (
+            [Azione], [Stato_Inizio], [Stato_Fine], [IdProcessi], [TipoDistinta], [WebReport],
+            [CodFamigliaAzione], [Ordine],
+            [Chiedi_Operatore], [Chiedi_Citta], [Chiedi_Filiale], [Chiedi_Distinta],
+            [Chiedi_FilialeDest], [Chiedi_FilialeGiac], [Chiedi_Resi], [Chiedi_Terzi], [Chiedi_Scatola],
+            [Attivo], [EsitoFinale], [AggiornaSpedizione], [Forzabile], [PortaSuPalmare],
+            [ForzaFiliale], [IdProdottoGenerato], [MantieniDataPrec], [Descrizione],
+            [MaxAtti], [ControlloData], [Param1_Tipo], [Param1_Desc], [Chiedi_Cartolina], [AttiChiusi])
+        VALUES (
+            @Azione, @Stato_Inizio, @Stato_Fine, @IdProcessi, @TipoDistinta, @WebReport,
+            @CodFamigliaAzione, @Ordine,
+            @Chiedi_Operatore, @Chiedi_Citta, @Chiedi_Filiale, @Chiedi_Distinta,
+            @Chiedi_FilialeDest, @Chiedi_FilialeGiac, @Chiedi_Resi, @Chiedi_Terzi, @Chiedi_Scatola,
+            @Attivo, @EsitoFinale, @AggiornaSpedizione, @Forzabile, @PortaSuPalmare,
+            @ForzaFiliale, @IdProdottoGenerato, @MantieniDataPrec, @Descrizione,
+            @MaxAtti, @ControlloData, @Param1_Tipo, @Param1_Desc, @Chiedi_Cartolina, @AttiChiusi);
+
+        SET @IdAzione = SCOPE_IDENTITY();
+
+        -- nuova azione: la collego subito al processo da cui e' stata creata
+        IF @IdProcesso IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM [PROCESSI_AZIONI] WHERE [IdProcesso] = @IdProcesso AND [IdAzione] = @IdAzione)
+            INSERT INTO [PROCESSI_AZIONI] ([IdProcesso], [IdAzione]) VALUES (@IdProcesso, @IdAzione);
+    END
+    ELSE
+    BEGIN
+        UPDATE [SPED_AZIONI] SET
+            [Azione] = @Azione,
+            [Stato_Inizio] = @Stato_Inizio,
+            [Stato_Fine] = @Stato_Fine,
+            [IdProcessi] = @IdProcessi,
+            [TipoDistinta] = @TipoDistinta,
+            [WebReport] = @WebReport,
+            [CodFamigliaAzione] = @CodFamigliaAzione,
+            [Ordine] = @Ordine,
+            [Chiedi_Operatore] = @Chiedi_Operatore,
+            [Chiedi_Citta] = @Chiedi_Citta,
+            [Chiedi_Filiale] = @Chiedi_Filiale,
+            [Chiedi_Distinta] = @Chiedi_Distinta,
+            [Chiedi_FilialeDest] = @Chiedi_FilialeDest,
+            [Chiedi_FilialeGiac] = @Chiedi_FilialeGiac,
+            [Chiedi_Resi] = @Chiedi_Resi,
+            [Chiedi_Terzi] = @Chiedi_Terzi,
+            [Chiedi_Scatola] = @Chiedi_Scatola,
+            [Attivo] = @Attivo,
+            [EsitoFinale] = @EsitoFinale,
+            [AggiornaSpedizione] = @AggiornaSpedizione,
+            [Forzabile] = @Forzabile,
+            [PortaSuPalmare] = @PortaSuPalmare,
+            [ForzaFiliale] = @ForzaFiliale,
+            [IdProdottoGenerato] = @IdProdottoGenerato,
+            [MantieniDataPrec] = @MantieniDataPrec,
+            [Descrizione] = @Descrizione,
+            [MaxAtti] = @MaxAtti,
+            [ControlloData] = @ControlloData,
+            [Param1_Tipo] = @Param1_Tipo,
+            [Param1_Desc] = @Param1_Desc,
+            [Chiedi_Cartolina] = @Chiedi_Cartolina,
+            [AttiChiusi] = @AttiChiusi
+        WHERE [IdAzione] = @IdAzione;
+
+        IF @@ROWCOUNT = 0
+        BEGIN
+            RAISERROR('Azione %d inesistente', 16, 1, @IdAzione);
+            RETURN;
+        END
+    END
+
+    SELECT @IdAzione AS IdAzione;
+END
+GO
+
+-- Upsert transizione di workflow: @IdWorkflow NULL = insert. Restituisce IdWorkflow.
+-- Gli stati devono esistere in SPED_STATI (la videata li sceglie da tendina).
+CREATE OR ALTER PROCEDURE dbo.AI_Azioni_SaveWorkflow
+    @IdWorkflow   int         = NULL,
+    @IdAzione     int,
+    @Stato_Inizio varchar(50) = NULL,
+    @Stato_Fine   varchar(50) = NULL,
+    @GiorniSLA    int         = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF NOT EXISTS (SELECT 1 FROM [SPED_AZIONI] WHERE [IdAzione] = @IdAzione)
+    BEGIN
+        RAISERROR('Azione %d inesistente', 16, 1, @IdAzione);
+        RETURN;
+    END
+    IF @Stato_Inizio IS NOT NULL AND NOT EXISTS (SELECT 1 FROM [SPED_STATI] WHERE [STATO] = @Stato_Inizio)
+    BEGIN
+        RAISERROR('Stato di inizio ''%s'' inesistente in SPED_STATI', 16, 1, @Stato_Inizio);
+        RETURN;
+    END
+    IF @Stato_Fine IS NOT NULL AND NOT EXISTS (SELECT 1 FROM [SPED_STATI] WHERE [STATO] = @Stato_Fine)
+    BEGIN
+        RAISERROR('Stato di fine ''%s'' inesistente in SPED_STATI', 16, 1, @Stato_Fine);
+        RETURN;
+    END
+
+    IF @IdWorkflow IS NULL
+    BEGIN
+        INSERT INTO [SPED_WORKFLOW] ([IdAzione], [Stato_Inizio], [Stato_Fine], [GiorniSLA])
+        VALUES (@IdAzione, @Stato_Inizio, @Stato_Fine, @GiorniSLA);
+        SET @IdWorkflow = SCOPE_IDENTITY();
+    END
+    ELSE
+    BEGIN
+        UPDATE [SPED_WORKFLOW] SET
+            [IdAzione] = @IdAzione,
+            [Stato_Inizio] = @Stato_Inizio,
+            [Stato_Fine] = @Stato_Fine,
+            [GiorniSLA] = @GiorniSLA
+        WHERE [IdWorkflow] = @IdWorkflow;
+
+        IF @@ROWCOUNT = 0
+        BEGIN
+            RAISERROR('Transizione %d inesistente', 16, 1, @IdWorkflow);
+            RETURN;
+        END
+    END
+
+    SELECT @IdWorkflow AS IdWorkflow;
+END
+GO
+
+-- Upsert collegamento processo-azione: @IdProcessoAzione NULL = insert.
+-- Restituisce IdProcessoAzione. @tipoEventoCodice si sceglie da PALM_TIPOEVENTO.
+CREATE OR ALTER PROCEDURE dbo.AI_Azioni_SaveProcessoAzione
+    @IdProcessoAzione int         = NULL,
+    @IdProcesso       int,
+    @IdAzione         int,
+    @tipoEventoCodice varchar(10) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF NOT EXISTS (SELECT 1 FROM [PROCESSI] WHERE [IdProcesso] = @IdProcesso)
+    BEGIN
+        RAISERROR('Processo %d inesistente', 16, 1, @IdProcesso);
+        RETURN;
+    END
+    IF NOT EXISTS (SELECT 1 FROM [SPED_AZIONI] WHERE [IdAzione] = @IdAzione)
+    BEGIN
+        RAISERROR('Azione %d inesistente', 16, 1, @IdAzione);
+        RETURN;
+    END
+    -- niente doppioni processo+azione (su un'altra riga rispetto a quella in modifica)
+    IF EXISTS (SELECT 1 FROM [PROCESSI_AZIONI]
+               WHERE [IdProcesso] = @IdProcesso AND [IdAzione] = @IdAzione
+                 AND [IdProcessoAzione] <> ISNULL(@IdProcessoAzione, -1))
+    BEGIN
+        RAISERROR('Il processo e'' gia'' collegato a questa azione', 16, 1);
+        RETURN;
+    END
+
+    IF @IdProcessoAzione IS NULL
+    BEGIN
+        INSERT INTO [PROCESSI_AZIONI] ([IdProcesso], [IdAzione], [tipoEventoCodice])
+        VALUES (@IdProcesso, @IdAzione, @tipoEventoCodice);
+        SET @IdProcessoAzione = SCOPE_IDENTITY();
+    END
+    ELSE
+    BEGIN
+        UPDATE [PROCESSI_AZIONI] SET
+            [IdProcesso] = @IdProcesso,
+            [IdAzione] = @IdAzione,
+            [tipoEventoCodice] = @tipoEventoCodice
+        WHERE [IdProcessoAzione] = @IdProcessoAzione;
+
+        IF @@ROWCOUNT = 0
+        BEGIN
+            RAISERROR('Collegamento %d inesistente', 16, 1, @IdProcessoAzione);
+            RETURN;
+        END
+    END
+
+    SELECT @IdProcessoAzione AS IdProcessoAzione;
+END
+GO
+
+-- ----------------------------------------------------------
+-- AI_AttivitaFiliali_Save.sql  (SP della pagina Attivita Filiali)
+-- ----------------------------------------------------------
+-- =============================================================
+-- SP della pagina "Attivita Filiali" (AttivitaFilialiView) — AI_AttivitaFiliali_Save.
+-- Upsert su FILIALI_ATTIVITA: una riga per filiale+giorno con i contatori
+-- ParamI01..I18 (mappa presa da V_ElencoFilialiAttivita03):
+--   Arrivi:        I01 Nexive, I02 Hermes, I03 InPost, I04 iMile, I05 Folletto, I16 Gofo
+--   Distribuzione: I06 Nexive, I07 Hermes, I08 InPost, I09 iMile, I10 Folletto, I17 Gofo
+--   Inventario:    I11 Nexive, I12 Hermes, I13 InPost, I14 iMile, I15 Folletto, I18 Gofo
+-- L'IdFiliale arriva dal token (lato API), mai dal client.
+-- =============================================================
+CREATE OR ALTER PROCEDURE dbo.AI_AttivitaFiliali_Save
+    @IdAttivita bigint   = NULL,   -- NULL = nuovo giorno
+    @IdFiliale  int,
+    @Data       date,
+    @ParamI01 smallint = 0, @ParamI02 smallint = 0, @ParamI03 smallint = 0,
+    @ParamI04 smallint = 0, @ParamI05 smallint = 0, @ParamI06 smallint = 0,
+    @ParamI07 smallint = 0, @ParamI08 smallint = 0, @ParamI09 smallint = 0,
+    @ParamI10 smallint = 0, @ParamI11 smallint = 0, @ParamI12 smallint = 0,
+    @ParamI13 smallint = 0, @ParamI14 smallint = 0, @ParamI15 smallint = 0,
+    @ParamI16 smallint = 0, @ParamI17 smallint = 0, @ParamI18 smallint = 0
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF NOT EXISTS (SELECT 1 FROM [FILIALI] WHERE [IDFILIALE] = @IdFiliale)
+    BEGIN
+        RAISERROR('Filiale %d inesistente', 16, 1, @IdFiliale);
+        RETURN;
+    END
+    IF @Data IS NULL
+    BEGIN
+        RAISERROR('La data e'' obbligatoria', 16, 1);
+        RETURN;
+    END
+    -- una sola riga per filiale+giorno
+    IF EXISTS (SELECT 1 FROM [FILIALI_ATTIVITA]
+               WHERE [idFiliale] = @IdFiliale AND [data] = @Data
+                 AND [idAttivita] <> ISNULL(@IdAttivita, -1))
+    BEGIN
+        RAISERROR('Esiste gia'' una riga di attivita'' per questa filiale in questa data', 16, 1);
+        RETURN;
+    END
+
+    IF @IdAttivita IS NULL
+    BEGIN
+        INSERT INTO [FILIALI_ATTIVITA] (
+            [idFiliale], [data], [dataModifica],
+            [ParamI01], [ParamI02], [ParamI03], [ParamI04], [ParamI05],
+            [ParamI06], [ParamI07], [ParamI08], [ParamI09], [ParamI10],
+            [ParamI11], [ParamI12], [ParamI13], [ParamI14], [ParamI15],
+            [ParamI16], [ParamI17], [ParamI18], [ParamI19], [ParamI20])
+        VALUES (
+            @IdFiliale, @Data, GETDATE(),
+            @ParamI01, @ParamI02, @ParamI03, @ParamI04, @ParamI05,
+            @ParamI06, @ParamI07, @ParamI08, @ParamI09, @ParamI10,
+            @ParamI11, @ParamI12, @ParamI13, @ParamI14, @ParamI15,
+            @ParamI16, @ParamI17, @ParamI18, 0, 0);
+        SET @IdAttivita = SCOPE_IDENTITY();
+    END
+    ELSE
+    BEGIN
+        UPDATE [FILIALI_ATTIVITA] SET
+            [data] = @Data,
+            [dataModifica] = GETDATE(),
+            [ParamI01] = @ParamI01, [ParamI02] = @ParamI02, [ParamI03] = @ParamI03,
+            [ParamI04] = @ParamI04, [ParamI05] = @ParamI05, [ParamI06] = @ParamI06,
+            [ParamI07] = @ParamI07, [ParamI08] = @ParamI08, [ParamI09] = @ParamI09,
+            [ParamI10] = @ParamI10, [ParamI11] = @ParamI11, [ParamI12] = @ParamI12,
+            [ParamI13] = @ParamI13, [ParamI14] = @ParamI14, [ParamI15] = @ParamI15,
+            [ParamI16] = @ParamI16, [ParamI17] = @ParamI17, [ParamI18] = @ParamI18
+        WHERE [idAttivita] = @IdAttivita AND [idFiliale] = @IdFiliale;
+
+        IF @@ROWCOUNT = 0
+        BEGIN
+            RAISERROR('Riga di attivita'' %I64d inesistente per la filiale %d', 16, 1, @IdAttivita, @IdFiliale);
+            RETURN;
+        END
+    END
+
+    SELECT @IdAttivita AS IdAttivita;
+END
+GO
+
+-- ----------------------------------------------------------
+-- AI_AttivitaDipendenti_Save.sql  (SP della pagina Attivita Dipendenti)
+-- ----------------------------------------------------------
+-- =============================================================
+-- SP della pagina "Attivita Dipendenti" (AttivitaDipendentiView) —
+-- AI_AttivitaDipendenti_Save. SOLO UPDATE su UTENTI_ATTIVITA: niente
+-- inserimenti di utenti o date (le righe le crea il gestionale/palmare).
+--
+-- Regole:
+--  - non si modificano attivita' piu' vecchie di 10 giorni (esito negativo);
+--  - Login/Logout, mezzo (idMezzo/targa), KmPercorsi, Palmare e Partime NON
+--    si toccano: arrivano dal palmare/gestionale;
+--  - mappa contatori (da V_UtentiAttivita2024):
+--      I07 Parcel Poste | I09 Rac140 Cons | I18 Rac140 Avvisati
+--      I10-I12 MOD1 Cons/Ass/Sco | I13-I15 MOD2 Cons/Ass/Sco | I16 AG
+--      I05 Hermes | I06 InPost | I08 iMile | I17 Folletto | I20 Gofo | I04 Altri
+--      I03 Parcel Speedy | I19 SDA Bancario
+--      B03 BK M1 Reso | B04 BK M2 Reso | B10 BK Lista 143 | B11 BK Inviato UP
+-- =============================================================
+CREATE OR ALTER PROCEDURE dbo.AI_AttivitaDipendenti_Save
+    @IdAttivita  bigint,
+    @IdFiliale   int,               -- filiale del driver in quel giorno
+    @CodPresenza char(3)     = NULL,
+    @Note        varchar(50) = NULL,
+    @ParamI03 smallint = 0, @ParamI04 smallint = 0, @ParamI05 smallint = 0,
+    @ParamI06 smallint = 0, @ParamI07 smallint = 0, @ParamI08 smallint = 0,
+    @ParamI09 smallint = 0, @ParamI10 smallint = 0, @ParamI11 smallint = 0,
+    @ParamI12 smallint = 0, @ParamI13 smallint = 0, @ParamI14 smallint = 0,
+    @ParamI15 smallint = 0, @ParamI16 smallint = 0, @ParamI17 smallint = 0,
+    @ParamI18 smallint = 0, @ParamI19 smallint = 0, @ParamI20 smallint = 0,
+    @ParamB03 smallint = 0, @ParamB04 smallint = 0,
+    @ParamB10 smallint = 0, @ParamB11 smallint = 0
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @dataRiga date;
+    SELECT @dataRiga = [data] FROM [UTENTI_ATTIVITA] WHERE [idAttivita] = @IdAttivita;
+
+    IF @dataRiga IS NULL
+    BEGIN
+        RAISERROR('Attivita'' %I64d inesistente', 16, 1, @IdAttivita);
+        RETURN;
+    END
+    -- regola di chiusura: oltre 10 giorni non si modifica piu' nulla
+    IF DATEDIFF(DAY, @dataRiga, GETDATE()) > 10
+    BEGIN
+        RAISERROR('Modifica non consentita: attivita'' piu'' vecchia di 10 giorni', 16, 1);
+        RETURN;
+    END
+    IF NOT EXISTS (SELECT 1 FROM [FILIALI] WHERE [IDFILIALE] = @IdFiliale)
+    BEGIN
+        RAISERROR('Filiale %d inesistente', 16, 1, @IdFiliale);
+        RETURN;
+    END
+    IF @CodPresenza IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM [UTENTI_TIPOPRESENZE] WHERE [codPresenza] = @CodPresenza)
+    BEGIN
+        RAISERROR('Codice presenza ''%s'' inesistente', 16, 1, @CodPresenza);
+        RETURN;
+    END
+
+    UPDATE [UTENTI_ATTIVITA] SET
+        [idFiliale]    = @IdFiliale,
+        [codPresenza]  = @CodPresenza,
+        [Note]         = @Note,
+        [dataModifica] = GETDATE(),
+        [ParamI03] = @ParamI03, [ParamI04] = @ParamI04, [ParamI05] = @ParamI05,
+        [ParamI06] = @ParamI06, [ParamI07] = @ParamI07, [ParamI08] = @ParamI08,
+        [ParamI09] = @ParamI09, [ParamI10] = @ParamI10, [ParamI11] = @ParamI11,
+        [ParamI12] = @ParamI12, [ParamI13] = @ParamI13, [ParamI14] = @ParamI14,
+        [ParamI15] = @ParamI15, [ParamI16] = @ParamI16, [ParamI17] = @ParamI17,
+        [ParamI18] = @ParamI18, [ParamI19] = @ParamI19, [ParamI20] = @ParamI20,
+        [ParamB03] = @ParamB03, [ParamB04] = @ParamB04,
+        [ParamB10] = @ParamB10, [ParamB11] = @ParamB11
+    WHERE [idAttivita] = @IdAttivita;
+
+    SELECT @IdAttivita AS IdAttivita;
+END
+GO
+
+-- ----------------------------------------------------------
+-- SPED_BOLLA_ANNULLA_fix.sql  (fix SP legacy: annullo gestisce lo stato NULL)
+-- ----------------------------------------------------------
+-- Le bolle appena create hanno stato NULL; la condizione "stato <> '0X'"
+-- (ANSI_NULLS ON) le escludeva. Fix: ISNULL(stato,'') <> '0X'. Nessun duplicato:
+-- si corregge la stessa SP usata anche dall'app InDe. Idempotente (ALTER).
+ALTER PROCEDURE SPED_BOLLA_ANNULLA
+	@IdSpedizione int
+	,@idutente int = null
+AS
+BEGIN
+	SET NOCOUNT ON;
+	declare @messaggio varchar(100)
+	declare @barcode varchar(50)
+	select @barcode=barcode
+		from sped_Attivita
+		where idspedizione=@idspedizione and left(barcode,2)='61'
+		and ISNULL(stato,'') <>'0X'   -- FIX: le bolle appena create hanno stato NULL
+		and DataCarico >convert(date,getdate())
+
+	if left(isnull(@barcode,''),2)<>'61'
+		set @messaggio='Spedizione non annullabile'
+	else
+	begin
+		update SPED_ATTIVITA set stato='0X',IdUtente =isnull(@idutente,idutente) where IdSpedizione=@IdSpedizione
+		set @messaggio='Comando eseguito correttamente'
+	end
+	select @messaggio msg,@messaggio as Messaggio,'' as nulla
+END
+GO
+
+-- ----------------------------------------------------------
+-- AI_GEO_CreaGiro.sql  (crea giro + vertici + shape, atomico)
+-- ----------------------------------------------------------
+-- =============================================================
+-- AI_GEO_CreaGiro — crea un giro con i suoi vertici in un colpo solo (atomico).
+-- Replica il flusso della videata legacy "Creazione giri su Mappa":
+--   1. GEO_CreaGiro   (crea la riga GEO_GIRI, colore casuale se vuoto)
+--   2. inserisce i vertici in GEO_GIRIVERTICI  (l'unico INSERT grezzo del legacy)
+--   3. GEO_AllineaGiri (costruisce lo SHAPE poligonale, chiude e valida l'anello)
+-- I vertici arrivano come JSON ordinato: [{"lat":..,"lng":..}, ...]; l'ordine
+-- del poligono e' preservato da [key] di OPENJSON (GEO_AllineaGiri ordina per
+-- IdVertice, che l'insert assegna nell'ordine dei vertici).
+-- Nessuna logica duplicata: riusa le due SP legacy. Prefisso AI_.
+-- =============================================================
+CREATE OR ALTER PROCEDURE dbo.AI_GEO_CreaGiro
+    @Giro     varchar(200),
+    @IdFiliale int,
+    @Colore   varchar(10) = NULL,
+    @Vertici  nvarchar(max)              -- JSON: [{"lat":43.7,"lng":11.2}, ...]
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF LEN(LTRIM(RTRIM(ISNULL(@Giro, '')))) <= 3
+    BEGIN
+        RAISERROR('Nome del giro non impostato o troppo corto', 16, 1);
+        RETURN;
+    END
+    IF ISNULL(@Vertici, '') = '' OR (SELECT COUNT(*) FROM OPENJSON(@Vertici)) < 3
+    BEGIN
+        RAISERROR('Servono almeno 3 punti per definire l''area del giro', 16, 1);
+        RETURN;
+    END
+
+    -- 1. crea il giro (SP legacy). Ne catturo il result set per non farlo trapelare.
+    CREATE TABLE #g (IdGiro int, IdFiliale int, Giro varchar(200), CAP varchar(20),
+                     Belfiore varchar(20), DataModifica smalldatetime, DataFine smalldatetime, colore varchar(20));
+    INSERT INTO #g EXEC dbo.GEO_CreaGiro @Giro = @Giro, @IdFiliale = @IdFiliale, @Colore = @Colore;
+    DECLARE @IdGiro int = (SELECT TOP 1 IdGiro FROM #g);
+
+    -- 2. vertici (ordine preservato da [key])
+    INSERT INTO GEO_GIRIVERTICI (IdGiro, Latitude, Longitude, Sequenza, DataModifica)
+    SELECT @IdGiro,
+           CAST(JSON_VALUE(value, '$.lat') AS float),
+           CAST(JSON_VALUE(value, '$.lng') AS float),
+           CAST([key] AS int),
+           GETDATE()
+    FROM OPENJSON(@Vertici)
+    ORDER BY CAST([key] AS int);
+
+    -- 3. costruisce lo SHAPE (SP legacy)
+    EXEC dbo.GEO_AllineaGiri @IdGiro;
+
+    SELECT @IdGiro AS IdGiro;
+END
+GO
+
+-- ----------------------------------------------------------
+-- AI_GEO_CreaGiroDaComuni.sql  (giro come unione dei comuni)
+-- ----------------------------------------------------------
+-- =============================================================
+-- AI_GEO_CreaGiroDaComuni — crea un giro come UNIONE delle geometrie dei comuni
+-- selezionati (GEO_COMUNE.SHAPE). Molto piu' rapido e preciso del disegno a mano:
+-- i giri sono di fatto insiemi di comuni/CAP, e i comuni hanno gia' lo SHAPE.
+-- Riusa GEO_CreaGiro (crea la riga + colore); poi imposta SHAPE = UnionAggregate.
+-- Lo SHAPE e' quello usato da GEO_AssegnaGIRI per l'assegnazione (STContains),
+-- quindi il giro e' subito assegnabile anche senza vertici in GEO_GIRIVERTICI.
+-- @IdComuni: JSON array di interi, es. [2857,2838].
+-- =============================================================
+CREATE OR ALTER PROCEDURE dbo.AI_GEO_CreaGiroDaComuni
+    @Giro      varchar(200),
+    @IdFiliale int,
+    @Colore    varchar(10) = NULL,
+    @IdComuni  nvarchar(max)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF LEN(LTRIM(RTRIM(ISNULL(@Giro, '')))) <= 3
+    BEGIN
+        RAISERROR('Nome del giro non impostato o troppo corto', 16, 1);
+        RETURN;
+    END
+
+    DECLARE @ids TABLE (IdComune int);
+    INSERT INTO @ids (IdComune) SELECT CAST(value AS int) FROM OPENJSON(@IdComuni);
+    IF NOT EXISTS (SELECT 1 FROM @ids)
+    BEGIN
+        RAISERROR('Nessun comune selezionato', 16, 1);
+        RETURN;
+    END
+
+    DECLARE @union geometry = (
+        SELECT geometry::UnionAggregate(SHAPE)
+        FROM GEO_COMUNE
+        WHERE IdComune IN (SELECT IdComune FROM @ids) AND SHAPE IS NOT NULL
+    );
+    IF @union IS NULL
+    BEGIN
+        RAISERROR('I comuni selezionati non hanno geometria', 16, 1);
+        RETURN;
+    END
+    IF @union.STIsValid() = 0 SET @union = @union.MakeValid();
+
+    -- crea la riga giro (SP legacy) e ne cattura il result set
+    CREATE TABLE #g (IdGiro int, IdFiliale int, Giro varchar(200), CAP varchar(20),
+                     Belfiore varchar(20), DataModifica smalldatetime, DataFine smalldatetime, colore varchar(20));
+    INSERT INTO #g EXEC dbo.GEO_CreaGiro @Giro = @Giro, @IdFiliale = @IdFiliale, @Colore = @Colore;
+    DECLARE @IdGiro int = (SELECT TOP 1 IdGiro FROM #g);
+
+    UPDATE GEO_GIRI SET SHAPE = @union WHERE IdGiro = @IdGiro;
+
+    SELECT @IdGiro AS IdGiro;
+END
+GO
+
+-- ----------------------------------------------------------
+
+-- AI_UTENTI_Unilav_Applica.sql
+-- =============================================================
+-- AI_UTENTI_Unilav_Applica: aggiorna la scheda UTENTI con i dati letti da una
+-- Comunicazione Obbligatoria UNILAV (pagina "Carica UNILAV"). Aggiornamento
+-- SELETTIVO: i parametri NULL lasciano il campo com'e' (a differenza di
+-- AI_UTENTI_Save che sovrascrive tutto), cosi' la conferma a video applica
+-- solo i campi spuntati. Restituisce il numero di righe aggiornate.
+-- =============================================================
+CREATE OR ALTER PROCEDURE dbo.AI_UTENTI_Unilav_Applica
+    @IdUtente int,
+    @Nome varchar(50) = NULL,
+    @DataNascita date = NULL,
+    @DataInizio smalldatetime = NULL,
+    @IndirizzoRes varchar(250) = NULL,
+    @CapRes varchar(50) = NULL,
+    @ComuneRes varchar(250) = NULL,
+    @ProvRes varchar(50) = NULL,
+    @Livello varchar(50) = NULL,
+    @Mansione varchar(50) = NULL,
+    @Cittadinanza varchar(100) = NULL,
+    @LuogoNascita varchar(100) = NULL,
+    @TitoloStudio varchar(100) = NULL,
+    @TipoContratto varchar(100) = NULL,
+    @DataFineContratto date = NULL,
+    @OreSettimanali decimal(4,1) = NULL,
+    @CCNL varchar(100) = NULL,
+    @SoggiornoTipo varchar(100) = NULL,
+    @SoggiornoNumero varchar(100) = NULL,
+    @SoggiornoMotivo varchar(100) = NULL,
+    @SoggiornoScadenza date = NULL,
+    @SoggiornoQuestura varchar(100) = NULL,
+    @UnilavCodice varchar(100) = NULL,
+    @UnilavData datetime = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    UPDATE UTENTI SET
+        Nome              = ISNULL(@Nome, Nome),
+        DataNascita       = ISNULL(@DataNascita, DataNascita),
+        DataInizio        = ISNULL(@DataInizio, DataInizio),
+        IndirizzoRes      = ISNULL(@IndirizzoRes, IndirizzoRes),
+        CapRes            = ISNULL(@CapRes, CapRes),
+        ComuneRes         = ISNULL(@ComuneRes, ComuneRes),
+        ProvRes           = ISNULL(@ProvRes, ProvRes),
+        Livello           = ISNULL(@Livello, Livello),
+        Mansione          = ISNULL(@Mansione, Mansione),
+        Cittadinanza      = ISNULL(@Cittadinanza, Cittadinanza),
+        LuogoNascita      = ISNULL(@LuogoNascita, LuogoNascita),
+        TitoloStudio      = ISNULL(@TitoloStudio, TitoloStudio),
+        TipoContratto     = ISNULL(@TipoContratto, TipoContratto),
+        DataFineContratto = ISNULL(@DataFineContratto, DataFineContratto),
+        OreSettimanali    = ISNULL(@OreSettimanali, OreSettimanali),
+        CCNL              = ISNULL(@CCNL, CCNL),
+        SoggiornoTipo     = ISNULL(@SoggiornoTipo, SoggiornoTipo),
+        SoggiornoNumero   = ISNULL(@SoggiornoNumero, SoggiornoNumero),
+        SoggiornoMotivo   = ISNULL(@SoggiornoMotivo, SoggiornoMotivo),
+        SoggiornoScadenza = ISNULL(@SoggiornoScadenza, SoggiornoScadenza),
+        SoggiornoQuestura = ISNULL(@SoggiornoQuestura, SoggiornoQuestura),
+        UnilavCodice      = ISNULL(@UnilavCodice, UnilavCodice),
+        UnilavData        = ISNULL(@UnilavData, UnilavData)
+    WHERE IdUtente = @IdUtente;
+    SELECT @@ROWCOUNT AS righe;
+END
+GO
+
 -- AI_MENU_Link_migrazione.sql  (compila MENU_ELEMENTI.Link)
 -- ----------------------------------------------------------
 -- =============================================================
@@ -1314,15 +1991,40 @@ UPDATE MENU_ELEMENTI SET Link = '/utenti'                WHERE Videata = 'Listau
 
 -- Editor workflow / azioni (macchina a stati per processo)
 UPDATE MENU_ELEMENTI SET Link = '/workflow' WHERE Videata IN ('Azionenuova', 'Processi Azioni');
+UPDATE MENU_ELEMENTI SET Link = '/azioni' WHERE Videata = 'Azioni';
+UPDATE MENU_ELEMENTI SET Link = '/tracking' WHERE Videata = 'Ricerca Barcode';
+UPDATE MENU_ELEMENTI SET Link = '/attivita-filiali' WHERE Videata = 'Attivitafiliale';
+UPDATE MENU_ELEMENTI SET Link = '/attivita-dipendenti' WHERE Videata = 'Inserimento Attivita';
+UPDATE MENU_ELEMENTI SET Link = '/ddt' WHERE Videata = 'Bollainterna';
+UPDATE MENU_ELEMENTI SET Link = '/esegui-comando' WHERE Videata = 'Eseguicomando';
+UPDATE MENU_ELEMENTI SET Link = '/esiti' WHERE Videata = 'Esiti';
+UPDATE MENU_ELEMENTI SET Link = '/giri-mappa' WHERE Videata = 'Sped2mappe';
+
 
 -- Dashboard
 UPDATE MENU_ELEMENTI SET Link = '/dashboard' WHERE Videata = 'Dashboard';
+
+-- Export CSV per HR (pagina NUOVA, senza videata legacy): voce in coda al
+-- gruppo "Gestione Dipendenti" (IdMenuElemento 1460)
+IF NOT EXISTS (SELECT 1 FROM MENU_ELEMENTI WHERE Link = '/export-hr')
+  INSERT INTO MENU_ELEMENTI (ParentID, [Text], Link, Sorting)
+  VALUES (1460, 'Export CSV per HR', '/export-hr', 30);
+
+-- Carica UNILAV (pagina NUOVA): assunzione da PDF Comunicazione Obbligatoria
+IF NOT EXISTS (SELECT 1 FROM MENU_ELEMENTI WHERE Link = '/unilav')
+  INSERT INTO MENU_ELEMENTI (ParentID, [Text], Link, Sorting)
+  VALUES (1460, 'Carica UNILAV (PDF)', '/unilav', 31);
 GO
 
 -- ============================================================
 -- PERMESSI: EXECUTE all'utente applicativo "claude"
 -- ============================================================
 GRANT EXECUTE ON dbo.AI_AuthLogin TO claude;
+GRANT EXECUTE ON dbo.AI_Azioni_SaveAzione TO claude;
+GRANT EXECUTE ON dbo.AI_Azioni_SaveWorkflow TO claude;
+GRANT EXECUTE ON dbo.AI_Azioni_SaveProcessoAzione TO claude;
+GRANT EXECUTE ON dbo.AI_AttivitaFiliali_Save TO claude;
+GRANT EXECUTE ON dbo.AI_AttivitaDipendenti_Save TO claude;
 GRANT EXECUTE ON dbo.AI_ElencoMenuGruppi TO claude;
 GRANT EXECUTE ON dbo.AI_GEO_COPERTURE_Save TO claude;
 GRANT EXECUTE ON dbo.AI_PRODOTTI_Save TO claude;
@@ -1340,6 +2042,7 @@ GRANT EXECUTE ON dbo.AI_SPED_STATI_Save TO claude;
 GRANT EXECUTE ON dbo.AI_INTERROGAZIONI_Save TO claude;
 GRANT EXECUTE ON dbo.AI_MENU_ELEMENTI_Save TO claude;
 GRANT EXECUTE ON dbo.AI_UTENTI_Save TO claude;
+GRANT EXECUTE ON dbo.AI_UTENTI_Unilav_Applica TO claude;
 GRANT EXECUTE ON dbo.AI_UTENTI_GRUPPI_Add TO claude;
 GRANT EXECUTE ON dbo.AI_UTENTI_GRUPPI_Del TO claude;
 GRANT EXECUTE ON dbo.AI_UTENTI_PROFILI_Add TO claude;

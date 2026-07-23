@@ -31,6 +31,25 @@ export function parseAzioneQuery(v) {
   }
 }
 
+// Parametri della videata "Eseguicomando" (tasto destro/menu). Formato a coppie
+// chiave=valore separate da '|', es.:
+//   "IdAzione=0|Modale=1|EseguiSubito=1|Nome=Annulla bolla|Parametri=exec [SP] @id= 17"
+// La chiave "Parametri" e' l'ultima e puo' contenere '=' nel valore: la si prende
+// fino a fine stringa. Restituisce un oggetto con le chiavi trovate.
+export function parseParametriComando(p) {
+  const testo = p ?? ''
+  const out = {}
+  const rx = /(\w+)=/g
+  let m, prec = null, precInizio = 0
+  while ((m = rx.exec(testo))) {
+    if (prec) out[prec] = testo.slice(precInizio, m.index).replace(/\|$/, '')
+    prec = m[1]
+    precInizio = rx.lastIndex
+  }
+  if (prec) out[prec] = testo.slice(precInizio)
+  return out
+}
+
 function togliVirgolette(s) {
   let t = (s ?? '').trim()
   if (t.startsWith('"')) t = t.slice(1)

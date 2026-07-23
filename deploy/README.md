@@ -1,13 +1,13 @@
 # Deploy in produzione (Windows Server 2019)
 
-Ge.C.O. Web gira sullo **stesso server di TNOT**. L'API .NET serve sia il REST sia
+Speedy Web gira sullo **stesso server di TNOT**. L'API .NET serve sia il REST sia
 il frontend Vue (build statica) sulla **stessa porta**, quindi **non serve IIS**.
 
 ## Porte — niente sovrapposizioni con TNOT
 
 | Servizio | Progetto | Porta | Note |
 |---|---|---|---|
-| **Geco-Api** | Ge.C.O. Web (questo) | **5180** | API + frontend (porta unica) |
+| **Geco-Api** | Speedy Web (questo) | **5180** | API + frontend (porta unica) |
 | WF-Api | TNOT | 3001 | API + frontend (porta unica) |
 | SQL Server | — | 1433 | `serverdb`/`DeliveryDB` (TWEB), `10.1.0.1`/`NotificheDB` (TNOT) |
 
