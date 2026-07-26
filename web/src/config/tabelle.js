@@ -9,7 +9,7 @@ export const CONFIG_TABELLE = {
   Gruppi: { key: 'gruppi', titolo: 'Gruppi' },
   Aziende: { key: 'aziende', titolo: 'Aziende' },
   Filiali: { key: 'filiali', titolo: 'Filiali' },
-  Clienti: { key: 'clienti', titolo: 'Clienti' },
+  // 'Clienti' non e' piu' qui: ha la pagina dedicata (vedi isVideataClienti)
   'FILE TRACCIATO': { key: 'tracciati', titolo: 'File tracciato' },
   Fornitori: { key: 'fornitori', titolo: 'Fornitori' },
   Lista: { key: 'lista', titolo: 'Lista valori' },
@@ -77,6 +77,21 @@ export function isVideataGiriMappa(videata) {
   return videata === 'Sped2mappe'
 }
 
+// videata legacy "Nuova Spedizione Parcel Speedy"
+export function isVideataSpedNuova(videata) {
+  return videata === 'Nuovaspedizione'
+}
+
+// videate legacy "Accettazione da File" (senza e con parametro CodFamiglia)
+export function isVideataAccettazioneFile(videata) {
+  return ['AccettazioneDaFile', 'AccettazioneDaFileFamiglia', 'Accettazione Da File Famiglia'].includes(videata)
+}
+
+// videata legacy "Clienti": gestione dedicata (anagrafica + condizioni + listini)
+export function isVideataClienti(videata) {
+  return videata === 'Clienti'
+}
+
 // Risolve una Videata legacy (+ parametri) nell'oggetto di navigazione interno.
 // E' la stessa logica di fallback del menu: usata da AppShell e dalle azioni
 // "paginaN#" delle interrogazioni (valore cella = "Videata#Parametri").
@@ -98,6 +113,9 @@ export function navDaVideata(videata, parametri = '') {
   if (isVideataEseguiComando(v)) return { tipo: 'esegui-comando', parametri: parametri ?? '' }
   if (isVideataEsiti(v)) return { tipo: 'esiti', parametri: parametri ?? '' }
   if (isVideataGiriMappa(v)) return { tipo: 'giri-mappa' }
+  if (isVideataSpedNuova(v)) return { tipo: 'sped-nuova' }
+  if (isVideataAccettazioneFile(v)) return { tipo: 'accettazione-file', parametri: parametri ?? '' }
+  if (isVideataClienti(v)) return { tipo: 'clienti' }
   // videata non ancora migrata: placeholder
   return { tipo: 'videata', videata: v, parametri: parametri ?? '' }
 }
@@ -124,6 +142,10 @@ export function navDaLink(voce) {
   if (link === '/giri-mappa') return { tipo: 'giri-mappa' }
   if (link === '/export-hr') return { tipo: 'export-hr' }
   if (link === '/unilav') return { tipo: 'unilav' }
+  if (link === '/storici') return { tipo: 'storici' }
+  if (link === '/sped-nuova') return { tipo: 'sped-nuova' }
+  if (link === '/accettazione-file') return { tipo: 'accettazione-file', parametri: voce.Parametri ?? '' }
+  if (link === '/clienti') return { tipo: 'clienti' }
   if (link === '/interrogazioni') {
     const { idQuery, sWhere } = parseParametriMenu(voce.Parametri)
     return { tipo: 'interrogazioni', idQuery, sWhere }

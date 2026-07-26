@@ -70,3 +70,15 @@ IF NOT EXISTS (SELECT 1 FROM MENU_ELEMENTI WHERE Link = '/export-hr')
 IF NOT EXISTS (SELECT 1 FROM MENU_ELEMENTI WHERE Link = '/unilav')
   INSERT INTO MENU_ELEMENTI (ParentID, [Text], Link, Sorting)
   VALUES (1460, 'Carica UNILAV (PDF)', '/unilav', 31);
+
+-- Dati storici Speedy (pagina NUOVA): consegne NEXIVE 2019-2020 su mappa,
+-- voce nel gruppo "Test - Sviluppo" (IdMenuElemento 1229)
+IF NOT EXISTS (SELECT 1 FROM MENU_ELEMENTI WHERE Link = '/storici')
+  INSERT INTO MENU_ELEMENTI (ParentID, [Text], Link, Sorting)
+  VALUES (1229, 'Dati storici Speedy', '/storici', 10);
+
+-- Nuova Spedizione Parcel Speedy (videata legacy "Nuovaspedizione")
+UPDATE MENU_ELEMENTI SET Link = '/sped-nuova' WHERE Videata = 'Nuovaspedizione';
+
+-- Gestione clienti dedicata (sostituisce la config generica /config/clienti)
+UPDATE MENU_ELEMENTI SET Link = '/clienti' WHERE Videata = 'Clienti';

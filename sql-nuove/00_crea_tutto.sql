@@ -2014,6 +2014,15 @@ IF NOT EXISTS (SELECT 1 FROM MENU_ELEMENTI WHERE Link = '/export-hr')
 IF NOT EXISTS (SELECT 1 FROM MENU_ELEMENTI WHERE Link = '/unilav')
   INSERT INTO MENU_ELEMENTI (ParentID, [Text], Link, Sorting)
   VALUES (1460, 'Carica UNILAV (PDF)', '/unilav', 31);
+
+-- Dati storici Speedy (pagina NUOVA): consegne NEXIVE 2019-2020 su mappa,
+-- voce nel gruppo "Test - Sviluppo" (IdMenuElemento 1229)
+IF NOT EXISTS (SELECT 1 FROM MENU_ELEMENTI WHERE Link = '/storici')
+  INSERT INTO MENU_ELEMENTI (ParentID, [Text], Link, Sorting)
+  VALUES (1229, 'Dati storici Speedy', '/storici', 10);
+
+-- Nuova Spedizione Parcel Speedy (videata legacy "Nuovaspedizione")
+UPDATE MENU_ELEMENTI SET Link = '/sped-nuova' WHERE Videata = 'Nuovaspedizione';
 GO
 
 -- ============================================================
@@ -2054,4 +2063,243 @@ GRANT EXECUTE ON dbo.AI_UTENTI_FILIALI_Del TO claude;
 GRANT EXECUTE ON dbo.AI_SPED_WORKFLOW_Save TO claude;
 GRANT EXECUTE ON dbo.AI_SPED_AZIONI_Save TO claude;
 GRANT EXECUTE ON dbo.ElencoFiliali TO claude;
+GO
+
+-- ============================================================
+-- NUOVA SPEDIZIONE PARCEL SPEEDY (wrapper di SPED_INSERIMENTO)
+-- ============================================================
+-- Nuova spedizione parcel Speedy (pagina /sped-nuova). Wrapper di dbo.SPED_INSERIMENTO:
+-- la stored legacy esige il barcode in ingresso, quindi se manca si inserisce con un
+-- barcode temporaneo e lo si finalizza a '91' + IdSpedizione a 10 cifre (stessa
+-- convenzione di dbo.InserimentoSpedizione), rigenerando poi le stampe del palmare.
+CREATE OR ALTER PROCEDURE dbo.AI_SPED_NuovaParcel
+    @IdCliente int,
+    @IdProdotto int,
+    @IdAzienda int = 2,
+    @IdUtente int = NULL,
+    @IdFiliale int = NULL,
+    @IdMittente int = NULL,
+    @TariffarioCodice varchar(100) = NULL,
+    @Barcode varchar(50) = NULL,
+    @DataRitiro datetime = NULL,          -- valorizzata solo se e' richiesto il ritiro
+    @RitiroRagioneSociale varchar(200) = NULL,
+    @RitiroIndirizzo varchar(200) = NULL,
+    @RitiroNumeroCivico varchar(200) = NULL,
+    @RitiroLocalita varchar(200) = NULL,
+    @RitiroCap varchar(5) = NULL,
+    @RitiroProvinciaCodice varchar(2) = NULL,
+    @RitiroLatitude float = NULL,
+    @RitiroLongitude float = NULL,
+    @MittenteRagioneSociale varchar(50) = NULL,
+    @MittenteIndirizzo varchar(50) = NULL,
+    @MittenteLocalita varchar(50) = NULL,
+    @MittenteCap varchar(5) = NULL,
+    @MittenteProvinciaCodice varchar(2) = NULL,
+    @MittenteEmail varchar(50) = NULL,
+    @DestinazioneRagioneSociale varchar(200),
+    @DestinazioneIndirizzo varchar(200),
+    @DestinazioneNumeroCivico varchar(200) = NULL,
+    @DestinazioneLocalita varchar(200),
+    @DestinazioneCap varchar(5),
+    @DestinazioneProvinciaCodice varchar(2),
+    @DestinazioneLatitude float = NULL,
+    @DestinazioneLongitude float = NULL,
+    @ContattoDestDescrizione varchar(40) = NULL,
+    @ContattoDestTelefono varchar(15) = NULL,
+    @ContattoDestEmail varchar(100) = NULL,
+    @Importo decimal(15, 5) = NULL,
+    @ImportoContrassegno numeric(15, 3) = NULL,
+    @PesoDichiaratoKG numeric(12, 3) = NULL,
+    @Nota varchar(200) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @bc varchar(50) = NULLIF(LTRIM(RTRIM(ISNULL(@Barcode, ''))), '');
+    DECLARE @generato bit = 0;
+    IF @bc IS NULL
+    BEGIN
+        -- temporaneo unico: sostituito con '91'+Id a inserimento riuscito
+        SET @bc = 'WT' + RIGHT(REPLACE(CONVERT(varchar(36), NEWID()), '-', ''), 12);
+        SET @generato = 1;
+    END
+
+    -- NB: niente INSERT..EXEC: SPED_INSERIMENTO (via GetCoperture) emette piu' result
+    -- set di forme diverse; i suoi select passano al chiamante, che legge l'ULTIMO
+    -- (quello di questa SP, riconoscibile dalla colonna Barcode).
+    DECLARE @id int;
+    DECLARE @Adesso datetime = GETDATE();   -- @DataInserimento nella legacy e' senza default
+
+    EXEC dbo.SPED_INSERIMENTO
+        @Barcode = @bc,
+        @IdCliente = @IdCliente,
+        @IdAzienda = @IdAzienda,
+        @IdProdotto = @IdProdotto,
+        @IdUtente = @IdUtente,
+        @IdFiliale = @IdFiliale,
+        @DataCarico = @DataRitiro,
+        @RitiroRagioneSociale = @RitiroRagioneSociale,
+        @RitiroIndirizzo = @RitiroIndirizzo,
+        @RitiroNumeroCivico = @RitiroNumeroCivico,
+        @RitiroLocalita = @RitiroLocalita,
+        @RitiroCap = @RitiroCap,
+        @RitiroProvinciaCodice = @RitiroProvinciaCodice,
+        @RitiroNazioneCodice = 'IT',
+        @RitiroLatitude = @RitiroLatitude,
+        @RitiroLongitude = @RitiroLongitude,
+        @DestinazioneRagioneSociale = @DestinazioneRagioneSociale,
+        @DestinazioneIndirizzo = @DestinazioneIndirizzo,
+        @DestinazioneNumeroCivico = @DestinazioneNumeroCivico,
+        @DestinazioneLocalita = @DestinazioneLocalita,
+        @DestinazioneCap = @DestinazioneCap,
+        @DestinazioneProvinciaCodice = @DestinazioneProvinciaCodice,
+        @DestinazioneNazioneCodice = 'IT',
+        @DestinazioneLatitude = @DestinazioneLatitude,
+        @DestinazioneLongitude = @DestinazioneLongitude,
+        @ContattoDestDescrizione = @ContattoDestDescrizione,
+        @ContattoDestTelefono = @ContattoDestTelefono,
+        @ContattoDestEmail = @ContattoDestEmail,
+        @Importo = @Importo,
+        @ImportoContrassegno = @ImportoContrassegno,
+        @PesoDichiaratoKG = @PesoDichiaratoKG,
+        @NOTA1 = @Nota,
+        @TariffarioCodice = @TariffarioCodice,
+        @MittenteRagioneSociale = @MittenteRagioneSociale,
+        @MittenteIndirizzo = @MittenteIndirizzo,
+        @MittenteLocalita = @MittenteLocalita,
+        @MittenteCap = @MittenteCap,
+        @MittenteProvinciaCodice = @MittenteProvinciaCodice,
+        @MittenteEmail = @MittenteEmail,
+        @DataInserimento = @Adesso,
+        @IdSpedizione = @id OUTPUT;
+
+    DECLARE @IdAttivita int, @Result varchar(200);
+    IF @id IS NULL
+    BEGIN
+        SELECT CAST(NULL AS int) AS IdSpedizione, CAST(NULL AS int) AS IdAttivita,
+               'Inserimento non riuscito' AS Result, @bc AS Barcode;
+        RETURN;
+    END
+
+    SELECT @IdAttivita = MAX(IdAttivita) FROM dbo.PALM_ATTIVITA
+    WHERE TipoRiferimento = 0 AND Riferimento = CONVERT(varchar(50), @id);
+    SET @Result = 'OK';
+
+    IF @generato = 1
+    BEGIN
+        SET @bc = '91' + RIGHT('0000000000' + CONVERT(varchar(10), @id), 10);
+        UPDATE dbo.SPED_ATTIVITA SET Barcode = @bc WHERE IdSpedizione = @id;
+        UPDATE dbo.PALM_ATTIVITA SET Barcode = @bc WHERE IdAttivita = @IdAttivita;
+        -- le stampe palmare (CPCL) incorporano il barcode: vanno rigenerate
+        EXEC dbo.PALM_AggiornaReport @IdAttivita = @IdAttivita;
+    END
+    IF @IdMittente IS NOT NULL
+        UPDATE dbo.SPED_ATTIVITA SET IdMittente = @IdMittente WHERE IdSpedizione = @id;
+
+    SELECT @id AS IdSpedizione, @IdAttivita AS IdAttivita, @Result AS Result, @bc AS Barcode;
+END
+GO
+GRANT EXECUTE ON dbo.AI_SPED_NuovaParcel TO claude;
+
+
+-- ============================================================
+-- ACCETTAZIONE DA FILE (staging FILE_LOAD per LoadFromFile)
+-- ============================================================
+-- Accettazione da file (pagina /accettazione-file): staging del file caricato dal
+-- browser nella tabella FILE_LOAD (una riga per riga di file, chiave DocID+NomeFile),
+-- che e' il formato atteso dalla stored legacy dbo.LoadFromFile.
+-- @Righe e' un array JSON di stringhe; l'ORDER BY sulla key preserva l'ordine
+-- del file (l'identity IdFileLoad determina il numero di riga in LoadFromFile).
+CREATE OR ALTER PROCEDURE dbo.AI_FILE_LOAD_Insert
+    @DocID varchar(50),
+    @NomeFile varchar(250),
+    @Righe nvarchar(max)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    INSERT INTO dbo.FILE_LOAD (DocID, NomeFile, Testo, DataLoad)
+    SELECT @DocID, @NomeFile, LEFT(j.value, 4000), GETDATE()
+    FROM OPENJSON(@Righe) j
+    ORDER BY CAST(j.[key] AS int);
+    SELECT @@ROWCOUNT AS righe;
+END
+GO
+GRANT EXECUTE ON dbo.AI_FILE_LOAD_Insert TO claude;
+GRANT EXECUTE ON dbo.ElencoClienti TO claude;
+GRANT EXECUTE ON dbo.ElencoFamiglie TO claude;
+GRANT EXECUTE ON dbo.LoadFromFile TO claude;
+
+
+-- ============================================================
+-- GESTIONE CLIENTI (condizioni e listini collegati)
+-- ============================================================
+-- Gestione clienti (pagina /clienti): condizioni di vendita del cliente.
+-- Upsert + cancellazione fisica (sono righe di configurazione, non hanno storico).
+CREATE OR ALTER PROCEDURE dbo.AI_CLIENTI_CONDIZIONI_Save
+    @IdClienteCondizione int = NULL,
+    @IdCliente int,
+    @CodFamiglia varchar(5) = NULL,
+    @CodTipoVendita varchar(5) = NULL,
+    @DataInizioFatturazione date = NULL,
+    @DataFineFatturazione date = NULL,
+    @Ambito varchar(50) = NULL,
+    @Scansione int = NULL,
+    @IdProdotto int = NULL,
+    @IdTracciato int = NULL,
+    @IdFiliale int = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF @IdClienteCondizione IS NULL OR @IdClienteCondizione = 0
+    BEGIN
+        INSERT INTO [CLIENTI_CONDIZIONI] ([IdCliente], [CodFamiglia], [CodTipoVendita], [DataInizioFatturazione], [DataFineFatturazione], [Ambito], [Scansione], [IdProdotto], [IdTracciato], [IdFiliale])
+        VALUES (@IdCliente, @CodFamiglia, @CodTipoVendita, @DataInizioFatturazione, @DataFineFatturazione, @Ambito, @Scansione, @IdProdotto, @IdTracciato, @IdFiliale);
+        SELECT CAST(SCOPE_IDENTITY() AS int) AS id;
+    END
+    ELSE
+    BEGIN
+        UPDATE [CLIENTI_CONDIZIONI] SET
+            [IdCliente] = @IdCliente,
+            [CodFamiglia] = @CodFamiglia,
+            [CodTipoVendita] = @CodTipoVendita,
+            [DataInizioFatturazione] = @DataInizioFatturazione,
+            [DataFineFatturazione] = @DataFineFatturazione,
+            [Ambito] = @Ambito,
+            [Scansione] = @Scansione,
+            [IdProdotto] = @IdProdotto,
+            [IdTracciato] = @IdTracciato,
+            [IdFiliale] = @IdFiliale
+        WHERE [IdClienteCondizione] = @IdClienteCondizione;
+        SELECT @IdClienteCondizione AS id;
+    END
+END
+GO
+GRANT EXECUTE ON dbo.AI_CLIENTI_CONDIZIONI_Save TO claude;
+GO
+
+CREATE OR ALTER PROCEDURE dbo.AI_CLIENTI_CONDIZIONI_Del
+    @IdClienteCondizione int
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DELETE FROM [CLIENTI_CONDIZIONI] WHERE [IdClienteCondizione] = @IdClienteCondizione;
+    SELECT @@ROWCOUNT AS righe;
+END
+GO
+GRANT EXECUTE ON dbo.AI_CLIENTI_CONDIZIONI_Del TO claude;
+GO
+
+CREATE OR ALTER PROCEDURE dbo.AI_FATT_LISTINI_Del
+    @IdListino int
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DELETE FROM [FATT_LISTINI] WHERE [IdListino] = @IdListino;
+    SELECT @@ROWCOUNT AS righe;
+END
+GO
+GRANT EXECUTE ON dbo.AI_FATT_LISTINI_Del TO claude;
+
+-- Gestione clienti dedicata (sostituisce la config generica /config/clienti)
+UPDATE MENU_ELEMENTI SET Link = '/clienti' WHERE Videata = 'Clienti';
 GO

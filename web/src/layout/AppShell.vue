@@ -31,6 +31,10 @@ import EsitiView from '../views/EsitiView.vue'
 import GiriMappaView from '../views/GiriMappaView.vue'
 import ExportHrView from '../views/ExportHrView.vue'
 import UnilavView from '../views/UnilavView.vue'
+import StoriciView from '../views/StoriciView.vue'
+import SpedNuovaView from '../views/SpedNuovaView.vue'
+import AccettazioneFileView from '../views/AccettazioneFileView.vue'
+import ClientiView from '../views/ClientiView.vue'
 
 const auth = useAuthStore()
 const nav = useNavStore()
@@ -241,6 +245,23 @@ const chiavePagina = computed(() =>
         />
         <UnilavView
           v-else-if="nav.corrente.tipo === 'unilav'"
+          :key="chiavePagina"
+        />
+        <StoriciView
+          v-else-if="nav.corrente.tipo === 'storici'"
+          :key="chiavePagina"
+        />
+        <SpedNuovaView
+          v-else-if="nav.corrente.tipo === 'sped-nuova'"
+          :key="chiavePagina"
+        />
+        <AccettazioneFileView
+          v-else-if="nav.corrente.tipo === 'accettazione-file'"
+          :key="chiavePagina"
+          :parametri="nav.corrente.parametri"
+        />
+        <ClientiView
+          v-else-if="nav.corrente.tipo === 'clienti'"
           :key="chiavePagina"
         />
         <PlaceholderView

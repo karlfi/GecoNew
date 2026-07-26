@@ -2249,6 +2249,685 @@ app.MapPost("/api/hr/unilav/applica", async (UnilavApplicaRequest req) =>
     }
 }).RequireAuthorization();
 
+// === Nuova spedizione parcel Speedy (SPED_INSERIMENTO via AI_SPED_NuovaParcel) ===
+
+// geocoding Nominatim/OSM: un client condiviso con User-Agent come da policy OSM
+var geocodeHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+geocodeHttp.DefaultRequestHeaders.UserAgent.ParseAdd("SpeedyWeb/1.0 (speedyworld.it)");
+
+// Clienti attivi dell'azienda con condizioni parcel (famiglia P)
+app.MapGet("/api/sped/init", async (ClaimsPrincipal user) =>
+{
+    if (!int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda))
+        return Results.BadRequest(new { errore = "Azienda non disponibile" });
+    await using var cn = new SqlConnection(ConnString());
+    var clienti = await cn.QueryAsync(@"
+        SELECT c.IdCliente AS idCliente, c.RagioneSociale AS ragioneSociale
+        FROM CLIENTI c
+        WHERE c.IdAzienda = @idAzienda AND c.DataFine IS NULL
+          AND EXISTS (SELECT 1 FROM CLIENTI_CONDIZIONI cc
+                      WHERE cc.IdCliente = c.IdCliente AND cc.CodFamiglia = 'P')
+        ORDER BY c.RagioneSociale", new { idAzienda });
+    return Results.Ok(clienti);
+}).RequireAuthorization();
+
+// Prodotti abilitati, listini validi e mittenti del cliente scelto
+app.MapGet("/api/sped/cliente/{idCliente:int}", async (int idCliente) =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var prodotti = await cn.QueryAsync(@"
+        SELECT p.IdProdotto AS idProdotto, p.Prodotto AS prodotto
+        FROM PRODOTTI p
+        WHERE p.CodFamiglia = 'P' AND p.DataFineValidita IS NULL
+          AND EXISTS (SELECT 1 FROM CLIENTI_CONDIZIONI cc
+                      WHERE cc.IdCliente = @idCliente AND cc.CodFamiglia = 'P'
+                        AND (cc.IdProdotto IS NULL OR cc.IdProdotto = p.IdProdotto))
+        ORDER BY p.Prodotto", new { idCliente });
+    var listini = await cn.QueryAsync(@"
+        SELECT IdListino AS idListino, CodiceListino AS codiceListino,
+               Descrizione AS descrizione, IdProdotto AS idProdotto
+        FROM FATT_LISTINI
+        WHERE IdCliente = @idCliente
+          AND (ValidoDal IS NULL OR ValidoDal <= CAST(GETDATE() AS date))
+          AND (ValidoAl IS NULL OR ValidoAl >= CAST(GETDATE() AS date))
+        ORDER BY Descrizione", new { idCliente });
+    var mittenti = await cn.QueryAsync(@"
+        SELECT IdMittente AS idMittente, UFFICIOSPEDITORE AS ragioneSociale,
+               INDIRIZZO AS indirizzo, CAP AS cap, COMUNE AS localita, PROV AS provincia,
+               email_mittente AS email
+        FROM MITTENTI WHERE idCliente = @idCliente ORDER BY UFFICIOSPEDITORE", new { idCliente });
+    return Results.Ok(new { prodotti, listini, mittenti });
+}).RequireAuthorization();
+
+// Rubrica: nominativi gia' usati dal cliente come punto di ritiro o destinazione.
+// NB: i clienti storici hanno milioni di righe in SPED_ATTIVITA -> si raggruppa
+// solo sulle ultime 4000 spedizioni (lettura all'indietro sull'indice IdCliente)
+app.MapGet("/api/sped/rubrica", async (int idCliente, string tipo, string? q) =>
+{
+    var pre = tipo == "ritiro" ? "Ritiro" : "Destinazione";
+    await using var cn = new SqlConnection(ConnString());
+    var righe = await cn.QueryAsync($@"
+        SELECT TOP 12 s.RagioneSociale AS ragioneSociale, s.Indirizzo AS indirizzo,
+               s.NumeroCivico AS numeroCivico, s.Cap AS cap, s.Localita AS localita,
+               s.Provincia AS provincia,
+               MAX(s.Lat) AS lat, MAX(s.Lng) AS lng, MAX(s.IdSpedizione) AS ult
+        FROM (
+            SELECT TOP 4000 {pre}RagioneSociale AS RagioneSociale, {pre}Indirizzo AS Indirizzo,
+                   {pre}NumeroCivico AS NumeroCivico, {pre}Cap AS Cap, {pre}Localita AS Localita,
+                   {pre}ProvinciaCodice AS Provincia, {pre}Latitude AS Lat, {pre}Longitude AS Lng, IdSpedizione
+            FROM SPED_ATTIVITA
+            WHERE IdCliente = @idCliente
+            ORDER BY IdSpedizione DESC
+        ) s
+        WHERE s.RagioneSociale IS NOT NULL AND s.RagioneSociale <> ''
+          AND (@q IS NULL OR s.RagioneSociale LIKE @q + '%')
+        GROUP BY s.RagioneSociale, s.Indirizzo, s.NumeroCivico, s.Cap, s.Localita, s.Provincia
+        ORDER BY ult DESC",
+        new { idCliente, q = string.IsNullOrWhiteSpace(q) ? null : q.Trim() }, commandTimeout: 15);
+    return Results.Ok(righe);
+}).RequireAuthorization();
+
+// Sigle provincia esistenti (per la compilazione guidata in ordine inverso)
+app.MapGet("/api/sped/province", async () =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var province = await cn.QueryAsync<string>(@"
+        SELECT DISTINCT SIGLAPROV FROM GEO_COMUNE
+        WHERE ISNULL(SIGLAPROV, '') <> '' ORDER BY SIGLAPROV");
+    return Results.Ok(province);
+}).RequireAuthorization();
+
+// Comuni/CAP/province esistenti (GEO_COMUNE, una riga per CAP), filtrabili per provincia
+app.MapGet("/api/sped/comuni", async (string q, string? prov) =>
+{
+    if (string.IsNullOrWhiteSpace(q) || q.Trim().Length < 2) return Results.Ok(Array.Empty<object>());
+    await using var cn = new SqlConnection(ConnString());
+    var comuni = await cn.QueryAsync(@"
+        SELECT DISTINCT TOP 15 DENOMINAZIONE AS comune, CAP AS cap, SIGLAPROV AS provincia
+        FROM GEO_COMUNE
+        WHERE DENOMINAZIONE LIKE @q + '%' AND CAP IS NOT NULL
+          AND (@prov IS NULL OR SIGLAPROV = @prov)
+        ORDER BY comune, cap",
+        new { q = q.Trim(), prov = string.IsNullOrWhiteSpace(prov) ? null : prov.Trim().ToUpperInvariant() });
+    return Results.Ok(comuni);
+}).RequireAuthorization();
+
+// Copertura del CAP di destinazione per il prodotto (GetCoperture legacy)
+app.MapGet("/api/sped/copertura", async (int idProdotto, string cap) =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var r = (await cn.QueryFirstOrDefaultAsync(
+        "dbo.GetCoperture", new { Cap = cap, IdProdotto = idProdotto },
+        commandType: CommandType.StoredProcedure)) as IDictionary<string, object>;
+    if (r is null) return Results.Ok(new { esito = (string?)null, filiale = (string?)null });
+    var idFil = r.TryGetValue("IdFilialeDistribuzione", out var f) ? f as int? : null;
+    string? filiale = idFil is int fid
+        ? await cn.ExecuteScalarAsync<string>("SELECT FILIALE FROM FILIALI WHERE IDFILIALE = @fid", new { fid })
+        : null;
+    return Results.Ok(new { esito = r.TryGetValue("Result", out var e) ? e as string : null, filiale });
+}).RequireAuthorization();
+
+// Verifica geografica via Nominatim (OpenStreetMap). Con 'libero' cerca l'indirizzo
+// intero come scritto dall'utente; altrimenti ricerca strutturata. In entrambi i
+// casi restituisce anche i campi SCOMPOSTI (via, civico, cap, comune, provincia)
+// cosi' il form puo' correggersi con quanto trovato.
+app.MapGet("/api/sped/geocode", async (string? libero, string? indirizzo, string? civico, string? cap, string? localita, string? provincia) =>
+{
+    const string basi = "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=it&addressdetails=1";
+
+    static List<object> Estrai(string json)
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        return doc.RootElement.EnumerateArray().Select(e =>
+        {
+            System.Text.Json.JsonElement a = default;
+            var haAddr = e.TryGetProperty("address", out a);
+            string? A(string k) => haAddr && a.TryGetProperty(k, out var v) ? v.GetString() : null;
+            var iso = A("ISO3166-2-lvl6");
+            return (object)new
+            {
+                lat = double.Parse(e.GetProperty("lat").GetString()!, System.Globalization.CultureInfo.InvariantCulture),
+                lng = double.Parse(e.GetProperty("lon").GetString()!, System.Globalization.CultureInfo.InvariantCulture),
+                descrizione = e.GetProperty("display_name").GetString(),
+                indirizzo = A("road"),
+                civico = A("house_number"),
+                cap = A("postcode"),
+                localita = A("city") ?? A("town") ?? A("village") ?? A("municipality") ?? A("hamlet"),
+                provincia = iso is not null && iso.StartsWith("IT-") ? iso[3..] : null
+            };
+        }).ToList();
+    }
+
+    try
+    {
+        List<object> trovati;
+        if (!string.IsNullOrWhiteSpace(libero))
+        {
+            trovati = Estrai(await geocodeHttp.GetStringAsync($"{basi}&q={Uri.EscapeDataString(libero.Trim())}"));
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(indirizzo) || string.IsNullOrWhiteSpace(localita))
+                return Results.BadRequest(new { errore = "Servono almeno comune e indirizzo" });
+            var street = $"{civico} {indirizzo}".Trim();
+            var url = $"{basi}&street={Uri.EscapeDataString(street)}&city={Uri.EscapeDataString(localita)}";
+            if (!string.IsNullOrWhiteSpace(cap)) url += $"&postalcode={Uri.EscapeDataString(cap)}";
+            trovati = Estrai(await geocodeHttp.GetStringAsync(url));
+            if (trovati.Count == 0)
+            {
+                // ripiego: ricerca libera composta (indirizzi scritti in forme non standard)
+                var q = $"{street}, {cap} {localita} {provincia}".Trim();
+                trovati = Estrai(await geocodeHttp.GetStringAsync($"{basi}&q={Uri.EscapeDataString(q)}"));
+            }
+        }
+        return Results.Ok(trovati);
+    }
+    catch (Exception ex)
+    {
+        return Results.Json(new { errore = "Servizio di geocodifica non raggiungibile: " + ex.Message }, statusCode: 502);
+    }
+}).RequireAuthorization();
+
+// Salvataggio: validazioni e chiamata ad AI_SPED_NuovaParcel (wrapper di SPED_INSERIMENTO)
+app.MapPost("/api/sped/nuova", async (SpedNuovaRequest req, ClaimsPrincipal user) =>
+{
+    int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var idUtente);
+    int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
+    int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda);
+
+    string? err = null;
+    if (req.IdCliente <= 0 || req.IdProdotto <= 0) err = "Cliente e prodotto sono obbligatori";
+    else if (string.IsNullOrWhiteSpace(req.DestinazioneRagioneSociale) || string.IsNullOrWhiteSpace(req.DestinazioneIndirizzo)
+        || string.IsNullOrWhiteSpace(req.DestinazioneLocalita) || string.IsNullOrWhiteSpace(req.DestinazioneCap)
+        || string.IsNullOrWhiteSpace(req.DestinazioneProvincia)) err = "La destinazione è incompleta";
+    else if (req.DestinazioneLat is null || req.DestinazioneLng is null) err = "L'indirizzo di destinazione non è stato verificato geograficamente";
+    else if (req.PesoKg is null or <= 0) err = "Il peso è obbligatorio";
+    else if ((req.Nota?.Length ?? 0) > 200) err = "La nota supera i 200 caratteri";
+    else if (req.Contrassegno && req.ImportoContrassegno is null or <= 0) err = "Indicare l'importo del contrassegno";
+    else if (req.RitiroRichiesto)
+    {
+        if (req.DataRitiro is null || req.DataRitiro <= DateTime.Now) err = "La data/ora di ritiro deve essere futura";
+        else if (string.IsNullOrWhiteSpace(req.RitiroRagioneSociale) || string.IsNullOrWhiteSpace(req.RitiroIndirizzo)
+            || string.IsNullOrWhiteSpace(req.RitiroLocalita) || string.IsNullOrWhiteSpace(req.RitiroCap)) err = "I dati di ritiro sono incompleti";
+    }
+    if (err is not null) return Results.BadRequest(new { errore = err });
+
+    var par = new DynamicParameters(new
+    {
+        req.IdCliente,
+        req.IdProdotto,
+        IdAzienda = idAzienda == 0 ? 2 : idAzienda,
+        IdUtente = idUtente,
+        IdFiliale = idFiliale,
+        req.IdMittente,
+        req.TariffarioCodice,
+        Barcode = string.IsNullOrWhiteSpace(req.Barcode) ? null : req.Barcode.Trim(),
+        DataRitiro = req.RitiroRichiesto ? req.DataRitiro : null,
+        RitiroRagioneSociale = req.RitiroRichiesto ? req.RitiroRagioneSociale : null,
+        RitiroIndirizzo = req.RitiroRichiesto ? req.RitiroIndirizzo : null,
+        RitiroNumeroCivico = req.RitiroRichiesto ? req.RitiroNumeroCivico : null,
+        RitiroLocalita = req.RitiroRichiesto ? req.RitiroLocalita : null,
+        RitiroCap = req.RitiroRichiesto ? req.RitiroCap : null,
+        RitiroProvinciaCodice = req.RitiroRichiesto ? req.RitiroProvincia : null,
+        RitiroLatitude = req.RitiroRichiesto ? req.RitiroLat : null,
+        RitiroLongitude = req.RitiroRichiesto ? req.RitiroLng : null,
+        req.MittenteRagioneSociale,
+        req.MittenteIndirizzo,
+        req.MittenteLocalita,
+        req.MittenteCap,
+        MittenteProvinciaCodice = req.MittenteProvincia,
+        req.MittenteEmail,
+        req.DestinazioneRagioneSociale,
+        req.DestinazioneIndirizzo,
+        req.DestinazioneNumeroCivico,
+        req.DestinazioneLocalita,
+        req.DestinazioneCap,
+        DestinazioneProvinciaCodice = req.DestinazioneProvincia,
+        DestinazioneLatitude = req.DestinazioneLat,
+        DestinazioneLongitude = req.DestinazioneLng,
+        ContattoDestDescrizione = req.ContattoNome,
+        ContattoDestTelefono = req.ContattoTelefono,
+        ContattoDestEmail = req.ContattoEmail,
+        req.Importo,
+        ImportoContrassegno = req.Contrassegno ? req.ImportoContrassegno : null,
+        PesoDichiaratoKG = req.PesoKg,
+        Nota = req.Nota
+    });
+
+    await using var cn = new SqlConnection(ConnString());
+    try
+    {
+        // la catena SPED_INSERIMENTO/GetCoperture emette piu' result set:
+        // l'esito della copertura si riconosce da IdFilialeDistribuzione,
+        // quello finale del wrapper dalla colonna Barcode
+        using var multi = await cn.QueryMultipleAsync("dbo.AI_SPED_NuovaParcel", par,
+            commandType: CommandType.StoredProcedure, commandTimeout: 60);
+        IDictionary<string, object>? finale = null;
+        string? copertura = null;
+        while (!multi.IsConsumed)
+        {
+            var r = (await multi.ReadAsync()).Cast<IDictionary<string, object>>().FirstOrDefault();
+            if (r is null) continue;
+            if (r.ContainsKey("Barcode")) finale = r;
+            else if (r.ContainsKey("IdFilialeDistribuzione")) copertura = r["Result"] as string;
+        }
+        if (finale is null || finale["IdSpedizione"] is null)
+            return Results.Json(new { errore = "La stored non ha restituito la spedizione" }, statusCode: 500);
+        return Results.Ok(new
+        {
+            idSpedizione = finale["IdSpedizione"],
+            idAttivita = finale["IdAttivita"],
+            barcode = finale["Barcode"],
+            result = finale["Result"],
+            copertura
+        });
+    }
+    catch (SqlException ex)
+    {
+        return Results.Json(new { errore = ex.Message }, statusCode: 400);
+    }
+}).RequireAuthorization();
+
+// Stampa della lettera di vettura (DELIVERY_LDV.fr3). Il report server risponde
+// SOLO al backend e non va mai esposto al browser: il PDF viene scaricato qui
+// (&format=pdf + redirect, senza il quale risponde il viewer HTML a sessione),
+// appoggiato in una temp locale, servito come application/pdf e la temp svuotata.
+var reportHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+var reportTempDir = Path.Combine(Path.GetTempPath(), "speedyweb-report");
+
+app.MapGet("/api/sped/ldv/{id:int}", async (int id) =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var basis = await cn.ExecuteScalarAsync<string>(
+        "SELECT Valore FROM PARAMETRI WHERE Nome = 'ReportServer'");
+    if (string.IsNullOrWhiteSpace(basis))
+        return Results.Json(new { errore = "Parametro ReportServer non configurato" }, statusCode: 500);
+    try
+    {
+        Directory.CreateDirectory(reportTempDir);
+        // svuota i pdf di appoggio rimasti da chiamate precedenti
+        foreach (var vecchio in Directory.GetFiles(reportTempDir))
+            try { File.Delete(vecchio); } catch { /* in uso da un'altra richiesta */ }
+
+        var scaricato = await reportHttp.GetByteArrayAsync($"{basis}DELIVERY_LDV.fr3&IdSpedizione={id}&format=pdf");
+        if (scaricato.Length < 5 || scaricato[0] != (byte)'%' || scaricato[1] != (byte)'P')
+            return Results.Json(new { errore = "Il report server non ha restituito un PDF" }, statusCode: 502);
+
+        var percorso = Path.Combine(reportTempDir, $"LDV_{id}_{Guid.NewGuid():N}.pdf");
+        await File.WriteAllBytesAsync(percorso, scaricato);
+        var pdf = await File.ReadAllBytesAsync(percorso);
+        try { File.Delete(percorso); } catch { }
+        return Results.File(pdf, "application/pdf", $"LDV_{id}.pdf");
+    }
+    catch (Exception ex)
+    {
+        return Results.Json(new { errore = "Report server non raggiungibile: " + ex.Message }, statusCode: 502);
+    }
+}).RequireAuthorization();
+
+// === Gestione clienti (anagrafica + condizioni + listini, per azienda) ===
+
+// il cliente e' modificabile solo dentro l'azienda dell'utente collegato
+async Task<bool> ClienteDellAzienda(SqlConnection cn, int idCliente, int idAzienda) =>
+    await cn.ExecuteScalarAsync<int?>(
+        "SELECT 1 FROM CLIENTI WHERE IdCliente = @idCliente AND IdAzienda = @idAzienda",
+        new { idCliente, idAzienda }) == 1;
+
+// Elenco clienti dell'azienda con conteggi delle tabelle collegate
+app.MapGet("/api/clienti", async (bool? anchecessati, ClaimsPrincipal user) =>
+{
+    if (!int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda))
+        return Results.BadRequest(new { errore = "Azienda non disponibile" });
+    await using var cn = new SqlConnection(ConnString());
+    var clienti = await cn.QueryAsync(@"
+        SELECT c.IdCliente, c.RagioneSociale, c.PartitaIva, c.CodiceCliente,
+               c.Comune, c.Prov, CONVERT(varchar(10), c.DataFine, 120) AS DataFine,
+               (SELECT COUNT(*) FROM CLIENTI_CONDIZIONI cc WHERE cc.IdCliente = c.IdCliente) AS nCondizioni,
+               (SELECT COUNT(*) FROM FATT_LISTINI l WHERE l.IdCliente = c.IdCliente) AS nListini
+        FROM CLIENTI c
+        WHERE c.IdAzienda = @idAzienda AND (@tutti = 1 OR c.DataFine IS NULL)
+        ORDER BY c.RagioneSociale",
+        new { idAzienda, tutti = anchecessati == true ? 1 : 0 });
+    return Results.Ok(clienti);
+}).RequireAuthorization();
+
+// Liste di supporto per i form (famiglie, prodotti, tracciati, filiali, valori in uso)
+app.MapGet("/api/clienti/lookup", async (ClaimsPrincipal user) =>
+{
+    int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda);
+    await using var cn = new SqlConnection(ConnString());
+    var famiglie = await cn.QueryAsync(
+        "SELECT CodFamiglia, FamigliaDiProdotto FROM PROD_FAMIGLIE ORDER BY FamigliaDiProdotto");
+    var prodotti = await cn.QueryAsync(@"
+        SELECT IdProdotto, Prodotto, CodFamiglia FROM PRODOTTI
+        WHERE DataFineValidita IS NULL ORDER BY Prodotto");
+    var tracciati = await cn.QueryAsync(
+        "SELECT IdTracciato, Tracciato FROM FILE_TRACCIATO ORDER BY Tracciato");
+    var filiali = await cn.QueryAsync(@"
+        SELECT IDFILIALE AS IdFiliale, FILIALE AS Filiale FROM FILIALI
+        WHERE IdAzienda = @idAzienda AND DataChiusura IS NULL ORDER BY FILIALE", new { idAzienda });
+    var tipiVendita = await cn.QueryAsync<string>(
+        "SELECT DISTINCT CodTipoVendita FROM CLIENTI_CONDIZIONI WHERE ISNULL(CodTipoVendita,'') <> '' ORDER BY 1");
+    return Results.Ok(new { famiglie, prodotti, tracciati, filiali, tipiVendita });
+}).RequireAuthorization();
+
+// Scheda completa: anagrafica + condizioni + listini
+app.MapGet("/api/clienti/{idCliente:int}", async (int idCliente, ClaimsPrincipal user) =>
+{
+    if (!int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda))
+        return Results.BadRequest(new { errore = "Azienda non disponibile" });
+    await using var cn = new SqlConnection(ConnString());
+    var anagrafica = (await cn.QueryFirstOrDefaultAsync(@"
+        SELECT IdCliente, IdAzienda, RagioneSociale, CIG, Descrizione, PartitaIva, CodSDI, PEC,
+               Indirizzo, CAP, Comune, Prov, Nazione, Telefono, Email,
+               CONVERT(varchar(10), DataFine, 120) AS DataFine,
+               CodiceCliente, Gestionale, InvioEmailEventi, EmailPrefattura, Demo
+        FROM CLIENTI WHERE IdCliente = @idCliente AND IdAzienda = @idAzienda",
+        new { idCliente, idAzienda })) as IDictionary<string, object>;
+    if (anagrafica is null) return Results.NotFound(new { errore = "Cliente non trovato in questa azienda" });
+    var condizioni = await cn.QueryAsync(@"
+        SELECT cc.IdClienteCondizione, cc.CodFamiglia, f.FamigliaDiProdotto, cc.CodTipoVendita,
+               CONVERT(varchar(10), cc.DataInizioFatturazione, 120) AS DataInizioFatturazione,
+               CONVERT(varchar(10), cc.DataFineFatturazione, 120) AS DataFineFatturazione,
+               cc.Ambito, cc.Scansione, cc.IdProdotto, p.Prodotto,
+               cc.IdTracciato, t.Tracciato, cc.IdFiliale, fi.FILIALE AS Filiale
+        FROM CLIENTI_CONDIZIONI cc
+        LEFT JOIN PROD_FAMIGLIE f ON f.CodFamiglia = cc.CodFamiglia
+        LEFT JOIN PRODOTTI p ON p.IdProdotto = cc.IdProdotto
+        LEFT JOIN FILE_TRACCIATO t ON t.IdTracciato = cc.IdTracciato
+        LEFT JOIN FILIALI fi ON fi.IDFILIALE = cc.IdFiliale
+        WHERE cc.IdCliente = @idCliente
+        ORDER BY cc.IdClienteCondizione", new { idCliente });
+    var listini = await cn.QueryAsync(@"
+        SELECT l.IdListino, l.CodiceListino, l.Descrizione, l.IdProdotto, p.Prodotto,
+               l.PrezzoAttivo, l.ScontoAttivo, l.PrezzoPassivo, l.ScontoPassivo, l.AliquotaIVA,
+               CONVERT(varchar(10), l.ValidoDal, 120) AS ValidoDal,
+               CONVERT(varchar(10), l.ValidoAl, 120) AS ValidoAl,
+               l.ProdottoServizio, l.TipoArea, l.Porto, l.PesoMin, l.PesoMax, l.Tipo, l.tariffaOS
+        FROM FATT_LISTINI l
+        LEFT JOIN PRODOTTI p ON p.IdProdotto = l.IdProdotto
+        WHERE l.IdCliente = @idCliente
+        ORDER BY l.Descrizione, l.IdListino", new { idCliente });
+    return Results.Ok(new { anagrafica, condizioni, listini });
+}).RequireAuthorization();
+
+// Salvataggio anagrafica (nuovo o modifica; DataFine = cancellazione logica)
+app.MapPost("/api/clienti", async (ClienteSaveRequest req, ClaimsPrincipal user) =>
+{
+    if (!int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda))
+        return Results.BadRequest(new { errore = "Azienda non disponibile" });
+    if (string.IsNullOrWhiteSpace(req.RagioneSociale))
+        return Results.BadRequest(new { errore = "La ragione sociale è obbligatoria" });
+    await using var cn = new SqlConnection(ConnString());
+    if (req.IdCliente is > 0 && !await ClienteDellAzienda(cn, req.IdCliente.Value, idAzienda))
+        return Results.NotFound(new { errore = "Cliente non trovato in questa azienda" });
+    try
+    {
+        var id = await cn.ExecuteScalarAsync<int>("dbo.AI_CLIENTI_Save", new
+        {
+            IdCliente = req.IdCliente is > 0 ? req.IdCliente : null,
+            IdAzienda = idAzienda,   // sempre l'azienda dell'utente collegato
+            req.RagioneSociale, req.CIG, req.Descrizione, req.PartitaIva, req.CodSDI, req.PEC,
+            req.Indirizzo, req.CAP, req.Comune, req.Prov, req.Nazione, req.Telefono, req.Email,
+            DataFine = string.IsNullOrWhiteSpace(req.DataFine) ? (DateTime?)null : DateTime.Parse(req.DataFine),
+            req.CodiceCliente, req.Gestionale, req.InvioEmailEventi, req.EmailPrefattura, req.Demo
+        }, commandType: CommandType.StoredProcedure);
+        return Results.Ok(new { id });
+    }
+    catch (SqlException ex) { return Results.Json(new { errore = ex.Message }, statusCode: 400); }
+}).RequireAuthorization();
+
+// Condizioni: upsert e cancellazione
+app.MapPost("/api/clienti/{idCliente:int}/condizioni", async (int idCliente, CondizioneSaveRequest req, ClaimsPrincipal user) =>
+{
+    if (!int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda))
+        return Results.BadRequest(new { errore = "Azienda non disponibile" });
+    await using var cn = new SqlConnection(ConnString());
+    if (!await ClienteDellAzienda(cn, idCliente, idAzienda))
+        return Results.NotFound(new { errore = "Cliente non trovato in questa azienda" });
+    try
+    {
+        var id = await cn.ExecuteScalarAsync<int>("dbo.AI_CLIENTI_CONDIZIONI_Save", new
+        {
+            IdClienteCondizione = req.IdClienteCondizione is > 0 ? req.IdClienteCondizione : null,
+            IdCliente = idCliente,
+            req.CodFamiglia, req.CodTipoVendita,
+            DataInizioFatturazione = ParseData(req.DataInizioFatturazione),
+            DataFineFatturazione = ParseData(req.DataFineFatturazione),
+            req.Ambito, req.Scansione, req.IdProdotto, req.IdTracciato, req.IdFiliale
+        }, commandType: CommandType.StoredProcedure);
+        return Results.Ok(new { id });
+    }
+    catch (SqlException ex) { return Results.Json(new { errore = ex.Message }, statusCode: 400); }
+}).RequireAuthorization();
+
+app.MapDelete("/api/clienti/condizioni/{idCondizione:int}", async (int idCondizione, ClaimsPrincipal user) =>
+{
+    if (!int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda))
+        return Results.BadRequest(new { errore = "Azienda non disponibile" });
+    await using var cn = new SqlConnection(ConnString());
+    var ok = await cn.ExecuteScalarAsync<int?>(@"
+        SELECT 1 FROM CLIENTI_CONDIZIONI cc JOIN CLIENTI c ON c.IdCliente = cc.IdCliente
+        WHERE cc.IdClienteCondizione = @idCondizione AND c.IdAzienda = @idAzienda",
+        new { idCondizione, idAzienda }) == 1;
+    if (!ok) return Results.NotFound(new { errore = "Condizione non trovata in questa azienda" });
+    var righe = await cn.ExecuteScalarAsync<int>("dbo.AI_CLIENTI_CONDIZIONI_Del",
+        new { IdClienteCondizione = idCondizione }, commandType: CommandType.StoredProcedure);
+    return Results.Ok(new { righe });
+}).RequireAuthorization();
+
+// Listini: upsert e cancellazione
+app.MapPost("/api/clienti/{idCliente:int}/listini", async (int idCliente, ListinoSaveRequest req, ClaimsPrincipal user) =>
+{
+    if (!int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda))
+        return Results.BadRequest(new { errore = "Azienda non disponibile" });
+    await using var cn = new SqlConnection(ConnString());
+    if (!await ClienteDellAzienda(cn, idCliente, idAzienda))
+        return Results.NotFound(new { errore = "Cliente non trovato in questa azienda" });
+    try
+    {
+        var id = await cn.ExecuteScalarAsync<int>("dbo.AI_FATT_LISTINI_Save", new
+        {
+            IdListino = req.IdListino is > 0 ? req.IdListino : null,
+            IdCliente = idCliente,
+            req.CodiceListino, req.Descrizione, req.IdProdotto,
+            req.PrezzoAttivo, req.ScontoAttivo, req.PrezzoPassivo, req.ScontoPassivo, req.AliquotaIVA,
+            ValidoDal = ParseData(req.ValidoDal), ValidoAl = ParseData(req.ValidoAl),
+            req.ProdottoServizio, req.TipoArea, req.Porto, req.PesoMin, req.PesoMax, req.Tipo,
+            tariffaOS = req.TariffaOS
+        }, commandType: CommandType.StoredProcedure);
+        return Results.Ok(new { id });
+    }
+    catch (SqlException ex) { return Results.Json(new { errore = ex.Message }, statusCode: 400); }
+}).RequireAuthorization();
+
+app.MapDelete("/api/clienti/listini/{idListino:int}", async (int idListino, ClaimsPrincipal user) =>
+{
+    if (!int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda))
+        return Results.BadRequest(new { errore = "Azienda non disponibile" });
+    await using var cn = new SqlConnection(ConnString());
+    var ok = await cn.ExecuteScalarAsync<int?>(@"
+        SELECT 1 FROM FATT_LISTINI l JOIN CLIENTI c ON c.IdCliente = l.IdCliente
+        WHERE l.IdListino = @idListino AND c.IdAzienda = @idAzienda",
+        new { idListino, idAzienda }) == 1;
+    if (!ok) return Results.NotFound(new { errore = "Listino non trovato in questa azienda" });
+    var righe = await cn.ExecuteScalarAsync<int>("dbo.AI_FATT_LISTINI_Del",
+        new { IdListino = idListino }, commandType: CommandType.StoredProcedure);
+    return Results.Ok(new { righe });
+}).RequireAuthorization();
+
+static DateTime? ParseData(string? s) =>
+    string.IsNullOrWhiteSpace(s) ? null : DateTime.Parse(s);
+
+// === Accettazione da file (staging FILE_LOAD + stored legacy LoadFromFile) ===
+
+// Clienti (stored ElencoClienti, filtro famiglia + visibilita' per ruolo/azienda)
+// e tracciati di carico (FILE_TRACCIATO, con i dati per l'autoriconoscimento)
+app.MapGet("/api/accettazione/init", async (string? codFamiglia, ClaimsPrincipal user) =>
+{
+    int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var idUtente);
+    await using var cn = new SqlConnection(ConnString());
+    var clienti = await cn.QueryAsync("dbo.ElencoClienti",
+        new { CodFamiglia = codFamiglia ?? "", IdUtente = idUtente },
+        commandType: CommandType.StoredProcedure);
+    var tracciati = await cn.QueryAsync(@"
+        SELECT IdTracciato AS idTracciato, Tracciato AS tracciato, IdCliente AS idCliente,
+               Separatore AS separatore, ColonneTotali AS colonne,
+               ISNULL(RigheIntestazione, 0) AS intestazione, ISNULL(RigheFooter, 0) AS footer,
+               infoTracciato AS info
+        FROM FILE_TRACCIATO ORDER BY Tracciato");
+    return Results.Ok(new { clienti, tracciati });
+}).RequireAuthorization();
+
+// Famiglie abilitate per il cliente (stored ElencoFamiglie)
+app.MapGet("/api/accettazione/famiglie", async (int idCliente) =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var famiglie = await cn.QueryAsync("dbo.ElencoFamiglie",
+        new { IdCliente = idCliente }, commandType: CommandType.StoredProcedure);
+    return Results.Ok(famiglie);
+}).RequireAuthorization();
+
+// Prodotti della famiglia abilitati per il cliente (CLIENTI_CONDIZIONI)
+app.MapGet("/api/accettazione/prodotti", async (int idCliente, string codFamiglia) =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var prodotti = await cn.QueryAsync(@"
+        SELECT p.IdProdotto AS idProdotto, p.Prodotto AS prodotto
+        FROM PRODOTTI p
+        WHERE p.CodFamiglia = @codFamiglia AND p.DataFineValidita IS NULL
+          AND EXISTS (SELECT 1 FROM CLIENTI_CONDIZIONI cc
+                      WHERE cc.IdCliente = @idCliente AND cc.CodFamiglia = @codFamiglia
+                        AND (cc.IdProdotto IS NULL OR cc.IdProdotto = p.IdProdotto))
+        ORDER BY p.Prodotto", new { idCliente, codFamiglia });
+    return Results.Ok(prodotti);
+}).RequireAuthorization();
+
+// Ricerca fine dei clienti (popup): stessa visibilita' di ElencoClienti
+app.MapGet("/api/accettazione/clienti-ricerca", async (string q, string? codFamiglia, ClaimsPrincipal user) =>
+{
+    if (string.IsNullOrWhiteSpace(q) || q.Trim().Length < 2) return Results.Ok(Array.Empty<object>());
+    int.TryParse(user.FindFirstValue("idRuolo"), out var idRuolo);
+    int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda);
+    await using var cn = new SqlConnection(ConnString());
+    var clienti = await cn.QueryAsync(@"
+        SELECT DISTINCT TOP 50 c.IdCliente AS idCliente, c.RagioneSociale AS ragioneSociale,
+               c.PartitaIva AS partitaIva, c.CodiceCliente AS codiceCliente,
+               c.Indirizzo AS indirizzo, c.CAP AS cap, c.Comune AS comune, c.Prov AS prov
+        FROM CLIENTI c
+        LEFT JOIN CLIENTI_CONDIZIONI cc ON cc.IdCliente = c.IdCliente
+        WHERE c.DataFine IS NULL
+          AND (@codFamiglia IS NULL OR cc.CodFamiglia = @codFamiglia)
+          AND (@idRuolo < 10 OR c.IdAzienda = @idAzienda)
+          AND (c.RagioneSociale LIKE '%' + @q + '%' OR c.PartitaIva LIKE @q + '%'
+               OR c.CodiceCliente LIKE @q + '%' OR c.Comune LIKE @q + '%')
+        ORDER BY c.RagioneSociale",
+        new { q = q.Trim(), codFamiglia = string.IsNullOrWhiteSpace(codFamiglia) ? null : codFamiglia, idRuolo, idAzienda });
+    return Results.Ok(clienti);
+}).RequireAuthorization();
+
+// Carico (o sola verifica) del file: staging in FILE_LOAD e stored LoadFromFile
+app.MapPost("/api/accettazione/carica", async (AccettazioneCaricaRequest req, ClaimsPrincipal user) =>
+{
+    int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var idUtente);
+    int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
+
+    if (req.IdCliente <= 0) return Results.BadRequest(new { errore = "Scegliere un cliente" });
+    if (req.IdProdotto <= 0 && !req.SoloVerifica) return Results.BadRequest(new { errore = "Selezionare un prodotto" });
+    if (req.IdTracciato <= 0) return Results.BadRequest(new { errore = "Selezionare un tracciato" });
+    if (string.IsNullOrWhiteSpace(req.NomeFile)) return Results.BadRequest(new { errore = "Selezionare un file" });
+    if (req.Righe is null || req.Righe.Count == 0) return Results.BadRequest(new { errore = "Il file è vuoto" });
+    if (req.Righe.Count > 50000) return Results.BadRequest(new { errore = "Il file supera le 50.000 righe" });
+
+    var docId = Guid.NewGuid().ToString().ToUpperInvariant();
+    await using var cn = new SqlConnection(ConnString());
+    try
+    {
+        await cn.QueryFirstAsync("dbo.AI_FILE_LOAD_Insert", new
+        {
+            DocID = docId,
+            NomeFile = req.NomeFile,
+            Righe = System.Text.Json.JsonSerializer.Serialize(req.Righe)
+        }, commandType: CommandType.StoredProcedure, commandTimeout: 120);
+
+        var par = new DynamicParameters(new
+        {
+            DocID = docId,
+            NomeFile = req.NomeFile,
+            IdCliente = req.IdCliente,
+            IdProdotto = req.IdProdotto,
+            SoloVerifica = req.SoloVerifica ? 1 : 0,
+            IdUtente = idUtente,
+            IdFiliale = idFiliale,
+            TipoFile = req.IdTracciato
+        });
+        par.Add("Esito", dbType: DbType.String, size: 250, direction: ParameterDirection.Output);
+        var r = (await cn.QueryFirstOrDefaultAsync("dbo.LoadFromFile", par,
+            commandType: CommandType.StoredProcedure, commandTimeout: 300)) as IDictionary<string, object>;
+
+        var result = r?["Result"] as string ?? par.Get<string?>("Esito") ?? "Nessun esito dalla stored";
+        var ok = result == "OK" || (req.SoloVerifica && result.Contains("OK"));
+        return Results.Ok(new
+        {
+            ok,
+            result,
+            idLotto = r != null && r.TryGetValue("IdLotto", out var l) ? l : null,
+            docId,
+            righe = req.Righe.Count
+        });
+    }
+    catch (SqlException ex)
+    {
+        return Results.Json(new { errore = ex.Message, docId }, statusCode: 400);
+    }
+}).RequireAuthorization();
+
+// === Dati storici Speedy (consegne NEXIVE ott 2019 - set 2020) ===
+// Le viste NEXIVE_consegne / NEXIVE_Servizio / NEXIVE_TipologieServizio sono
+// passanti verso Speedy.dbo.*; la Filiale e' un testo libero dell'export NEXIVE,
+// non un IDFILIALE di FILIALI.
+
+// Filiali presenti nello storico con periodo coperto e volumi (testata pagina)
+app.MapGet("/api/storici/init", async () =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var filiali = await cn.QueryAsync(@"
+        SELECT Filiale AS filiale, COUNT(*) AS eventi,
+               CONVERT(varchar(10), MIN(DataRecapito), 120) AS dal,
+               CONVERT(varchar(10), MAX(DataRecapito), 120) AS al
+        FROM NEXIVE_consegne
+        WHERE Filiale IS NOT NULL
+        GROUP BY Filiale
+        ORDER BY Filiale", commandTimeout: 120);
+    return Results.Ok(filiali);
+}).RequireAuthorization();
+
+// Eventi geolocalizzati di una filiale in un giorno, con decodifica servizio.
+// "consegnato" marca il recapito effettivo; gli altri eventi (assente, indirizzo
+// errato, ...) restano utili per ricostruire il percorso del postino.
+app.MapGet("/api/storici/consegne", async (string filiale, DateTime data) =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var righe = await cn.QueryAsync(@"
+        SELECT c.IdNexive AS id, c.Postino AS postino, c.barcode,
+               c.TipoEvento AS esito, c.Indirizzo AS indirizzo, c.Cap AS cap,
+               c.Localita AS localita, c.Colli AS colli,
+               CONVERT(varchar(19), c.DataRecapito, 126) AS orario,
+               c.Latitudine AS lat, c.Longitudine AS lng,
+               t.tipologiaservizio AS servizio, t.Area AS area,
+               CASE WHEN c.TipoEvento IN ('C', 'RECAPITATA', 'Consegnato', 'RICONSEGNATO AL CLIENTE',
+                    'RITIRATA DAL DESTINATARIO', 'RITIRO DIGITALE') THEN 1 ELSE 0 END AS consegnato
+        FROM NEXIVE_consegne c
+        LEFT JOIN NEXIVE_Servizio s ON s.idservizio = c.Servizio
+        LEFT JOIN NEXIVE_TipologieServizio t ON t.idtipologia = s.idtipologia
+        WHERE c.Filiale = @filiale
+          AND c.DataRecapito >= @dal AND c.DataRecapito < @al
+          AND c.Latitudine IS NOT NULL AND c.Longitudine IS NOT NULL AND c.Latitudine <> 0
+        ORDER BY c.Postino, c.DataRecapito, c.IdNexive",
+        new { filiale, dal = data.Date, al = data.Date.AddDays(1) }, commandTimeout: 120);
+    return Results.Ok(righe);
+}).RequireAuthorization();
+
 // SPA fallback: ogni rotta non-API (router in history mode: /, /login, ...) torna
 // index.html, che poi gestisce il routing lato client. Le /api/* sono gia' mappate sopra.
 app.MapFallbackToFile("index.html");
@@ -2256,6 +2935,36 @@ app.MapFallbackToFile("index.html");
 app.Run();
 
 record LoginRequest(string Utente, string Password);
+record ClienteSaveRequest(
+    int? IdCliente, string RagioneSociale, string? CIG, string? Descrizione, string? PartitaIva,
+    string? CodSDI, string? PEC, string? Indirizzo, string? CAP, string? Comune, string? Prov,
+    string? Nazione, string? Telefono, string? Email, string? DataFine, string? CodiceCliente,
+    string? Gestionale, int? InvioEmailEventi, string? EmailPrefattura, int? Demo);
+record CondizioneSaveRequest(
+    int? IdClienteCondizione, string? CodFamiglia, string? CodTipoVendita,
+    string? DataInizioFatturazione, string? DataFineFatturazione, string? Ambito,
+    int? Scansione, int? IdProdotto, int? IdTracciato, int? IdFiliale);
+record ListinoSaveRequest(
+    int? IdListino, string? CodiceListino, string? Descrizione, int? IdProdotto,
+    double? PrezzoAttivo, double? ScontoAttivo, double? PrezzoPassivo, double? ScontoPassivo,
+    int? AliquotaIVA, string? ValidoDal, string? ValidoAl, string? ProdottoServizio,
+    string? TipoArea, int? Porto, int? PesoMin, int? PesoMax, string? Tipo, double? TariffaOS);
+record AccettazioneCaricaRequest(
+    int IdCliente, int IdProdotto, int IdTracciato, string NomeFile,
+    bool SoloVerifica, List<string> Righe);
+record SpedNuovaRequest(
+    int IdCliente, int IdProdotto, int? IdMittente, string? TariffarioCodice, string? Barcode,
+    bool RitiroRichiesto, DateTime? DataRitiro,
+    string? RitiroRagioneSociale, string? RitiroIndirizzo, string? RitiroNumeroCivico,
+    string? RitiroLocalita, string? RitiroCap, string? RitiroProvincia, double? RitiroLat, double? RitiroLng,
+    string? MittenteRagioneSociale, string? MittenteIndirizzo, string? MittenteLocalita,
+    string? MittenteCap, string? MittenteProvincia, string? MittenteEmail,
+    string DestinazioneRagioneSociale, string DestinazioneIndirizzo, string? DestinazioneNumeroCivico,
+    string DestinazioneLocalita, string DestinazioneCap, string DestinazioneProvincia,
+    double? DestinazioneLat, double? DestinazioneLng,
+    string? ContattoNome, string? ContattoTelefono, string? ContattoEmail,
+    decimal? Importo, bool Contrassegno, decimal? ImportoContrassegno,
+    decimal? PesoKg, string? Nota);
 record EseguiInterrogazioneRequest(int IdQuery, string? SWhere);
 record CambiaFilialeRequest(int IdFiliale);
 record ColMeta(string Col, string Tipo, int MaxLen, bool Nullable, bool Identita, bool Pk);
