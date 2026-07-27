@@ -34,6 +34,10 @@ import UnilavView from '../views/UnilavView.vue'
 import StoriciView from '../views/StoriciView.vue'
 import SpedNuovaView from '../views/SpedNuovaView.vue'
 import AccettazioneFileView from '../views/AccettazioneFileView.vue'
+import AccettazioneBancoView from '../views/AccettazioneBancoView.vue'
+import VideoCodificaView from '../views/VideoCodificaView.vue'
+import CheckinLottiView from '../views/CheckinLottiView.vue'
+import GruppiView from '../views/GruppiView.vue'
 import ClientiView from '../views/ClientiView.vue'
 
 const auth = useAuthStore()
@@ -260,8 +264,26 @@ const chiavePagina = computed(() =>
           :key="chiavePagina"
           :parametri="nav.corrente.parametri"
         />
+        <AccettazioneBancoView
+          v-else-if="nav.corrente.tipo === 'accettazione-banco'"
+          :key="chiavePagina"
+          :parametri="nav.corrente.parametri"
+        />
+        <VideoCodificaView
+          v-else-if="nav.corrente.tipo === 'videocodifica'"
+          :key="chiavePagina"
+          :parametri="nav.corrente.parametri"
+        />
+        <CheckinLottiView
+          v-else-if="nav.corrente.tipo === 'checkin'"
+          :key="chiavePagina"
+        />
         <ClientiView
           v-else-if="nav.corrente.tipo === 'clienti'"
+          :key="chiavePagina"
+        />
+        <GruppiView
+          v-else-if="nav.corrente.tipo === 'gruppi'"
           :key="chiavePagina"
         />
         <PlaceholderView

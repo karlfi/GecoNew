@@ -522,7 +522,7 @@ app.MapGet("/api/config/{key}/schema", async (string key) =>
 }).RequireAuthorization();
 
 // Lettura paginata (lato server) di una tabella di configurazione
-app.MapGet("/api/config/{key}", async (string key, HttpRequest req) =>
+app.MapGet("/api/config/{key}", async (string key, HttpRequest req, ClaimsPrincipal user) =>
 {
     if (!ConfigTabelle.TryGetValue(key, out var tabella))
         return Results.NotFound(new { errore = $"Tabella di configurazione '{key}' non gestita" });
@@ -540,12 +540,20 @@ app.MapGet("/api/config/{key}", async (string key, HttpRequest req) =>
     string? q = req.Query["q"];
 
     var par = new DynamicParameters();
-    var where = "";
+    var condizioni = new List<string>();
     if (!string.IsNullOrWhiteSpace(q))
     {
         var testo = cols.Where(c => TipoTesto(c.Tipo)).Select(c => $"[{c.Col}] LIKE @q").ToList();
-        if (testo.Count > 0) { where = " WHERE " + string.Join(" OR ", testo); par.Add("q", $"%{q}%"); }
+        if (testo.Count > 0) { condizioni.Add("(" + string.Join(" OR ", testo) + ")"); par.Add("q", $"%{q}%"); }
     }
+    // le Filiali si vedono solo per l'azienda su cui si e' collegati
+    // (il claim idAzienda segue il cambio filiale in testata)
+    if (tabella == "FILIALI" && int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda) && idAzienda > 0)
+    {
+        condizioni.Add("[IdAzienda] = @idAzienda");
+        par.Add("idAzienda", idAzienda);
+    }
+    var where = condizioni.Count > 0 ? " WHERE " + string.Join(" AND ", condizioni) : "";
     par.Add("off", page * size);
     par.Add("size", size);
 
@@ -598,6 +606,84 @@ app.MapGet("/api/menu/all", async () =>
         FROM MENU_ELEMENTI ORDER BY ISNULL(ParentID,0), ISNULL(Sorting, IdMenuElemento)");
     return Results.Ok(righe.Cast<IDictionary<string, object>>());
 }).RequireAuthorization();
+
+// Cancella una voce di menu (AI_MENU_Del): le radici solo se senza foglie;
+// la stored elimina anche i permessi di visibilita' collegati
+app.MapDelete("/api/menu/{id:int}", async (int id) =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var r = (await cn.QueryFirstAsync("dbo.AI_MENU_Del", new { IdMenuElemento = id },
+        commandType: CommandType.StoredProcedure)) as IDictionary<string, object>;
+    if (r!.TryGetValue("Errore", out var err) && err is string msg)
+        return Results.BadRequest(new { errore = msg });
+    return Results.Ok(new { ok = true });
+}).RequireAuthorization();
+
+// Duplica una voce di menu (AI_MENU_Duplica): testo "copia N", stessi permessi;
+// per le radici, a richiesta, anche tutte le foglie
+app.MapPost("/api/menu/duplica", async (MenuDuplicaRequest req) =>
+{
+    if (req.IdMenuElemento <= 0) return Results.BadRequest(new { errore = "Voce di menu mancante" });
+    await using var cn = new SqlConnection(ConnString());
+    var r = (await cn.QueryFirstAsync("dbo.AI_MENU_Duplica",
+        new { req.IdMenuElemento, ConFoglie = req.ConFoglie ? 1 : 0 },
+        commandType: CommandType.StoredProcedure)) as IDictionary<string, object>;
+    if (r!.TryGetValue("Errore", out var err) && err is string msg)
+        return Results.BadRequest(new { errore = msg });
+    return Results.Ok(new { id = r["Id"], testo = r["Testo"], foglie = r["Foglie"] });
+}).RequireAuthorization();
+
+// === Gruppi (radici di menu collegate + utenti relazionati) ===
+
+// Elenco gruppi con i conteggi delle relazioni
+app.MapGet("/api/gruppi", async () =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var gruppi = await cn.QueryAsync(@"
+        SELECT g.IdGruppo, g.Gruppo,
+               (SELECT COUNT(*) FROM MENU_ELEMENTIGRUPPI mg WHERE mg.IdGruppo = g.IdGruppo) AS nMenu,
+               (SELECT COUNT(*) FROM UTENTI_GRUPPI ug WHERE ug.IdGruppo = g.IdGruppo) AS nUtenti
+        FROM GRUPPI g ORDER BY g.Gruppo");
+    return Results.Ok(gruppi);
+}).RequireAuthorization();
+
+// Dettaglio: radici di menu collegate, utenti relazionati, radici ancora collegabili
+app.MapGet("/api/gruppi/{id:int}", async (int id) =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var gruppo = await cn.QueryFirstOrDefaultAsync(
+        "SELECT IdGruppo, Gruppo FROM GRUPPI WHERE IdGruppo = @id", new { id });
+    if (gruppo is null) return Results.NotFound(new { errore = "Gruppo inesistente" });
+    var menu = await cn.QueryAsync(@"
+        SELECT mg.IdMenuElementiGruppi AS id, mg.IdMenu AS idMenu, me.Text AS testo
+        FROM MENU_ELEMENTIGRUPPI mg
+        LEFT JOIN MENU_ELEMENTI me ON me.IdMenuElemento = mg.IdMenu
+        WHERE mg.IdGruppo = @id ORDER BY me.Text", new { id });
+    var utenti = await cn.QueryAsync(@"
+        SELECT ug.IdUtenteGruppo AS id, ug.IdUtente AS idUtente, u.Utente AS utente, u.Nome AS nome,
+               CAST(CASE WHEN u.DataFine IS NULL THEN 1 ELSE 0 END AS bit) AS attivo
+        FROM UTENTI_GRUPPI ug
+        LEFT JOIN UTENTI u ON u.IdUtente = ug.IdUtente
+        WHERE ug.IdGruppo = @id ORDER BY u.Utente", new { id });
+    var radiciDisponibili = await cn.QueryAsync(@"
+        SELECT me.IdMenuElemento AS idMenu, me.Text AS testo
+        FROM MENU_ELEMENTI me
+        WHERE ISNULL(me.ParentID, 0) = 0
+          AND NOT EXISTS (SELECT 1 FROM MENU_ELEMENTIGRUPPI mg
+                          WHERE mg.IdGruppo = @id AND mg.IdMenu = me.IdMenuElemento)
+        ORDER BY me.Text", new { id });
+    return Results.Ok(new { gruppo, menu, utenti, radiciDisponibili });
+}).RequireAuthorization();
+
+// Relazioni del gruppo: stesse SP AI_ usate dalla pagina Utenti per i gruppi
+app.MapPost("/api/gruppi/{id:int}/menu", (int id, GruppoMenuReq r) =>
+    EseguiRelazione("dbo.AI_MENU_ELEMENTIGRUPPI_Add", new { IdGruppo = id, r.IdMenu })).RequireAuthorization();
+app.MapDelete("/api/gruppi/menu/{relId:int}", (int relId) =>
+    EseguiRelazione("dbo.AI_MENU_ELEMENTIGRUPPI_Del", new { IdMenuElementiGruppi = relId })).RequireAuthorization();
+app.MapPost("/api/gruppi/{id:int}/utenti", (int id, GruppoUtenteReq r) =>
+    EseguiRelazione("dbo.AI_UTENTI_GRUPPI_Add", new { r.IdUtente, IdGruppo = id })).RequireAuthorization();
+app.MapDelete("/api/gruppi/utenti/{relId:int}", (int relId) =>
+    EseguiRelazione("dbo.AI_UTENTI_GRUPPI_Del", new { IdUtenteGruppo = relId })).RequireAuthorization();
 
 // === Workflow / Azioni: macchina a stati per processo ===
 
@@ -2882,6 +2968,355 @@ app.MapPost("/api/accettazione/carica", async (AccettazioneCaricaRequest req, Cl
     }
 }).RequireAuthorization();
 
+// Uffici mittenti del cliente (per l'accettazione da banco "con mittenti")
+app.MapGet("/api/accettazione/mittenti", async (int idCliente) =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var mittenti = await cn.QueryAsync(@"
+        SELECT IdMittente AS idMittente, UFFICIOSPEDITORE AS ragioneSociale,
+               INDIRIZZO AS indirizzo, CAP AS cap, COMUNE AS localita, PROV AS provincia
+        FROM MITTENTI WHERE idCliente = @idCliente
+        ORDER BY UFFICIOSPEDITORE", new { idCliente });
+    return Results.Ok(mittenti);
+}).RequireAuthorization();
+
+// Accettazione da banco: lotto + spedizioni (SPED_INSERIMENTO) + distinta di
+// accettazione tramite AI_SPED_AccettazioneBanco. La catena emette piu' result
+// set (coperture, eventuali doppioni): gli esiti riga si riconoscono dalla
+// colonna EsitoRiga, il riepilogo da IdLotto, gli errori bloccanti da Errore.
+app.MapPost("/api/accettazione/banco", async (AccettazioneBancoRequest req, ClaimsPrincipal user) =>
+{
+    int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var idUtente);
+    int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
+
+    if (req.IdCliente <= 0) return Results.BadRequest(new { errore = "Scegliere un cliente" });
+    if (req.IdProdotto <= 0) return Results.BadRequest(new { errore = "Selezionare un prodotto" });
+    if (string.IsNullOrWhiteSpace(req.CodFamiglia)) return Results.BadRequest(new { errore = "Famiglia mancante" });
+    if (req.Righe is null || req.Righe.Count == 0) return Results.BadRequest(new { errore = "Nessun atto da inserire" });
+    if (req.Righe.Count > 300) return Results.BadRequest(new { errore = "Troppi atti in una sola accettazione (max 300)" });
+
+    var righeJson = System.Text.Json.JsonSerializer.Serialize(req.Righe,
+        new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
+    await using var cn = new SqlConnection(ConnString());
+    try
+    {
+        using var multi = await cn.QueryMultipleAsync("dbo.AI_SPED_AccettazioneBanco", new
+        {
+            req.IdCliente,
+            req.CodFamiglia,
+            req.IdProdotto,
+            IdUtente = idUtente,
+            IdFiliale = idFiliale,
+            req.IdMittente,
+            Righe = righeJson
+        }, commandType: CommandType.StoredProcedure, commandTimeout: 300);
+
+        List<IDictionary<string, object>>? esiti = null;
+        IDictionary<string, object>? riepilogo = null;
+        string? errore = null;
+        while (!multi.IsConsumed)
+        {
+            var grid = (await multi.ReadAsync()).Cast<IDictionary<string, object>>().ToList();
+            var prima = grid.FirstOrDefault();
+            if (prima is null) continue;
+            if (prima.ContainsKey("EsitoRiga")) esiti = grid;
+            else if (prima.ContainsKey("IdLotto")) riepilogo = prima;
+            else if (prima.ContainsKey("Errore")) errore = prima["Errore"] as string;
+        }
+        if (errore is not null) return Results.BadRequest(new { errore });
+        if (esiti is null || riepilogo is null)
+            return Results.Json(new { errore = "La stored non ha restituito gli esiti" }, statusCode: 500);
+        return Results.Ok(new
+        {
+            idLotto = riepilogo["IdLotto"],
+            lotto = riepilogo["Lotto"],
+            idDistinta = riepilogo["IdDistinta"],
+            barcodeDistinta = riepilogo["BarcodeDistinta"],
+            inseriti = riepilogo["Inseriti"],
+            scartati = riepilogo["Scartati"],
+            righe = esiti.Select(e => new
+            {
+                riga = e["Riga"],
+                barcode = e["Barcode"],
+                idSpedizione = e["IdSpedizione"],
+                esito = e["EsitoRiga"]
+            })
+        });
+    }
+    catch (SqlException ex)
+    {
+        return Results.Json(new { errore = ex.Message }, statusCode: 400);
+    }
+}).RequireAuthorization();
+
+// Ricevuta di accettazione (DELIVERY_Accettazione.fr3 sulla distinta): stesso
+// proxy della LDV, il report server non e' mai esposto al browser
+app.MapGet("/api/accettazione/ricevuta/{idDistinta:int}", async (int idDistinta) =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var basis = await cn.ExecuteScalarAsync<string>(
+        "SELECT Valore FROM PARAMETRI WHERE Nome = 'ReportServer'");
+    if (string.IsNullOrWhiteSpace(basis))
+        return Results.Json(new { errore = "Parametro ReportServer non configurato" }, statusCode: 500);
+    try
+    {
+        Directory.CreateDirectory(reportTempDir);
+        foreach (var vecchio in Directory.GetFiles(reportTempDir))
+            try { File.Delete(vecchio); } catch { /* in uso da un'altra richiesta */ }
+
+        var scaricato = await reportHttp.GetByteArrayAsync($"{basis}DELIVERY_Accettazione.fr3&IdDistinta={idDistinta}&format=pdf");
+        if (scaricato.Length < 5 || scaricato[0] != (byte)'%' || scaricato[1] != (byte)'P')
+            return Results.Json(new { errore = "Il report server non ha restituito un PDF" }, statusCode: 502);
+
+        var percorso = Path.Combine(reportTempDir, $"ACC_{idDistinta}_{Guid.NewGuid():N}.pdf");
+        await File.WriteAllBytesAsync(percorso, scaricato);
+        var pdf = await File.ReadAllBytesAsync(percorso);
+        try { File.Delete(percorso); } catch { }
+        return Results.File(pdf, "application/pdf", $"Accettazione_{idDistinta}.pdf");
+    }
+    catch (Exception ex)
+    {
+        return Results.Json(new { errore = "Report server non raggiungibile: " + ex.Message }, statusCode: 502);
+    }
+}).RequireAuthorization();
+
+// === VideoCodifica (correzione lotti da file prima del checkin) ===
+
+// Lotti in attesa di videocodifica (stessa selezione della stored legacy
+// ElencoLottiDaVideocodificare: DataCarico e DataVideoCodifica nulle), con
+// decodifiche e conteggio dei barcode mancanti
+app.MapGet("/api/videocodifica/lotti", async (bool? tutte, string? codFamiglia, ClaimsPrincipal user) =>
+{
+    int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
+    await using var cn = new SqlConnection(ConnString());
+    var lotti = await cn.QueryAsync(@"
+        SELECT l.IdLotto, l.Lotto, l.IdCliente, c.RagioneSociale AS Cliente,
+               l.CodFamiglia, p.Prodotto, ISNULL(x.Righe, 0) AS Righe,
+               ISNULL(x.SenzaBarcode, 0) AS SenzaBarcode,
+               l.IdFilialeAccettazione, f.FILIALE AS Filiale,
+               CONVERT(varchar(16), l.DataInserimento, 120) AS DataInserimento
+        FROM SPED_LOTTI l
+        LEFT JOIN CLIENTI c ON c.IdCliente = l.IdCliente
+        LEFT JOIN PRODOTTI p ON p.IdProdotto = l.IdProdotto
+        LEFT JOIN FILIALI f ON f.IDFILIALE = l.IdFilialeAccettazione
+        OUTER APPLY (SELECT COUNT(*) AS Righe,
+                            SUM(CASE WHEN ISNULL(sa.Barcode, '') = '' THEN 1 ELSE 0 END) AS SenzaBarcode
+                     FROM SPED_ATTIVITA sa WHERE sa.IdLotto = l.IdLotto) x
+        WHERE l.DataCarico IS NULL AND l.DataVideoCodifica IS NULL AND l.DataAnnullamento IS NULL
+          AND (@idFiliale IS NULL OR l.IdFilialeAccettazione = @idFiliale)
+          AND (@codFamiglia IS NULL OR l.CodFamiglia = @codFamiglia)
+        ORDER BY l.DataInserimento DESC",
+        new
+        {
+            idFiliale = tutte == true || idFiliale == 0 ? (int?)null : idFiliale,
+            codFamiglia = string.IsNullOrWhiteSpace(codFamiglia) ? null : codFamiglia
+        });
+    return Results.Ok(lotti);
+}).RequireAuthorization();
+
+// Righe del lotto da correggere a video
+app.MapGet("/api/videocodifica/lotto/{id:int}", async (int id) =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var testata = await cn.QueryFirstOrDefaultAsync(@"
+        SELECT l.IdLotto, l.Lotto, l.IdCliente, c.RagioneSociale AS Cliente,
+               l.CodFamiglia, p.Prodotto, l.NumeroAtti,
+               CONVERT(varchar(16), l.DataVideoCodifica, 120) AS DataVideoCodifica
+        FROM SPED_LOTTI l
+        LEFT JOIN CLIENTI c ON c.IdCliente = l.IdCliente
+        LEFT JOIN PRODOTTI p ON p.IdProdotto = l.IdProdotto
+        WHERE l.IdLotto = @id", new { id });
+    if (testata is null) return Results.NotFound(new { errore = "Lotto inesistente" });
+    var righe = await cn.QueryAsync(@"
+        SELECT s.IdSpedizione, s.Barcode,
+               s.DestinazioneRagioneSociale AS Destinatario,
+               s.DestinazioneIndirizzo AS Indirizzo,
+               s.DestinazioneNumeroCivico AS Civico,
+               s.DestinazioneLocalita AS Localita,
+               s.DestinazioneCap AS Cap,
+               s.DestinazioneProvinciaCodice AS Prov
+        FROM SPED_ATTIVITA s
+        WHERE s.IdLotto = @id
+        ORDER BY s.IdSpedizione", new { id });
+    return Results.Ok(new { testata, righe });
+}).RequireAuthorization();
+
+// Salvataggio di una riga corretta (AI_SPED_VideoCodifica_Save)
+app.MapPost("/api/videocodifica/riga", async (VideoCodificaRigaRequest req) =>
+{
+    if (req.IdSpedizione <= 0) return Results.BadRequest(new { errore = "Spedizione mancante" });
+    await using var cn = new SqlConnection(ConnString());
+    var r = await cn.QueryFirstAsync("dbo.AI_SPED_VideoCodifica_Save", new
+    {
+        req.IdSpedizione,
+        req.Barcode,
+        req.Destinatario,
+        req.Indirizzo,
+        req.Civico,
+        req.Localita,
+        req.Cap,
+        req.Prov
+    }, commandType: CommandType.StoredProcedure);
+    string result = r.Result;
+    return result == "OK" ? Results.Ok(new { ok = true })
+                          : Results.BadRequest(new { errore = result });
+}).RequireAuthorization();
+
+// Chiusura della videocodifica: la stored legacy genera i barcode mancanti,
+// esegue tutte le validazioni e marca il lotto (DataVideoCodifica)
+app.MapPost("/api/videocodifica/chiudi", async (VideoCodificaChiudiRequest req) =>
+{
+    if (req.IdLotto <= 0) return Results.BadRequest(new { errore = "Lotto mancante" });
+    await using var cn = new SqlConnection(ConnString());
+    var r = await cn.QueryFirstAsync("dbo.Lotto_VideoCodifica",
+        new { req.IdLotto }, commandType: CommandType.StoredProcedure, commandTimeout: 300);
+    string result = r.result;
+    return result == "OK" ? Results.Ok(new { ok = true })
+                          : Results.BadRequest(new { errore = result });
+}).RequireAuthorization();
+
+// === Checkin lotti (accettazione dei lotti in filiale) ===
+
+// Clienti con lotti in attesa di checkin (stored legacy FORM_CHECKIN)
+app.MapGet("/api/checkin/clienti", async (bool? tutte, ClaimsPrincipal user) =>
+{
+    int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
+    await using var cn = new SqlConnection(ConnString());
+    var clienti = (await cn.QueryAsync("dbo.FORM_CHECKIN", new
+    {
+        Tipo = "clienti",
+        IdFiliale = tutte == true || idFiliale == 0 ? (int?)null : idFiliale
+    }, commandType: CommandType.StoredProcedure, commandTimeout: 120))
+        .Cast<IDictionary<string, object>>().ToList();
+    // decodifica filiali e utenti (la stored restituisce solo gli id)
+    var filiali = (await cn.QueryAsync("SELECT IDFILIALE, FILIALE FROM FILIALI"))
+        .ToDictionary(f => (int)f.IDFILIALE, f => (string)f.FILIALE);
+    var utenti = (await cn.QueryAsync("SELECT IdUtente, Utente FROM UTENTI"))
+        .ToDictionary(u => (int)u.IdUtente, u => (string)u.Utente);
+    return Results.Ok(clienti.Select(c => new
+    {
+        idCliente = c["IdCliente"],
+        cliente = c["Cliente"],
+        numDoc = c["NumDoc"],
+        idFiliale = c["IdFiliale"],
+        filiale = c["IdFiliale"] is int fi && filiali.TryGetValue(fi, out var fn) ? fn : null,
+        codFamiglia = c["CodFamiglia"],
+        famiglia = c["FamigliaDiProdotto"],
+        utente = c["IdUtente"] is int ui && utenti.TryGetValue(ui, out var un) ? un : null
+    }));
+}).RequireAuthorization();
+
+// Lotti del cliente ancora da accettare (DataAccettazione nulla)
+app.MapGet("/api/checkin/lotti", async (int idCliente, bool? tutte, ClaimsPrincipal user) =>
+{
+    int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
+    await using var cn = new SqlConnection(ConnString());
+    var lotti = await cn.QueryAsync(@"
+        SELECT l.IdLotto, l.Lotto, l.CodFamiglia, p.Prodotto, l.NumeroAtti,
+               ISNULL(x.Righe, 0) AS Righe,
+               CONVERT(varchar(10), l.DataCarico, 120) AS DataCarico,
+               CONVERT(varchar(16), l.DataVideoCodifica, 120) AS DataVideoCodifica,
+               CONVERT(varchar(16), l.DataInserimento, 120) AS DataInserimento,
+               l.IdFilialeAccettazione, f.FILIALE AS Filiale, u.Utente
+        FROM SPED_LOTTI l
+        LEFT JOIN PRODOTTI p ON p.IdProdotto = l.IdProdotto
+        LEFT JOIN FILIALI f ON f.IDFILIALE = l.IdFilialeAccettazione
+        LEFT JOIN UTENTI u ON u.IdUtente = l.IdUtente
+        OUTER APPLY (SELECT COUNT(*) AS Righe FROM SPED_ATTIVITA sa WHERE sa.IdLotto = l.IdLotto) x
+        WHERE l.IdCliente = @idCliente
+          AND l.DataAccettazione IS NULL AND l.DataAnnullamento IS NULL
+          AND (@idFiliale IS NULL OR l.IdFilialeAccettazione = @idFiliale)
+        ORDER BY l.IdLotto DESC",
+        new { idCliente, idFiliale = tutte == true || idFiliale == 0 ? (int?)null : idFiliale });
+    return Results.Ok(lotti);
+}).RequireAuthorization();
+
+// Checkin dei lotti selezionati (stored legacy Lotto_Checkin): imposta la data di
+// accettazione e, a richiesta, crea la distinta con l'esito di accettazione
+app.MapPost("/api/checkin", async (CheckinRequest req, ClaimsPrincipal user) =>
+{
+    int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var idUtente);
+    int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
+    if (req.IdLotti is null || req.IdLotti.Count == 0)
+        return Results.BadRequest(new { errore = "Selezionare almeno un lotto" });
+    if (req.IdLotti.Count > 100)
+        return Results.BadRequest(new { errore = "Troppi lotti in un solo checkin (max 100)" });
+
+    await using var cn = new SqlConnection(ConnString());
+    try
+    {
+        var par = new DynamicParameters(new
+        {
+            IdLotti = string.Join(",", req.IdLotti),
+            CreaDistinta = req.CreaDistinta ? 1 : 0,
+            DataCheckin = req.DataCheckin?.Date,
+            IdUtente = idUtente,
+            IdFiliale = idFiliale
+        });
+        par.Add("Result", dbType: DbType.String, size: 100, direction: ParameterDirection.Output);
+        // InserimentoEsiti (chiamata dentro Lotto_Checkin) emette i propri result
+        // set prima dell'esito finale: si tiene l'ULTIMA griglia con la colonna result
+        using var multi = await cn.QueryMultipleAsync("dbo.Lotto_Checkin", par,
+            commandType: CommandType.StoredProcedure, commandTimeout: 300);
+        IDictionary<string, object>? r = null;
+        while (!multi.IsConsumed)
+        {
+            var prima = (await multi.ReadAsync()).Cast<IDictionary<string, object>>().FirstOrDefault();
+            if (prima is not null && prima.ContainsKey("result")) r = prima;
+        }
+        var result = r?["result"] as string ?? "Nessun esito dalla stored";
+        if (result != "OK") return Results.BadRequest(new { errore = result });
+        return Results.Ok(new
+        {
+            ok = true,
+            idDistinta = r!.TryGetValue("IdDistinta", out var d) ? d : null,
+            webReport = r.TryGetValue("Webreport", out var w) ? w : null
+        });
+    }
+    catch (SqlException ex)
+    {
+        return Results.Json(new { errore = ex.Message }, statusCode: 400);
+    }
+}).RequireAuthorization();
+
+// Stampa generica di una distinta: il template e' il WebReport memorizzato sulla
+// distinta stessa (mai scelto dal client), servito col solito proxy del report server
+app.MapGet("/api/distinte/{id:int}/stampa", async (int id) =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var info = await cn.QueryFirstOrDefaultAsync(
+        "SELECT WebReport FROM SPED_DISTINTE WHERE IdDistinta = @id", new { id });
+    string? template = info?.WebReport;
+    if (string.IsNullOrWhiteSpace(template))
+        return Results.NotFound(new { errore = "Distinta senza report associato" });
+    if (!System.Text.RegularExpressions.Regex.IsMatch(template, @"^[\w\-. ]+\.fr3$", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+        return Results.Json(new { errore = "Nome report non valido" }, statusCode: 500);
+    var basis = await cn.ExecuteScalarAsync<string>(
+        "SELECT Valore FROM PARAMETRI WHERE Nome = 'ReportServer'");
+    if (string.IsNullOrWhiteSpace(basis))
+        return Results.Json(new { errore = "Parametro ReportServer non configurato" }, statusCode: 500);
+    try
+    {
+        Directory.CreateDirectory(reportTempDir);
+        foreach (var vecchio in Directory.GetFiles(reportTempDir))
+            try { File.Delete(vecchio); } catch { /* in uso da un'altra richiesta */ }
+
+        var scaricato = await reportHttp.GetByteArrayAsync($"{basis}{Uri.EscapeDataString(template)}&IdDistinta={id}&format=pdf");
+        if (scaricato.Length < 5 || scaricato[0] != (byte)'%' || scaricato[1] != (byte)'P')
+            return Results.Json(new { errore = "Il report server non ha restituito un PDF" }, statusCode: 502);
+
+        var percorso = Path.Combine(reportTempDir, $"DIST_{id}_{Guid.NewGuid():N}.pdf");
+        await File.WriteAllBytesAsync(percorso, scaricato);
+        var pdf = await File.ReadAllBytesAsync(percorso);
+        try { File.Delete(percorso); } catch { }
+        return Results.File(pdf, "application/pdf", $"Distinta_{id}.pdf");
+    }
+    catch (Exception ex)
+    {
+        return Results.Json(new { errore = "Report server non raggiungibile: " + ex.Message }, statusCode: 502);
+    }
+}).RequireAuthorization();
+
 // === Dati storici Speedy (consegne NEXIVE ott 2019 - set 2020) ===
 // Le viste NEXIVE_consegne / NEXIVE_Servizio / NEXIVE_TipologieServizio sono
 // passanti verso Speedy.dbo.*; la Filiale e' un testo libero dell'export NEXIVE,
@@ -2952,6 +3387,20 @@ record ListinoSaveRequest(
 record AccettazioneCaricaRequest(
     int IdCliente, int IdProdotto, int IdTracciato, string NomeFile,
     bool SoloVerifica, List<string> Righe);
+record AccettazioneBancoRiga(
+    string? Barcode, string? BarcodeAr, string? Destinatario, string? Indirizzo,
+    string? Civico, string? Localita, string? Cap, string? Prov, string? Nota);
+record AccettazioneBancoRequest(
+    int IdCliente, string CodFamiglia, int IdProdotto, int? IdMittente,
+    List<AccettazioneBancoRiga> Righe);
+record VideoCodificaRigaRequest(
+    int IdSpedizione, string? Barcode, string? Destinatario, string? Indirizzo,
+    string? Civico, string? Localita, string? Cap, string? Prov);
+record VideoCodificaChiudiRequest(int IdLotto);
+record CheckinRequest(List<int> IdLotti, bool CreaDistinta, DateTime? DataCheckin);
+record MenuDuplicaRequest(int IdMenuElemento, bool ConFoglie);
+record GruppoMenuReq(int IdMenu);
+record GruppoUtenteReq(int IdUtente);
 record SpedNuovaRequest(
     int IdCliente, int IdProdotto, int? IdMittente, string? TariffarioCodice, string? Barcode,
     bool RitiroRichiesto, DateTime? DataRitiro,

@@ -14,7 +14,6 @@ UPDATE MENU_ELEMENTI SET Link = '/config/coperture' WHERE Videata = 'Coperture';
 UPDATE MENU_ELEMENTI SET Link = '/config/prodotti'  WHERE Videata = 'Prodotti';
 UPDATE MENU_ELEMENTI SET Link = '/config/listini'   WHERE Videata = 'Listini';
 UPDATE MENU_ELEMENTI SET Link = '/config/processi'  WHERE Videata = 'Processi';
-UPDATE MENU_ELEMENTI SET Link = '/config/gruppi'    WHERE Videata = 'Gruppi';
 UPDATE MENU_ELEMENTI SET Link = '/config/aziende'   WHERE Videata = 'Aziende';
 UPDATE MENU_ELEMENTI SET Link = '/config/filiali'   WHERE Videata = 'Filiali';
 UPDATE MENU_ELEMENTI SET Link = '/config/clienti'   WHERE Videata = 'Clienti';
@@ -82,3 +81,22 @@ UPDATE MENU_ELEMENTI SET Link = '/sped-nuova' WHERE Videata = 'Nuovaspedizione';
 
 -- Gestione clienti dedicata (sostituisce la config generica /config/clienti)
 UPDATE MENU_ELEMENTI SET Link = '/clienti' WHERE Videata = 'Clienti';
+
+-- Accettazione da file (senza e con parametro CodFamiglia; le varianti
+-- Mittenti/MMG restano da migrare)
+UPDATE MENU_ELEMENTI SET Link = '/accettazione-file'
+WHERE Videata IN ('AccettazioneDaFile', 'AccettazioneDaFileFamiglia', 'Accettazione Da File Famiglia');
+
+-- Accettazione da banco (senza/con CodFamiglia e varianti con uffici mittenti;
+-- resta da migrare la sola "Accettazione Da Banco MGG")
+UPDATE MENU_ELEMENTI SET Link = '/accettazione-banco'
+WHERE Videata IN ('AccettazioneDaBanco', 'AccettazioneDaBancoFamiglia',
+                  'AccettazioneDaBancoMittenti', 'Accettazione Da Banco Mittenti');
+
+-- VideoCodifica e Checkin lotti (restano da migrare le varianti
+-- Videocodificamgg/Videocodificafamiglia/Adexvideocodifica e Checkin MGG/Checkindb)
+UPDATE MENU_ELEMENTI SET Link = '/videocodifica' WHERE Videata = 'Videocodifica';
+UPDATE MENU_ELEMENTI SET Link = '/checkin' WHERE Videata IN ('Checkin', 'Checkin Famiglia');
+
+-- Gestione gruppi dedicata (sostituisce la config generica /config/gruppi)
+UPDATE MENU_ELEMENTI SET Link = '/gruppi' WHERE Videata = 'Gruppi';

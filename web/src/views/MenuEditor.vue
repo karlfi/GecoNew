@@ -9,6 +9,7 @@ import Select from 'primevue/select'
 import Button from 'primevue/button'
 import Message from 'primevue/message'
 import Tag from 'primevue/tag'
+import Dialog from 'primevue/dialog'
 import ProgressSpinner from 'primevue/progressspinner'
 
 const toast = useToast()
@@ -85,6 +86,75 @@ async function salva() {
   }
 }
 
+// --- elimina: conferma a doppio click; le radici si cancellano solo dopo
+// aver eliminato le foglie (il controllo bloccante e' nella stored) ---
+const inConfermaElimina = ref(false)
+const eliminando = ref(false)
+let timerConferma = null
+function chiediElimina() {
+  if (!inConfermaElimina.value) {
+    inConfermaElimina.value = true
+    clearTimeout(timerConferma)
+    timerConferma = setTimeout(() => { inConfermaElimina.value = false }, 4000)
+    return
+  }
+  elimina()
+}
+async function elimina() {
+  clearTimeout(timerConferma)
+  inConfermaElimina.value = false
+  eliminando.value = true
+  try {
+    await api.delete(`/menu/${edit.value.IdMenuElemento}`)
+    toast.add({ severity: 'success', summary: 'Voce eliminata', detail: `"${edit.value.Text}"`, life: 3000 })
+    edit.value = null
+    selezione.value = {}
+    await carica()
+  } catch (e) {
+    toast.add({ severity: 'error', summary: 'Elimina', detail: e.response?.data?.errore ?? 'Eliminazione fallita', life: 6000 })
+  } finally {
+    eliminando.value = false
+  }
+}
+
+// --- duplica: copia della voce col testo "copia N"; per le radici con foglie
+// si chiede se duplicare anche quelle (stessi permessi in entrambi i casi) ---
+const dupDialog = ref(false)
+const duplicando = ref(false)
+const foglieDelSelezionato = computed(() =>
+  edit.value?.IdMenuElemento
+    ? righe.value.filter(r => r.ParentID === edit.value.IdMenuElemento).length
+    : 0)
+
+function chiediDuplica() {
+  if (!edit.value?.IdMenuElemento) return
+  if (!edit.value.ParentID && foglieDelSelezionato.value > 0) dupDialog.value = true
+  else duplica(false)
+}
+async function duplica(conFoglie) {
+  dupDialog.value = false
+  duplicando.value = true
+  try {
+    const { data } = await api.post('/menu/duplica', {
+      idMenuElemento: edit.value.IdMenuElemento,
+      conFoglie
+    })
+    toast.add({ severity: 'success', summary: 'Voce duplicata',
+      detail: `"${data.testo}"${data.foglie ? ` con ${data.foglie} foglie` : ''}`, life: 4000 })
+    await carica()
+    // apre subito la copia appena creata
+    const nuova = righe.value.find(r => r.IdMenuElemento === data.id)
+    if (nuova) {
+      edit.value = { ...nuova }
+      selezione.value = { [String(nuova.IdMenuElemento)]: true }
+    }
+  } catch (e) {
+    toast.add({ severity: 'error', summary: 'Duplica', detail: e.response?.data?.errore ?? 'Duplicazione fallita', life: 5000 })
+  } finally {
+    duplicando.value = false
+  }
+}
+
 const migrate = computed(() => righe.value.filter(r => r.Link && r.ParentID).length)
 const foglie = computed(() => righe.value.filter(r => r.ParentID).length)
 </script>
@@ -121,6 +191,11 @@ const foglie = computed(() => righe.value.filter(r => r.ParentID).length)
         <div class="azioni">
           <Button v-if="edit.IdMenuElemento" icon="pi pi-plus" label="Figlio" size="small" severity="secondary"
                   @click="nuovo(edit.IdMenuElemento)" />
+          <Button v-if="edit.IdMenuElemento" icon="pi pi-clone" label="Duplica" size="small" severity="secondary"
+                  :loading="duplicando" @click="chiediDuplica" />
+          <Button v-if="edit.IdMenuElemento" :label="inConfermaElimina ? 'Confermi?' : 'Elimina'"
+                  icon="pi pi-trash" size="small" severity="danger" :outlined="!inConfermaElimina"
+                  :loading="eliminando" @click="chiediElimina" />
           <Button label="Salva" icon="pi pi-check" size="small" :loading="salvataggio" @click="salva" />
         </div>
       </div>
@@ -201,6 +276,20 @@ const foglie = computed(() => righe.value.filter(r => r.ParentID).length)
     <div class="form vuoto" v-else>
       <Tag value="Seleziona una voce nell'albero o crea una nuova radice" severity="secondary" />
     </div>
+
+    <!-- radice con foglie: scelta tra copia semplice e copia con tutte le foglie -->
+    <Dialog v-model:visible="dupDialog" header="Duplica voce di menu" modal :style="{ width: '30rem' }">
+      <p class="dup-testo">
+        "<b>{{ edit?.Text }}</b>" è una voce radice con
+        <b>{{ foglieDelSelezionato }}</b> fogli{{ foglieDelSelezionato === 1 ? 'a' : 'e' }}.<br>
+        Vuoi duplicare anche tutte le foglie?
+      </p>
+      <template #footer>
+        <Button label="Annulla" text @click="dupDialog = false" />
+        <Button label="Solo la radice" severity="secondary" icon="pi pi-clone" @click="duplica(false)" />
+        <Button :label="`Radice e ${foglieDelSelezionato} foglie`" icon="pi pi-clone" @click="duplica(true)" />
+      </template>
+    </Dialog>
   </div>
 </template>
 
@@ -259,5 +348,6 @@ const foglie = computed(() => righe.value.filter(r => r.ParentID).length)
 .campo label { font-size: .8rem; font-weight: 600; display: flex; align-items: center; gap: .5rem; }
 .campo.link :deep(.p-inputtext) { border-color: #29b96e; }
 .hint { color: #999; font-weight: 400; }
+.dup-testo { margin: 0; line-height: 1.6; }
 :deep(.p-inputtext), :deep(.p-inputnumber), :deep(.p-select) { width: 100%; }
 </style>

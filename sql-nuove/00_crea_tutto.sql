@@ -933,6 +933,151 @@ END
 GO
 
 -- ----------------------------------------------------------
+-- AI_MENU_Duplica.sql
+-- ----------------------------------------------------------
+-- Editor del menu (pagina /menu): funzione "Duplica". Crea una nuova voce uguale
+-- a quella indicata con il testo "<Testo> copia N" (primo N libero tra i fratelli,
+-- cosi' le duplicazioni ripetute non si sovrappongono) e ne copia i permessi di
+-- visibilita' (MENU_ElementiRuoli e MENU_ELEMENTIGRUPPI). Con @ConFoglie=1, per le
+-- voci radice, duplica anche tutte le foglie dirette (nomi invariati) coi permessi.
+CREATE OR ALTER PROCEDURE dbo.AI_MENU_Duplica
+    @IdMenuElemento int,
+    @ConFoglie bit = 0
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @Testo varchar(255), @Parent int;
+    SELECT @Testo = ISNULL(Text, ''), @Parent = ISNULL(ParentID, 0)
+    FROM dbo.MENU_ELEMENTI WHERE IdMenuElemento = @IdMenuElemento;
+    IF @@ROWCOUNT = 0
+    BEGIN SELECT CAST(NULL AS int) AS Id, 'Voce di menu inesistente' AS Errore; RETURN; END
+
+    -- "<Testo> copia N": primo N libero tra i fratelli
+    DECLARE @n int = 1, @suffisso varchar(20) = ' copia 1';
+    WHILE EXISTS (SELECT 1 FROM dbo.MENU_ELEMENTI
+                  WHERE ISNULL(ParentID, 0) = @Parent
+                    AND Text = LEFT(@Testo, 255 - LEN(@suffisso)) + @suffisso)
+    BEGIN
+        SET @n += 1;
+        SET @suffisso = ' copia ' + CONVERT(varchar(9), @n);
+    END
+    DECLARE @NuovoTesto varchar(255) = LEFT(@Testo, 255 - LEN(@suffisso)) + @suffisso;
+
+    BEGIN TRAN;
+
+    INSERT INTO dbo.MENU_ELEMENTI (ParentID, Text, Descrizione, Videata, Link, Parametri,
+                                   NavigateUrl, Sorting, ToolTip, Disabled, Icon, Popup, CodFamiglia)
+    SELECT ParentID, @NuovoTesto, Descrizione, Videata, Link, Parametri,
+           NavigateUrl, Sorting, ToolTip, Disabled, Icon, Popup, CodFamiglia
+    FROM dbo.MENU_ELEMENTI WHERE IdMenuElemento = @IdMenuElemento;
+    DECLARE @NuovoId int = SCOPE_IDENTITY();
+
+    -- stessa visibilita' dell'originale
+    INSERT INTO dbo.MENU_ElementiRuoli (IdMenuElemento, IdRuolo)
+    SELECT @NuovoId, IdRuolo FROM dbo.MENU_ElementiRuoli WHERE IdMenuElemento = @IdMenuElemento;
+    INSERT INTO dbo.MENU_ELEMENTIGRUPPI (IdMenu, IdGruppo)
+    SELECT @NuovoId, IdGruppo FROM dbo.MENU_ELEMENTIGRUPPI WHERE IdMenu = @IdMenuElemento;
+
+    DECLARE @Foglie int = 0;
+    IF @ConFoglie = 1
+    BEGIN
+        -- MERGE su 1=0: unico modo per catturare la mappa vecchio->nuovo id
+        -- in un insert multiplo (OUTPUT con riferimento alla sorgente)
+        DECLARE @map TABLE (VecchioId int, NuovoId int);
+        MERGE dbo.MENU_ELEMENTI AS t
+        USING (SELECT * FROM dbo.MENU_ELEMENTI WHERE ParentID = @IdMenuElemento) AS s
+        ON 1 = 0
+        WHEN NOT MATCHED THEN
+            INSERT (ParentID, Text, Descrizione, Videata, Link, Parametri,
+                    NavigateUrl, Sorting, ToolTip, Disabled, Icon, Popup, CodFamiglia)
+            VALUES (@NuovoId, s.Text, s.Descrizione, s.Videata, s.Link, s.Parametri,
+                    s.NavigateUrl, s.Sorting, s.ToolTip, s.Disabled, s.Icon, s.Popup, s.CodFamiglia)
+        OUTPUT s.IdMenuElemento, inserted.IdMenuElemento INTO @map (VecchioId, NuovoId);
+        SET @Foglie = @@ROWCOUNT;
+
+        INSERT INTO dbo.MENU_ElementiRuoli (IdMenuElemento, IdRuolo)
+        SELECT m.NuovoId, r.IdRuolo FROM @map m
+        INNER JOIN dbo.MENU_ElementiRuoli r ON r.IdMenuElemento = m.VecchioId;
+        INSERT INTO dbo.MENU_ELEMENTIGRUPPI (IdMenu, IdGruppo)
+        SELECT m.NuovoId, g.IdGruppo FROM @map m
+        INNER JOIN dbo.MENU_ELEMENTIGRUPPI g ON g.IdMenu = m.VecchioId;
+    END
+
+    COMMIT;
+
+    SELECT @NuovoId AS Id, @NuovoTesto AS Testo, @Foglie AS Foglie;
+END
+GO
+GRANT EXECUTE ON dbo.AI_MENU_Duplica TO claude;
+
+-- ----------------------------------------------------------
+-- AI_MENU_Del.sql
+-- ----------------------------------------------------------
+-- Editor del menu (pagina /menu): cancellazione di una voce. Le radici si possono
+-- eliminare solo dopo aver cancellato le foglie; con la voce vanno via anche i
+-- permessi di visibilita' (MENU_ElementiRuoli / MENU_ELEMENTIGRUPPI).
+CREATE OR ALTER PROCEDURE dbo.AI_MENU_Del
+    @IdMenuElemento int
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF NOT EXISTS (SELECT 1 FROM dbo.MENU_ELEMENTI WHERE IdMenuElemento = @IdMenuElemento)
+    BEGIN SELECT 'Voce di menu inesistente' AS Errore; RETURN; END
+
+    DECLARE @foglie int = (SELECT COUNT(*) FROM dbo.MENU_ELEMENTI WHERE ParentID = @IdMenuElemento);
+    IF @foglie > 0
+    BEGIN
+        SELECT 'La radice ha ' + CONVERT(varchar(9), @foglie)
+               + ' fogli' + CASE WHEN @foglie = 1 THEN 'a' ELSE 'e' END
+               + ': cancellale prima di eliminare la radice' AS Errore;
+        RETURN;
+    END
+
+    BEGIN TRAN;
+    DELETE FROM dbo.MENU_ElementiRuoli WHERE IdMenuElemento = @IdMenuElemento;
+    DELETE FROM dbo.MENU_ELEMENTIGRUPPI WHERE IdMenu = @IdMenuElemento;
+    DELETE FROM dbo.MENU_ELEMENTI WHERE IdMenuElemento = @IdMenuElemento;
+    COMMIT;
+
+    SELECT 'OK' AS Result;
+END
+GO
+GRANT EXECUTE ON dbo.AI_MENU_Del TO claude;
+GO
+
+-- Pagina Gruppi (/gruppi): radici di menu collegate al gruppo (MENU_ELEMENTIGRUPPI).
+-- Add: inserisce se non gia' presente (solo voci radice). Del: per chiave della riga.
+CREATE OR ALTER PROCEDURE dbo.AI_MENU_ELEMENTIGRUPPI_Add
+    @IdGruppo int, @IdMenu int
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF NOT EXISTS (SELECT 1 FROM dbo.MENU_ELEMENTI
+                   WHERE IdMenuElemento = @IdMenu AND ISNULL(ParentID, 0) = 0)
+    BEGIN
+        RAISERROR ('Si possono collegare al gruppo solo voci radice del menu', 11, 1);
+        RETURN;
+    END
+    IF NOT EXISTS (SELECT 1 FROM dbo.MENU_ELEMENTIGRUPPI WHERE IdGruppo = @IdGruppo AND IdMenu = @IdMenu)
+        INSERT INTO dbo.MENU_ELEMENTIGRUPPI (IdGruppo, IdMenu) VALUES (@IdGruppo, @IdMenu);
+END
+GO
+GRANT EXECUTE ON dbo.AI_MENU_ELEMENTIGRUPPI_Add TO claude;
+GO
+
+CREATE OR ALTER PROCEDURE dbo.AI_MENU_ELEMENTIGRUPPI_Del
+    @IdMenuElementiGruppi int
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DELETE FROM dbo.MENU_ELEMENTIGRUPPI WHERE IdMenuElementiGruppi = @IdMenuElementiGruppi;
+END
+GO
+GRANT EXECUTE ON dbo.AI_MENU_ELEMENTIGRUPPI_Del TO claude;
+
+-- ----------------------------------------------------------
 -- ============================================================
 -- COLONNE AGGIUNTE ALLO SCHEMA LEGACY (idempotenti)
 -- UTENTI: dati UNILAV/permesso di soggiorno (luglio 2026);
@@ -2228,6 +2373,268 @@ GRANT EXECUTE ON dbo.AI_FILE_LOAD_Insert TO claude;
 GRANT EXECUTE ON dbo.ElencoClienti TO claude;
 GRANT EXECUTE ON dbo.ElencoFamiglie TO claude;
 GRANT EXECUTE ON dbo.LoadFromFile TO claude;
+
+
+-- ============================================================
+-- ACCETTAZIONE DA BANCO (lotto + spedizioni + distinta)
+-- ============================================================
+-- Accettazione da banco (pagina /accettazione-banco). Replica il flusso della
+-- videata legacy AccettazioneDaBanco[Famiglia]:
+--   1. un LOTTO per accettazione: 'LOT-aammgg-N', oppure 'UFFICIO_aammgg-N' se
+--      e' scelto un ufficio mittente (come AccettazioneDaBancoMittenti);
+--   2. una spedizione per atto tramite la stored legacy SPED_INSERIMENTO (che
+--      calcola le coperture e crea PALM_ATTIVITA); il barcode arriva scansionato
+--      dalle etichette prestampate, l'eventuale barcode dell'AR va in
+--      RiferimentoEsterno1; il mittente e' l'ufficio scelto o l'anagrafica cliente;
+--   3. una DISTINTA di accettazione (IdAzione=1, barcode '5001'+IdDistinta a 8
+--      cifre) + righe ponte SPED_SPED2DISTINTE, su cui si stampa la ricevuta
+--      DELIVERY_Accettazione.fr3.
+-- Ogni riga produce un esito ('OK' / motivo di scarto); i barcode gia' presenti
+-- non vengono reinseriti. Se nessuna riga passa, il lotto vuoto viene rimosso.
+CREATE OR ALTER PROCEDURE dbo.AI_SPED_AccettazioneBanco
+    @IdCliente int,
+    @CodFamiglia varchar(2),
+    @IdProdotto int,
+    @IdUtente int = NULL,
+    @IdFiliale int = NULL,
+    @IdMittente int = NULL,
+    @Righe nvarchar(max)   -- JSON: [{barcode, barcodeAr, destinatario, indirizzo, civico, localita, cap, prov, nota}]
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF ISNULL(@IdCliente, 0) = 0 OR ISNULL(@IdProdotto, 0) = 0
+    BEGIN SELECT 'Cliente e prodotto sono obbligatori' AS Errore; RETURN; END
+    IF NOT EXISTS (SELECT 1 FROM dbo.PRODOTTI WHERE IdProdotto = @IdProdotto AND CodFamiglia = @CodFamiglia)
+    BEGIN SELECT 'Il prodotto non appartiene alla famiglia indicata' AS Errore; RETURN; END
+
+    -- mittente delle spedizioni: l'ufficio MITTENTI scelto, altrimenti l'anagrafica del cliente
+    DECLARE @IdAzienda int, @NomeLotto varchar(50) = NULL,
+            @MitRagSoc varchar(50), @MitInd varchar(50), @MitLoc varchar(50),
+            @MitCap varchar(5), @MitProv varchar(2);
+    SELECT @IdAzienda = ISNULL(IdAzienda, 2), @MitRagSoc = LEFT(RagioneSociale, 50),
+           @MitInd = LEFT(Indirizzo, 50), @MitLoc = LEFT(Comune, 50),
+           @MitCap = LEFT(CAP, 5), @MitProv = LEFT(Prov, 2)
+    FROM dbo.CLIENTI WHERE IdCliente = @IdCliente;
+    IF @@ROWCOUNT = 0 BEGIN SELECT 'Cliente inesistente' AS Errore; RETURN; END
+
+    IF @IdMittente IS NOT NULL
+    BEGIN
+        SELECT @MitRagSoc = LEFT(UFFICIOSPEDITORE, 50), @MitInd = LEFT(INDIRIZZO, 50),
+               @MitLoc = LEFT(COMUNE, 50), @MitCap = LEFT(CAP, 5), @MitProv = LEFT(PROV, 2),
+               @NomeLotto = LEFT(UFFICIOSPEDITORE, 30)
+        FROM dbo.MITTENTI WHERE IdMittente = @IdMittente AND idCliente = @IdCliente;
+        IF @@ROWCOUNT = 0 BEGIN SELECT 'Mittente non del cliente indicato' AS Errore; RETURN; END
+    END
+
+    -- il servizio palmare del prodotto (es. 3 = raccomandata AR) prevale su quello
+    -- di famiglia che SPED_INSERIMENTO mette su PALM_ATTIVITA, come nella videata legacy
+    DECLARE @PalmProdotto int = (SELECT IdPalmServizio FROM dbo.PRODOTTI WHERE IdProdotto = @IdProdotto);
+
+    DECLARE @r TABLE (Riga int, Barcode varchar(50), BarcodeAr varchar(50),
+                      Destinatario varchar(200), Indirizzo varchar(200), Civico varchar(200),
+                      Localita varchar(200), Cap varchar(5), Prov varchar(2), Nota varchar(200));
+    INSERT INTO @r
+    SELECT CAST([key] AS int),
+           NULLIF(LTRIM(RTRIM(JSON_VALUE(value, '$.barcode'))), ''),
+           NULLIF(LTRIM(RTRIM(JSON_VALUE(value, '$.barcodeAr'))), ''),
+           NULLIF(LTRIM(RTRIM(LEFT(JSON_VALUE(value, '$.destinatario'), 200))), ''),
+           NULLIF(LTRIM(RTRIM(LEFT(JSON_VALUE(value, '$.indirizzo'), 200))), ''),
+           NULLIF(LTRIM(RTRIM(LEFT(JSON_VALUE(value, '$.civico'), 200))), ''),
+           NULLIF(LTRIM(RTRIM(LEFT(JSON_VALUE(value, '$.localita'), 200))), ''),
+           NULLIF(LTRIM(RTRIM(LEFT(JSON_VALUE(value, '$.cap'), 5))), ''),
+           NULLIF(LTRIM(RTRIM(LEFT(JSON_VALUE(value, '$.prov'), 2))), ''),
+           NULLIF(LTRIM(RTRIM(LEFT(JSON_VALUE(value, '$.nota'), 200))), '')
+    FROM OPENJSON(@Righe);
+    DELETE FROM @r WHERE Barcode IS NULL AND Destinatario IS NULL;   -- righe rimaste vuote a video
+
+    DECLARE @n int = (SELECT COUNT(*) FROM @r);
+    IF @n = 0 BEGIN SELECT 'Nessun atto da inserire' AS Errore; RETURN; END
+
+    -- nome lotto come il legacy: LOT-260701-7 / PROCURA DELLA REPUBBLICA DI TE_260724-2
+    DECLARE @oggi date = CONVERT(date, GETDATE());
+    DECLARE @adesso datetime = GETDATE();
+    DECLARE @suffisso varchar(20) = CONVERT(varchar(6), GETDATE(), 12) + '-' + CONVERT(varchar(9), @n);
+    DECLARE @Lotto varchar(50) =
+        CASE WHEN @NomeLotto IS NULL THEN 'LOT-' + @suffisso
+             ELSE LEFT(@NomeLotto, 50 - LEN(@suffisso) - 1) + '_' + @suffisso END;
+
+    INSERT INTO dbo.SPED_LOTTI (Lotto, IdCliente, DataCarico, DataAccettazione,
+                                IdFilialeAccettazione, NumeroAtti, CodFamiglia, IdProdotto,
+                                IdUtente, DataInserimento)
+    VALUES (@Lotto, @IdCliente, @oggi, @oggi, @IdFiliale, 0, @CodFamiglia, @IdProdotto,
+            @IdUtente, @adesso);
+    DECLARE @IdLotto int = SCOPE_IDENTITY();
+
+    DECLARE @esiti TABLE (Riga int, Barcode varchar(50), IdSpedizione int, EsitoRiga varchar(100));
+    DECLARE @riga int, @bc varchar(50), @bcAr varchar(50), @dest varchar(200), @ind varchar(200),
+            @civ varchar(200), @loc varchar(200), @cap varchar(5), @prov varchar(2),
+            @nota varchar(200), @id int, @esistente int;
+
+    DECLARE cur CURSOR LOCAL FAST_FORWARD FOR
+        SELECT Riga, Barcode, BarcodeAr, Destinatario, Indirizzo, Civico, Localita, Cap, Prov, Nota
+        FROM @r ORDER BY Riga;
+    OPEN cur;
+    FETCH NEXT FROM cur INTO @riga, @bc, @bcAr, @dest, @ind, @civ, @loc, @cap, @prov, @nota;
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        SET @id = NULL;
+        IF @bc IS NULL
+            INSERT INTO @esiti VALUES (@riga, NULL, NULL, 'Barcode mancante');
+        ELSE IF @dest IS NULL OR @ind IS NULL OR @loc IS NULL OR @cap IS NULL OR @prov IS NULL
+            INSERT INTO @esiti VALUES (@riga, @bc, NULL, 'Dati del destinatario incompleti');
+        ELSE
+        BEGIN
+            SELECT @esistente = IdSpedizione FROM dbo.SPED_ATTIVITA
+            WHERE Barcode = @bc AND DataFine IS NULL;
+            IF @esistente IS NOT NULL
+                INSERT INTO @esiti VALUES (@riga, @bc, @esistente, 'Barcode gia'' presente');
+            ELSE
+            BEGIN
+                EXEC dbo.SPED_INSERIMENTO
+                    @Barcode = @bc,
+                    @IdCliente = @IdCliente,
+                    @IdAzienda = @IdAzienda,
+                    @IdProdotto = @IdProdotto,
+                    @IdUtente = @IdUtente,
+                    @IdFiliale = @IdFiliale,
+                    @DataCarico = @oggi,        -- il legacy accetta con la sola data
+                    @DestinazioneRagioneSociale = @dest,
+                    @DestinazioneIndirizzo = @ind,
+                    @DestinazioneNumeroCivico = @civ,
+                    @DestinazioneLocalita = @loc,
+                    @DestinazioneCap = @cap,
+                    @DestinazioneProvinciaCodice = @prov,
+                    @DestinazioneNazioneCodice = 'IT',
+                    @RiferimentoEsterno1 = @bcAr,
+                    @NOTA1 = @nota,
+                    @MittenteRagioneSociale = @MitRagSoc,
+                    @MittenteIndirizzo = @MitInd,
+                    @MittenteLocalita = @MitLoc,
+                    @MittenteCap = @MitCap,
+                    @MittenteProvinciaCodice = @MitProv,
+                    @DataInserimento = @adesso,
+                    @IdSpedizione = @id OUTPUT;
+                IF @id IS NULL
+                    INSERT INTO @esiti VALUES (@riga, @bc, NULL, 'Inserimento non riuscito');
+                ELSE
+                BEGIN
+                    -- come il legacy: l'atto accettato parte in stato '0' (Accettata)
+                    UPDATE dbo.SPED_ATTIVITA
+                    SET IdLotto = @IdLotto, IdMittente = ISNULL(@IdMittente, IdMittente),
+                        Stato = '0', DataStato = @adesso
+                    WHERE IdSpedizione = @id;
+                    IF @PalmProdotto IS NOT NULL
+                    BEGIN
+                        DECLARE @IdAtt int = (SELECT MAX(IdAttivita) FROM dbo.PALM_ATTIVITA WHERE Barcode = @bc);
+                        UPDATE dbo.PALM_ATTIVITA SET IdPalmServizio = @PalmProdotto
+                        WHERE IdAttivita = @IdAtt AND IdPalmServizio <> @PalmProdotto;
+                        -- le stampe palmare (CPCL) dipendono dal servizio: vanno rigenerate
+                        IF @@ROWCOUNT > 0 EXEC dbo.PALM_AggiornaReport @IdAttivita = @IdAtt;
+                    END
+                    INSERT INTO @esiti VALUES (@riga, @bc, @id, 'OK');
+                END
+            END
+            SET @esistente = NULL;
+        END
+        FETCH NEXT FROM cur INTO @riga, @bc, @bcAr, @dest, @ind, @civ, @loc, @cap, @prov, @nota;
+    END
+    CLOSE cur; DEALLOCATE cur;
+
+    DECLARE @inseriti int = (SELECT COUNT(*) FROM @esiti WHERE EsitoRiga = 'OK');
+    DECLARE @IdDistinta int = NULL, @BarcodeDistinta varchar(50) = NULL;
+
+    IF @inseriti = 0
+        DELETE FROM dbo.SPED_LOTTI WHERE IdLotto = @IdLotto;   -- niente lotto vuoto
+    ELSE
+    BEGIN
+        -- il suffisso del nome lotto conta gli atti effettivi (come il legacy)
+        IF @inseriti <> @n
+        BEGIN
+            SET @suffisso = CONVERT(varchar(6), GETDATE(), 12) + '-' + CONVERT(varchar(9), @inseriti);
+            SET @Lotto = CASE WHEN @NomeLotto IS NULL THEN 'LOT-' + @suffisso
+                              ELSE LEFT(@NomeLotto, 50 - LEN(@suffisso) - 1) + '_' + @suffisso END;
+        END
+        UPDATE dbo.SPED_LOTTI SET NumeroAtti = @inseriti, Lotto = @Lotto WHERE IdLotto = @IdLotto;
+
+        -- distinta di accettazione: barcode '500' + IdAzione(1) + id a 8 cifre;
+        -- WebReport = template della ricevuta, come fa il legacy
+        INSERT INTO dbo.SPED_DISTINTE (Data, IdAzione, NumeroAtti, IdFiliale, IdUtente, DataInserimento, WebReport)
+        VALUES (@oggi, 1, @inseriti, @IdFiliale, @IdUtente, @adesso, 'DELIVERY_Accettazione.fr3');
+        SET @IdDistinta = SCOPE_IDENTITY();
+        SET @BarcodeDistinta = '5001' + RIGHT('00000000' + CONVERT(varchar(8), @IdDistinta), 8);
+        UPDATE dbo.SPED_DISTINTE SET Barcode = @BarcodeDistinta WHERE IdDistinta = @IdDistinta;
+
+        UPDATE dbo.SPED_ATTIVITA
+        SET IdDistintaAcc = @IdDistinta, IdDistintaLast = @IdDistinta
+        WHERE IdSpedizione IN (SELECT IdSpedizione FROM @esiti WHERE EsitoRiga = 'OK');
+
+        -- tabella ponte spedizioni<->distinta: e' quella letta dalla ricevuta
+        -- DELIVERY_Accettazione.fr3 (senza queste righe il report esce vuoto)
+        INSERT INTO dbo.SPED_SPED2DISTINTE (IdSpedizione, IdDistinta, Progressivo, Stato_Fine, Data)
+        SELECT IdSpedizione, @IdDistinta, ROW_NUMBER() OVER (ORDER BY Riga), '0', @oggi
+        FROM @esiti WHERE EsitoRiga = 'OK';
+    END
+
+    -- esiti per riga + riepilogo (il chiamante li riconosce da EsitoRiga / IdLotto)
+    SELECT Riga, Barcode, IdSpedizione, EsitoRiga FROM @esiti ORDER BY Riga;
+    SELECT CASE WHEN @inseriti = 0 THEN NULL ELSE @IdLotto END AS IdLotto,
+           CASE WHEN @inseriti = 0 THEN NULL ELSE @Lotto END AS Lotto,
+           @IdDistinta AS IdDistinta, @BarcodeDistinta AS BarcodeDistinta,
+           @inseriti AS Inseriti, @n - @inseriti AS Scartati;
+END
+GO
+GRANT EXECUTE ON dbo.AI_SPED_AccettazioneBanco TO claude;
+
+
+-- ============================================================
+-- VIDEOCODIFICA (correzione lotti da file) e CHECKIN LOTTI
+-- ============================================================
+-- VideoCodifica (pagina /videocodifica): salvataggio di una riga corretta a video.
+-- La chiusura del lotto resta alla stored legacy dbo.Lotto_VideoCodifica (genera i
+-- barcode mancanti, valida destinatari/CAP/province, marca DataVideoCodifica e
+-- porta tutto in maiuscolo); qui si aggiornano solo i campi editabili della
+-- spedizione, e solo finche' il lotto non e' stato videocodificato.
+CREATE OR ALTER PROCEDURE dbo.AI_SPED_VideoCodifica_Save
+    @IdSpedizione int,
+    @Barcode varchar(50) = NULL,
+    @Destinatario varchar(200) = NULL,
+    @Indirizzo varchar(200) = NULL,
+    @Civico varchar(200) = NULL,
+    @Localita varchar(200) = NULL,
+    @Cap varchar(5) = NULL,
+    @Prov varchar(2) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF NOT EXISTS (SELECT 1 FROM dbo.SPED_ATTIVITA s
+                   INNER JOIN dbo.SPED_LOTTI l ON l.IdLotto = s.IdLotto
+                   WHERE s.IdSpedizione = @IdSpedizione
+                     AND l.DataVideoCodifica IS NULL AND l.DataAnnullamento IS NULL)
+    BEGIN
+        SELECT 'Spedizione inesistente o lotto gia'' videocodificato' AS Result;
+        RETURN;
+    END
+
+    UPDATE dbo.SPED_ATTIVITA SET
+        Barcode = NULLIF(LTRIM(RTRIM(ISNULL(@Barcode, ''))), ''),
+        DestinazioneRagioneSociale = NULLIF(LTRIM(RTRIM(ISNULL(@Destinatario, ''))), ''),
+        DestinazioneIndirizzo = NULLIF(LTRIM(RTRIM(ISNULL(@Indirizzo, ''))), ''),
+        DestinazioneNumeroCivico = NULLIF(LTRIM(RTRIM(ISNULL(@Civico, ''))), ''),
+        DestinazioneLocalita = NULLIF(LTRIM(RTRIM(ISNULL(@Localita, ''))), ''),
+        DestinazioneCap = NULLIF(LTRIM(RTRIM(ISNULL(@Cap, ''))), ''),
+        DestinazioneProvinciaCodice = UPPER(NULLIF(LTRIM(RTRIM(ISNULL(@Prov, ''))), ''))
+    WHERE IdSpedizione = @IdSpedizione;
+
+    SELECT 'OK' AS Result;
+END
+GO
+GRANT EXECUTE ON dbo.AI_SPED_VideoCodifica_Save TO claude;
+-- stored legacy usate dalle pagine VideoCodifica e Checkin Lotti
+GRANT EXECUTE ON dbo.Lotto_VideoCodifica TO claude;
+GRANT EXECUTE ON dbo.FORM_CHECKIN TO claude;
+GRANT EXECUTE ON dbo.Lotto_Checkin TO claude;
 
 
 -- ============================================================

@@ -6,7 +6,7 @@ export const CONFIG_TABELLE = {
   Prodotti: { key: 'prodotti', titolo: 'Prodotti' },
   Listini: { key: 'listini', titolo: 'Listini' },
   Processi: { key: 'processi', titolo: 'Processi' },
-  Gruppi: { key: 'gruppi', titolo: 'Gruppi' },
+  // 'Gruppi' non e' piu' qui: ha la pagina dedicata (vedi isVideataGruppi)
   Aziende: { key: 'aziende', titolo: 'Aziende' },
   Filiali: { key: 'filiali', titolo: 'Filiali' },
   // 'Clienti' non e' piu' qui: ha la pagina dedicata (vedi isVideataClienti)
@@ -87,9 +87,31 @@ export function isVideataAccettazioneFile(videata) {
   return ['AccettazioneDaFile', 'AccettazioneDaFileFamiglia', 'Accettazione Da File Famiglia'].includes(videata)
 }
 
+// videate legacy "Accettazione da Banco" (senza e con parametro CodFamiglia;
+// le varianti Mittenti passano IdCliente nei parametri)
+export function isVideataAccettazioneBanco(videata) {
+  return ['AccettazioneDaBanco', 'AccettazioneDaBancoFamiglia',
+    'AccettazioneDaBancoMittenti', 'Accettazione Da Banco Mittenti'].includes(videata)
+}
+
+// videata legacy "Videocodifica" (correzione dei lotti da file)
+export function isVideataVideoCodifica(videata) {
+  return videata === 'Videocodifica'
+}
+
+// videate legacy "Checkin" (accettazione dei lotti in filiale)
+export function isVideataCheckin(videata) {
+  return ['Checkin', 'Checkin Famiglia'].includes(videata)
+}
+
 // videata legacy "Clienti": gestione dedicata (anagrafica + condizioni + listini)
 export function isVideataClienti(videata) {
   return videata === 'Clienti'
+}
+
+// videata legacy "Gruppi": gestione dedicata (radici menu + utenti relazionati)
+export function isVideataGruppi(videata) {
+  return videata === 'Gruppi'
 }
 
 // Risolve una Videata legacy (+ parametri) nell'oggetto di navigazione interno.
@@ -115,7 +137,11 @@ export function navDaVideata(videata, parametri = '') {
   if (isVideataGiriMappa(v)) return { tipo: 'giri-mappa' }
   if (isVideataSpedNuova(v)) return { tipo: 'sped-nuova' }
   if (isVideataAccettazioneFile(v)) return { tipo: 'accettazione-file', parametri: parametri ?? '' }
+  if (isVideataAccettazioneBanco(v)) return { tipo: 'accettazione-banco', parametri: parametri ?? '' }
+  if (isVideataVideoCodifica(v)) return { tipo: 'videocodifica', parametri: parametri ?? '' }
+  if (isVideataCheckin(v)) return { tipo: 'checkin' }
   if (isVideataClienti(v)) return { tipo: 'clienti' }
+  if (isVideataGruppi(v)) return { tipo: 'gruppi' }
   // videata non ancora migrata: placeholder
   return { tipo: 'videata', videata: v, parametri: parametri ?? '' }
 }
@@ -145,7 +171,11 @@ export function navDaLink(voce) {
   if (link === '/storici') return { tipo: 'storici' }
   if (link === '/sped-nuova') return { tipo: 'sped-nuova' }
   if (link === '/accettazione-file') return { tipo: 'accettazione-file', parametri: voce.Parametri ?? '' }
+  if (link === '/accettazione-banco') return { tipo: 'accettazione-banco', parametri: voce.Parametri ?? '' }
+  if (link === '/videocodifica') return { tipo: 'videocodifica', parametri: voce.Parametri ?? '' }
+  if (link === '/checkin') return { tipo: 'checkin' }
   if (link === '/clienti') return { tipo: 'clienti' }
+  if (link === '/gruppi') return { tipo: 'gruppi' }
   if (link === '/interrogazioni') {
     const { idQuery, sWhere } = parseParametriMenu(voce.Parametri)
     return { tipo: 'interrogazioni', idQuery, sWhere }
