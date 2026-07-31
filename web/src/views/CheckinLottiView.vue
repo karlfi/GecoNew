@@ -15,6 +15,12 @@ import Column from 'primevue/column'
 // gia' videocodificati, o da banco) vengono accettati in filiale: la stored legacy
 // Lotto_Checkin imposta la DataAccettazione e, a richiesta, crea la distinta con
 // l'esito di accettazione (InserimentoEsiti), da cui si stampa il documento.
+// Le varianti legacy "Checkin MGG"/"Checkindb" passano idCliente nei parametri.
+
+const props = defineProps({ parametri: { type: String, default: '' } })
+// regex sulla stringa grezza: il legacy scrive "idCliente=5318" ma anche
+// 'IdCliente=5377|sWhere="IdCliente=5377"' (chiave ripetuta dentro sWhere)
+const idClienteParam = parseInt(/IdCliente\s*=\s*["']*(\d+)/i.exec(props.parametri)?.[1], 10) || null
 
 const toast = useToast()
 const errore = ref('')
@@ -40,7 +46,7 @@ async function caricaClienti() {
   errore.value = ''
   try {
     const { data } = await api.get('/checkin/clienti', {
-      params: { tutte: tutteFiliali.value || undefined }
+      params: { tutte: tutteFiliali.value || undefined, idCliente: idClienteParam || undefined }
     })
     clienti.value = data
   } catch (e) {

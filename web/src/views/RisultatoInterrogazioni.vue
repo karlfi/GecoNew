@@ -19,7 +19,9 @@ import { FilterMatchMode } from '@primevue/core/api'
 
 const props = defineProps({
   idQuery: { type: Number, default: null },
-  sWhere: { type: String, default: '' }
+  sWhere: { type: String, default: '' },
+  // valori dei segnaposto &[...] (pagina "Ricerca con parametri")
+  valori: { type: Object, default: null }
 })
 
 const nav = useNavStore()
@@ -58,7 +60,8 @@ async function carica() {
   try {
     const { data } = await api.post('/interrogazioni/esegui', {
       idQuery: props.idQuery,
-      sWhere: props.sWhere
+      sWhere: props.sWhere,
+      valori: props.valori ?? undefined
     })
     titolo.value = data.titolo
     descrizione.value = data.descrizione

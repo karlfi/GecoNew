@@ -2,7 +2,6 @@
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import api from '../api'
-import { parseParametriComando } from '../lib/parametri'
 import Select from 'primevue/select'
 import AutoComplete from 'primevue/autocomplete'
 import Button from 'primevue/button'
@@ -20,9 +19,12 @@ import Column from 'primevue/column'
 // si stampa la ricevuta da consegnare al cliente.
 
 const props = defineProps({ parametri: { type: String, default: '' } })
-const parametri = parseParametriComando(props.parametri)
-const codFamigliaParam = (parametri.CodFamiglia ?? '').replace(/^"|"$/g, '').trim()
-const idClienteParam = parseInt((parametri.IdCliente ?? '').replace(/^"|"$/g, ''), 10) || null
+// regex sulla stringa grezza: il legacy alterna maiuscole/minuscole e virgolette
+// (IdCliente=5318, idCliente=5389, CodFamiglia="P"); CodProdotto e' l'alias
+// legacy di IdProdotto usato dalle voci Mittenti
+const codFamigliaParam = (/CodFamiglia\s*=\s*["']*([A-Za-z0-9]+)/i.exec(props.parametri)?.[1] ?? '').trim()
+const idClienteParam = parseInt(/IdCliente\s*=\s*["']*(\d+)/i.exec(props.parametri)?.[1], 10) || null
+const idProdottoParam = parseInt(/(?:Id|Cod)Prodotto\s*=\s*["']*(\d+)/i.exec(props.parametri)?.[1], 10) || null
 
 const toast = useToast()
 const errore = ref('')
@@ -98,7 +100,8 @@ watch(famiglia, async f => {
       params: { idCliente: cliente.value.IdCliente, codFamiglia: f.Valore }
     })
     prodotti.value = data
-    if (data.length === 1) prodotto.value = data[0]
+    prodotto.value =
+      data.find(p => p.idProdotto === idProdottoParam) ?? (data.length === 1 ? data[0] : null)
   } catch (e) {
     toast.add({ severity: 'error', summary: 'Prodotti', detail: e.response?.data?.errore ?? 'Errore', life: 4000 })
   }

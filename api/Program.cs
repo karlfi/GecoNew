@@ -84,7 +84,9 @@ var ConfigTabelle = new Dictionary<string, string>(StringComparer.OrdinalIgnoreC
     ["mittenti"] = "MITTENTI",
     ["stati"] = "SPED_STATI",
     ["interrogazioni"] = "INTERROGAZIONI",
-    ["menu"] = "MENU_ELEMENTI"
+    ["menu"] = "MENU_ELEMENTI",
+    ["manutenzioni"] = "MEZZI_NOTE",
+    ["sinistri"] = "MEZZI_SINISTRI"
 };
 
 bool TipoBinario(string t) => t is "image" or "varbinary" or "binary" or "timestamp"
@@ -412,6 +414,22 @@ app.MapPost("/api/interrogazioni/esegui", async (EseguiInterrogazioneRequest req
             errore = $"Variabili globali non risolte: {string.Join(", ", nonRisolte.Distinct())}"
         });
 
+    // parametri &[Nome] / &[D_Nome] / &[Nome{select lookup}] delle query "Ricerca
+    // con parametri": sostituiti coi valori del form (apici raddoppiati); un
+    // placeholder senza valore diventa stringa vuota (like '%%' = tutto)
+    if (System.Text.RegularExpressions.Regex.IsMatch(sql, @"&\[") || req.Valori is not null)
+    {
+        sql = System.Text.RegularExpressions.Regex.Replace(sql, @"&\[([^\]{}]+)(?:\{[^{}]*\})?\]", m =>
+        {
+            var nome = m.Groups[1].Value;
+            var val = req.Valori != null && req.Valori.TryGetValue(nome, out var v) ? v ?? "" : "";
+            return val.Replace("'", "''");
+        });
+        // le date del form arrivano in formato italiano (le query usano lo stile
+        // 103 o CONVERT senza stile): la sessione va messa in dmy
+        sql = "SET DATEFORMAT dmy;\r\n" + sql;
+    }
+
     try
     {
         if (cn.State != ConnectionState.Open) await cn.OpenAsync();
@@ -442,6 +460,89 @@ app.MapPost("/api/interrogazioni/esegui", async (EseguiInterrogazioneRequest req
         return Results.Json(new { errore = $"Errore SQL: {ex.Message}" },
             statusCode: StatusCodes.Status400BadRequest);
     }
+}).RequireAuthorization();
+
+// Metadati per le pagine di ricerca legacy costruite sulle interrogazioni:
+// - colonnaBarcode: campo su cui la "Ricerca Multipla" applica l'IN sull'elenco
+//   incollato (alias qualificato tipo sa.Barcode, o Barcode secco per select *)
+// - parametri: segnaposto &[Nome] / &[D_Data] / &[Nome{select v,l from...}] della
+//   "Ricerca con parametri", con le opzioni delle lookup gia' risolte
+app.MapGet("/api/interrogazioni/{id:int}/ricerca-info", async (int id, ClaimsPrincipal user) =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var q = (await cn.QueryFirstOrDefaultAsync(
+        "SELECT Titolo, Descrizione, SqlSelect, SqlFrom, SqlWhere, SqlGroup, SqlOrder FROM INTERROGAZIONI WHERE IdQuery = @id",
+        new { id })) as IDictionary<string, object>;
+    if (q is null)
+        return Results.NotFound(new { errore = $"Interrogazione {id} non trovata" });
+
+    string Parte(string nome) => q.TryGetValue(nome, out var v) ? v as string ?? "" : "";
+    var testo = string.Join("\r\n", new[]
+    {
+        Parte("SqlSelect"), Parte("SqlFrom"), Parte("SqlWhere"), Parte("SqlGroup"), Parte("SqlOrder")
+    });
+
+    var mCol = System.Text.RegularExpressions.Regex.Match(
+        Parte("SqlSelect"), @"(?i)(\w+\.\w*barcode\w*)\s*(?:as|,|$)");
+    var colonnaBarcode = mCol.Success ? mCol.Groups[1].Value : "Barcode";
+
+    var globali = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["IdUtente"] = user.FindFirstValue(ClaimTypes.NameIdentifier),
+        ["IdFiliale"] = user.FindFirstValue("idFiliale"),
+        ["IdCliente"] = user.FindFirstValue("idCliente"),
+        ["IdAzienda"] = user.FindFirstValue("idAzienda"),
+        ["IdRuolo"] = user.FindFirstValue("idRuolo")
+    };
+
+    var parametri = new List<object>();
+    var visti = new HashSet<string>();
+    foreach (System.Text.RegularExpressions.Match m in
+             System.Text.RegularExpressions.Regex.Matches(testo, @"&\[([^\]{}]+)(?:\{([^{}]*)\})?\]"))
+    {
+        var nome = m.Groups[1].Value;
+        if (!visti.Add(nome)) continue;
+        var lookupSql = m.Groups[2].Success ? m.Groups[2].Value : null;
+        var tipo = nome.StartsWith("D_", StringComparison.OrdinalIgnoreCase) ? "data"
+                 : lookupSql is not null ? "lookup" : "testo";
+        var etichetta = tipo == "data" ? nome[2..] : nome;
+
+        List<object>? opzioni = null;
+        if (lookupSql is not null)
+        {
+            var sqlLookup = System.Text.RegularExpressions.Regex.Replace(lookupSql, @"@\[(\w+)\]",
+                x => globali.TryGetValue(x.Groups[1].Value, out var val) && !string.IsNullOrEmpty(val) ? val : "0");
+            try
+            {
+                opzioni = (await cn.QueryAsync(sqlLookup, commandTimeout: 60))
+                    .Cast<IDictionary<string, object>>()
+                    .Select(r =>
+                    {
+                        var vals = r.Values.ToList();
+                        return (object)new
+                        {
+                            valore = Convert.ToString(vals[0]),
+                            etichetta = Convert.ToString(vals.Count > 1 ? vals[1] : vals[0])
+                        };
+                    }).ToList();
+            }
+            catch (SqlException)
+            {
+                opzioni = new List<object>();   // lookup rotta: campo comunque editabile a testo
+                tipo = "testo";
+            }
+        }
+        parametri.Add(new { nome, etichetta, tipo, opzioni });
+    }
+
+    return Results.Ok(new
+    {
+        idQuery = id,
+        titolo = Parte("Titolo"),
+        descrizione = Parte("Descrizione"),
+        colonnaBarcode,
+        parametri
+    });
 }).RequireAuthorization();
 
 // Proxy dei report FastReport: il report server (PARAMETRI.ReportServer) NON e'
@@ -1133,6 +1234,113 @@ app.MapPost("/api/ddt", async (CreaDdtRequest req, ClaimsPrincipal user) =>
     {
         return Results.Json(new { errore = ex.Message }, statusCode: StatusCodes.Status400BadRequest);
     }
+}).RequireAuthorization();
+
+// === Spedizioni Interne (videata legacy Spedizioneinterna) ===
+// Trasferimenti di materiale tra filiali (resi, palmari, cancelleria...): la SP
+// legacy SPED_INTERNA crea la SPED_ATTIVITA marcata nota2='SPI#' (barcode
+// 6xxxxxxxxxxx, mittente = utente c/o filiale) + la riga palmare. La lettera di
+// vettura e' il report DELIVERY_SpedInterna.fr3|IdSpedizione=N via /api/report.
+
+// Filiali di destinazione: stessa lookup del DDT (ElencoFiliali tipo 10).
+app.MapGet("/api/spedinterna/lookups", async (ClaimsPrincipal user) =>
+{
+    var idUtente = int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    if (!int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale))
+        return Results.BadRequest(new { errore = "Filiale non disponibile nel profilo" });
+    await using var cn = new SqlConnection(ConnString());
+    var destinazioni = await cn.QueryAsync("dbo.ElencoFiliali",
+        new { idtipo = 10, IdFiliale = idFiliale, IdUtente = idUtente }, commandType: CommandType.StoredProcedure);
+    return Results.Ok(new { destinazioni });
+}).RequireAuthorization();
+
+app.MapPost("/api/spedinterna", async (SpedInternaRequest req, ClaimsPrincipal user) =>
+{
+    if (req.IdFilialeDestinazione <= 0)
+        return Results.BadRequest(new { errore = "La filiale di destinazione è obbligatoria" });
+    var idUtente = int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+
+    await using var cn = new SqlConnection(ConnString());
+    try
+    {
+        var r = await cn.QueryFirstOrDefaultAsync("dbo.SPED_INTERNA", new
+        {
+            IdUtente = idUtente,
+            req.IdFilialeDestinazione,
+            NotaConsegna = req.NotaConsegna ?? ""
+        }, commandType: CommandType.StoredProcedure) as IDictionary<string, object>;
+
+        if (r is null || !r.TryGetValue("IdSpedizione", out var idSped))
+            return Results.Json(new { errore = "SPED_INTERNA non ha restituito la spedizione" },
+                statusCode: StatusCodes.Status500InternalServerError);
+        return Results.Ok(new { idSpedizione = idSped, barcode = r.TryGetValue("Barcode", out var bc) ? bc : null });
+    }
+    catch (SqlException ex)
+    {
+        return Results.Json(new { errore = ex.Message }, statusCode: StatusCodes.Status400BadRequest);
+    }
+}).RequireAuthorization();
+
+// Spedizioni interne recenti della filiale (inviate e ricevute), per ristampa
+// della lettera di vettura e controllo dello stato.
+app.MapGet("/api/spedinterna/elenco", async (string? dal, string? al, bool? tutte, ClaimsPrincipal user) =>
+{
+    var idFiliale = int.TryParse(user.FindFirstValue("idFiliale"), out var f) ? f : 0;
+    var dDal = DateTime.TryParse(dal, out var d1) ? d1.Date : DateTime.Today.AddDays(-15);
+    var dAl = (DateTime.TryParse(al, out var d2) ? d2.Date : DateTime.Today).AddDays(1);
+
+    await using var cn = new SqlConnection(ConnString());
+    var righe = await cn.QueryAsync(@"
+        SELECT sa.IdSpedizione AS idSpedizione, sa.Barcode AS barcode,
+               CONVERT(varchar(16), sa.DataInserimento, 120) AS inserita,
+               sa.IdFiliale AS idFilialeMittente, forig.FILIALE AS filialeMittente,
+               sa.IdFilialeDestinazione AS idFilialeDestinazione, sa.DestinazioneRagioneSociale AS filialeDestinazione,
+               u.Nome AS utente, sa.ContattoDestDescrizione AS nota,
+               sa.Stato AS stato, st.Descrizione AS statoDescrizione,
+               CONVERT(varchar(16), sa.DataStato, 120) AS dataStato
+        FROM SPED_ATTIVITA sa (nolock)
+        LEFT JOIN FILIALI forig (nolock) ON forig.IDFILIALE = sa.IdFiliale
+        LEFT JOIN UTENTI u (nolock) ON u.IdUtente = sa.IdUtente
+        LEFT JOIN SPED_STATI st (nolock) ON st.Stato = sa.Stato
+        WHERE sa.nota2 = 'SPI#'
+          AND sa.DataInserimento >= @dal AND sa.DataInserimento < @al
+          AND (@tutte = 1 OR sa.IdFiliale = @idFiliale OR sa.IdFilialeDestinazione = @idFiliale)
+        ORDER BY sa.IdSpedizione DESC",
+        new { dal = dDal, al = dAl, tutte = tutte == true ? 1 : 0, idFiliale },
+        commandTimeout: 90);
+    return Results.Ok(righe);
+}).RequireAuthorization();
+
+// === Distinta Riepilogativa Giornaliera (videata legacy "Distinta Riepilogativa") ===
+// Modello ministeriale per gli uffici speditori MGG (procure/tribunali, cliente
+// 5318): elenca le distinte che contengono spedizioni del cliente e ne stampa il
+// riepilogo (MG_DistRiepGiornaliera.fr3|IdDistinta=N) con tariffe e area timbro.
+app.MapGet("/api/distintariepilogativa/elenco", async (string? dal, string? al, bool? tutte, int? idCliente, ClaimsPrincipal user) =>
+{
+    var idFiliale = int.TryParse(user.FindFirstValue("idFiliale"), out var f) ? f : 0;
+    var dDal = DateTime.TryParse(dal, out var d1) ? d1.Date : DateTime.Today.AddDays(-7);
+    var dAl = (DateTime.TryParse(al, out var d2) ? d2.Date : DateTime.Today).AddDays(1);
+
+    await using var cn = new SqlConnection(ConnString());
+    var righe = await cn.QueryAsync(@"
+        SELECT d.IdDistinta AS idDistinta, d.Barcode AS barcode,
+               CONVERT(varchar(16), d.Data, 120) AS data,
+               az.Azione AS azione, d.IdFiliale AS idFiliale, fl.FILIALE AS filiale,
+               COUNT(*) AS atti, COUNT(DISTINCT sa.IdMittente) AS uffici
+        FROM SPED_DISTINTE d (nolock)
+        INNER JOIN SPED_SPED2DISTINTE sd (nolock) ON sd.IdDistinta = d.IdDistinta
+        INNER JOIN SPED_ATTIVITA sa (nolock) ON sa.IdSpedizione = sd.IdSpedizione
+        LEFT JOIN SPED_AZIONI az (nolock) ON az.IdAzione = d.IdAzione
+        LEFT JOIN FILIALI fl (nolock) ON fl.IDFILIALE = d.IdFiliale
+        WHERE sa.IdCliente = @idCliente
+          AND d.Data >= @dal AND d.Data < @al
+          AND (@tutte = 1 OR d.IdFiliale = @idFiliale)
+        GROUP BY d.IdDistinta, d.Barcode, CONVERT(varchar(16), d.Data, 120),
+                 az.Azione, d.IdFiliale, fl.FILIALE
+        ORDER BY d.IdDistinta DESC",
+        new { dal = dDal, al = dAl, tutte = tutte == true ? 1 : 0, idFiliale, idCliente = idCliente ?? 5318 },
+        commandTimeout: 90);
+    return Results.Ok(righe);
 }).RequireAuthorization();
 
 // === Esegui Comando (videata legacy Eseguicomando) ===
@@ -3085,10 +3293,12 @@ app.MapGet("/api/accettazione/ricevuta/{idDistinta:int}", async (int idDistinta)
 // Lotti in attesa di videocodifica (stessa selezione della stored legacy
 // ElencoLottiDaVideocodificare: DataCarico e DataVideoCodifica nulle), con
 // decodifiche e conteggio dei barcode mancanti
-app.MapGet("/api/videocodifica/lotti", async (bool? tutte, string? codFamiglia, ClaimsPrincipal user) =>
+app.MapGet("/api/videocodifica/lotti", async (bool? tutte, string? codFamiglia, int? idCliente, int? idProdotto, bool? conCarico, ClaimsPrincipal user) =>
 {
     int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
     await using var cn = new SqlConnection(ConnString());
+    // conCarico: i lotti da banco (es. MGG) nascono con DataCarico valorizzata e
+    // vanno comunque videocodificati; per quelli da file DataCarico NULL = pendenti
     var lotti = await cn.QueryAsync(@"
         SELECT l.IdLotto, l.Lotto, l.IdCliente, c.RagioneSociale AS Cliente,
                l.CodFamiglia, p.Prodotto, ISNULL(x.Righe, 0) AS Righe,
@@ -3102,14 +3312,20 @@ app.MapGet("/api/videocodifica/lotti", async (bool? tutte, string? codFamiglia, 
         OUTER APPLY (SELECT COUNT(*) AS Righe,
                             SUM(CASE WHEN ISNULL(sa.Barcode, '') = '' THEN 1 ELSE 0 END) AS SenzaBarcode
                      FROM SPED_ATTIVITA sa WHERE sa.IdLotto = l.IdLotto) x
-        WHERE l.DataCarico IS NULL AND l.DataVideoCodifica IS NULL AND l.DataAnnullamento IS NULL
+        WHERE (@conCarico = 1 OR l.DataCarico IS NULL)
+          AND l.DataVideoCodifica IS NULL AND l.DataAnnullamento IS NULL
           AND (@idFiliale IS NULL OR l.IdFilialeAccettazione = @idFiliale)
           AND (@codFamiglia IS NULL OR l.CodFamiglia = @codFamiglia)
+          AND (@idCliente IS NULL OR l.IdCliente = @idCliente)
+          AND (@idProdotto IS NULL OR l.IdProdotto = @idProdotto)
         ORDER BY l.DataInserimento DESC",
         new
         {
             idFiliale = tutte == true || idFiliale == 0 ? (int?)null : idFiliale,
-            codFamiglia = string.IsNullOrWhiteSpace(codFamiglia) ? null : codFamiglia
+            codFamiglia = string.IsNullOrWhiteSpace(codFamiglia) ? null : codFamiglia,
+            idCliente,
+            idProdotto,
+            conCarico = conCarico == true ? 1 : 0
         });
     return Results.Ok(lotti);
 }).RequireAuthorization();
@@ -3178,7 +3394,7 @@ app.MapPost("/api/videocodifica/chiudi", async (VideoCodificaChiudiRequest req) 
 // === Checkin lotti (accettazione dei lotti in filiale) ===
 
 // Clienti con lotti in attesa di checkin (stored legacy FORM_CHECKIN)
-app.MapGet("/api/checkin/clienti", async (bool? tutte, ClaimsPrincipal user) =>
+app.MapGet("/api/checkin/clienti", async (bool? tutte, int? idCliente, ClaimsPrincipal user) =>
 {
     int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
     await using var cn = new SqlConnection(ConnString());
@@ -3188,6 +3404,9 @@ app.MapGet("/api/checkin/clienti", async (bool? tutte, ClaimsPrincipal user) =>
         IdFiliale = tutte == true || idFiliale == 0 ? (int?)null : idFiliale
     }, commandType: CommandType.StoredProcedure, commandTimeout: 120))
         .Cast<IDictionary<string, object>>().ToList();
+    // filtro cliente delle varianti legacy (Checkin MGG / Checkindb)
+    if (idCliente is int filtro)
+        clienti = clienti.Where(c => c["IdCliente"] is int ic && ic == filtro).ToList();
     // decodifica filiali e utenti (la stored restituisce solo gli id)
     var filiali = (await cn.QueryAsync("SELECT IDFILIALE, FILIALE FROM FILIALI"))
         .ToDictionary(f => (int)f.IDFILIALE, f => (string)f.FILIALE);
@@ -3317,6 +3536,573 @@ app.MapGet("/api/distinte/{id:int}/stampa", async (int id) =>
     }
 }).RequireAuthorization();
 
+// === Presenze TeamSystem (file mensile per lo studio paghe) ===
+// Trasforma UTENTI_ATTIVITA nel tracciato INTM/DIPE/GG01/GG02/PRES di TeamSystem
+// (stessa logica dello script hr-presenze/genera_presenze_teamsystem.py).
+
+// fasce orarie della legenda dello studio: ore giornaliere -> (ORD, RO)
+var presenzeFasce = new (double Tot, double Ord, double Rol)[]
+{
+    (8.0, 7.73, 0.27), (7.0, 6.8, 0.2), (6.66, 6.45, 0.21), (6.0, 5.8, 0.2),
+    (5.0, 4.84, 0.16), (4.5, 4.35, 0.15), (4.0, 3.87, 0.13)
+};
+var presenzeAssenze = new Dictionary<string, string> { ["FER"] = "FE", ["INF"] = "INF", ["MAL"] = "ML", ["MAT"] = "MT" };
+var presenzeMesi = new[] { "gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic" };
+var presenzeGiorni = new[] { "Domenica", "Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato" };
+
+(double Tot, double Ord, double Rol) PresenzeFascia(double? partime)
+{
+    var ore = partime is null or 0 ? 8.0 : 40.0 * partime.Value / 100.0 / 6.0;
+    return presenzeFasce.MinBy(f => Math.Abs(f.Tot - ore));
+}
+string PresenzeNum(double v) => v.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture).Replace('.', ',');
+
+// dati del mese per una filiale: dipendenti validi (CF a 16), giorni, esclusi
+async Task<(dynamic? filiale, List<PresenzeDip> dipendenti, IEnumerable<dynamic> esclusi)>
+    PresenzeCarica(SqlConnection cn, int idFiliale, DateTime dal, DateTime al)
+{
+    var filiale = await cn.QueryFirstOrDefaultAsync(
+        "SELECT FILIALE, IdFiliale_HRSpeedy FROM FILIALI WHERE IDFILIALE = @idFiliale", new { idFiliale });
+    var righe = await cn.QueryAsync(@"
+        SELECT u.IdUtente, RTRIM(ISNULL(u.Matricola, '')) AS Matricola,
+               UPPER(RTRIM(ISNULL(u.Nome, ''))) AS Nome, u.Partime,
+               ua.data, RTRIM(ISNULL(ua.codPresenza, '')) AS Cod
+        FROM UTENTI_ATTIVITA ua
+        INNER JOIN UTENTI u ON u.IdUtente = ua.idUtente
+        WHERE u.idFiliale = @idFiliale AND ua.data >= @dal AND ua.data < @al
+          AND LEN(u.CodiceFiscale) = 16
+        ORDER BY u.IdUtente, ua.data", new { idFiliale, dal, al });
+    var dip = new Dictionary<int, PresenzeDip>();
+    foreach (var r in righe)
+    {
+        if (!dip.TryGetValue((int)r.IdUtente, out PresenzeDip? d))
+            dip[(int)r.IdUtente] = d = new PresenzeDip((string)r.Matricola, (string)r.Nome, (double?)r.Partime, new());
+        d.Giorni[((DateTime)r.data).Day] = (string)r.Cod;
+    }
+    var esclusi = await cn.QueryAsync(@"
+        SELECT DISTINCT RTRIM(ISNULL(u.Matricola, '')) AS matricola, u.Utente AS utente,
+               UPPER(RTRIM(ISNULL(u.Nome, ''))) AS nome
+        FROM UTENTI_ATTIVITA ua
+        INNER JOIN UTENTI u ON u.IdUtente = ua.idUtente
+        WHERE u.idFiliale = @idFiliale AND ua.data >= @dal AND ua.data < @al
+          AND LEN(ISNULL(u.CodiceFiscale, '')) <> 16", new { idFiliale, dal, al });
+    var ordinati = dip.Values
+        .OrderBy(d => int.TryParse(d.Matricola, out var m) ? 0 : 1)
+        .ThenBy(d => int.TryParse(d.Matricola, out var m) ? m : 0)
+        .ToList();
+    return (filiale, ordinati, esclusi);
+}
+
+// filiali con il codice TeamSystem impostato (IdFiliale_HRSpeedy)
+app.MapGet("/api/presenze/init", async () =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var filiali = await cn.QueryAsync(@"
+        SELECT IDFILIALE AS idFiliale, FILIALE AS filiale, IdFiliale_HRSpeedy AS codiceTs
+        FROM FILIALI
+        WHERE IdFiliale_HRSpeedy IS NOT NULL AND DataChiusura IS NULL
+        ORDER BY FILIALE");
+    return Results.Ok(filiali);
+}).RequireAuthorization();
+
+// riepilogo del mese: conteggi per dipendente, giorni mancanti, anomalie
+app.MapGet("/api/presenze/riepilogo", async (int idFiliale, string mese) =>
+{
+    if (!DateTime.TryParseExact(mese + "-01", "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.None, out var dal))
+        return Results.BadRequest(new { errore = "Mese non valido (atteso AAAA-MM)" });
+    var al = dal.AddMonths(1);
+    var ngiorni = DateTime.DaysInMonth(dal.Year, dal.Month);
+
+    await using var cn = new SqlConnection(ConnString());
+    var (filiale, dipendenti, esclusi) = await PresenzeCarica(cn, idFiliale, dal, al);
+    if (filiale is null) return Results.NotFound(new { errore = "Filiale inesistente" });
+
+    var anomalieGlobali = new List<string>();
+    if (filiale.IdFiliale_HRSpeedy is null)
+        anomalieGlobali.Add("La filiale non ha il codice TeamSystem (FILIALI.IdFiliale_HRSpeedy): impossibile generare il file");
+    foreach (var e in esclusi)
+        anomalieGlobali.Add($"{e.utente} ({e.nome}): codice fiscale non valido, escluso dal file");
+
+    var listaDip = new List<object>();
+    int totPresenze = 0, totAssenze = 0, totMancanti = 0;
+    foreach (var d in dipendenti)
+    {
+        var (tot, _, _) = PresenzeFascia(d.Partime);
+        var conteggi = d.Giorni.Values.GroupBy(c => c).ToDictionary(g => g.Key, g => g.Count());
+        var mancanti = new List<int>();
+        for (var g = 1; g <= ngiorni; g++)
+            if (!d.Giorni.ContainsKey(g) && new DateTime(dal.Year, dal.Month, g).DayOfWeek != DayOfWeek.Sunday)
+                mancanti.Add(g);
+        var anomalie = new List<string>();
+        if (d.Matricola == "") anomalie.Add("matricola mancante");
+        if (d.Partime is null) anomalie.Add("Partime non impostato: trattato come full time");
+        foreach (var cod in conteggi.Keys)
+            if (cod is not ("PRE" or "INT" or "NLV") && !presenzeAssenze.ContainsKey(cod)
+                && !(cod.StartsWith("PE") && cod.Length == 3 && char.IsDigit(cod[2])) && cod is not ("C05" or "C10"))
+                anomalie.Add($"codice '{cod}' non gestito ({conteggi[cod]} gg)");
+        if (conteggi.ContainsKey("C05") || conteggi.ContainsKey("C10"))
+            anomalie.Add("giorni di cassa integrazione: verificare la sigla con lo studio");
+
+        int pres = conteggi.GetValueOrDefault("PRE") + conteggi.GetValueOrDefault("INT");
+        int assenze = conteggi.Where(c => c.Key is not ("PRE" or "INT" or "NLV")).Sum(c => c.Value);
+        totPresenze += pres; totAssenze += assenze; totMancanti += mancanti.Count;
+        listaDip.Add(new
+        {
+            matricola = d.Matricola,
+            nome = d.Nome,
+            oreGiornaliere = tot,
+            presenze = pres,
+            ferie = conteggi.GetValueOrDefault("FER"),
+            infortunio = conteggi.GetValueOrDefault("INF"),
+            malattia = conteggi.GetValueOrDefault("MAL"),
+            altreAssenze = assenze - conteggi.GetValueOrDefault("FER") - conteggi.GetValueOrDefault("INF") - conteggi.GetValueOrDefault("MAL"),
+            riposi = conteggi.GetValueOrDefault("NLV"),
+            mancanti,
+            anomalie
+        });
+    }
+    return Results.Ok(new
+    {
+        filiale = (string)filiale.FILIALE,
+        codiceTs = (int?)filiale.IdFiliale_HRSpeedy,
+        mese = $"{presenzeMesi[dal.Month - 1]}-{dal.Year % 100:00}",
+        giorniMese = ngiorni,
+        dipendenti = listaDip,
+        totali = new { dipendenti = listaDip.Count, presenze = totPresenze, assenze = totAssenze, mancanti = totMancanti },
+        anomalie = anomalieGlobali
+    });
+}).RequireAuthorization();
+
+// file TeamSystem: ore = override per matricola "336=10,952=6,5" (straordinari stabili)
+app.MapGet("/api/presenze/file", async (int idFiliale, string mese, bool? completa, string? ore, int? aziendaTs) =>
+{
+    if (!DateTime.TryParseExact(mese + "-01", "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.None, out var dal))
+        return Results.BadRequest(new { errore = "Mese non valido (atteso AAAA-MM)" });
+    var al = dal.AddMonths(1);
+    var ngiorni = DateTime.DaysInMonth(dal.Year, dal.Month);
+    var azienda = aziendaTs ?? 574;
+    var label = $"{presenzeMesi[dal.Month - 1]}-{dal.Year % 100:00}";
+
+    var overrideOre = new Dictionary<string, double>();
+    foreach (var o in (ore ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries))
+    {
+        var p = o.Split('=');
+        if (p.Length == 2 && double.TryParse(p[1].Replace(',', '.'),
+            System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var v))
+            overrideOre[p[0].Trim()] = v;
+    }
+
+    await using var cn = new SqlConnection(ConnString());
+    var (filiale, dipendenti, _) = await PresenzeCarica(cn, idFiliale, dal, al);
+    if (filiale is null) return Results.NotFound(new { errore = "Filiale inesistente" });
+    if (filiale.IdFiliale_HRSpeedy is null)
+        return Results.BadRequest(new { errore = "La filiale non ha il codice TeamSystem (FILIALI.IdFiliale_HRSpeedy)" });
+    if (dipendenti.Count == 0)
+        return Results.BadRequest(new { errore = "Nessun dipendente con presenze nel mese" });
+    var filialeTs = ((int)filiale.IdFiliale_HRSpeedy).ToString();
+
+    const int NCAMPI = 6 + 31 * 2;
+    string Riga(Dictionary<int, string> campi)
+    {
+        var v = new string[NCAMPI];
+        Array.Fill(v, "");
+        foreach (var (i, s) in campi) v[i] = s;
+        return string.Join(';', v);
+    }
+
+    var testataGiorni = new Dictionary<int, string> { [0] = "GG01" };
+    var testataSigle = new Dictionary<int, string> { [0] = "GG02" };
+    for (var g = 1; g <= ngiorni; g++)
+    {
+        testataGiorni[6 + (g - 1) * 2] = $"{g} - {presenzeGiorni[(int)new DateTime(dal.Year, dal.Month, g).DayOfWeek]}";
+        testataSigle[6 + (g - 1) * 2] = "Sigla";
+        testataSigle[6 + (g - 1) * 2 + 1] = "Ore";
+    }
+
+    var righeFile = new List<string>
+    {
+        Riga(new() { [0] = "INTM", [1] = "Mese", [2] = "Azienda", [3] = "Filiale", [4] = "Matricola",
+                     [6] = "Codice Azienda:", [8] = azienda.ToString(), [10] = "Mese Presenze:", [12] = label }),
+        Riga(new())
+    };
+
+    for (var nd = 0; nd < dipendenti.Count; nd++)
+    {
+        var d = dipendenti[nd];
+        var (tot, ordH, rol) = PresenzeFascia(d.Partime);
+        if (overrideOre.TryGetValue(d.Matricola, out var forzate))
+        {
+            tot = forzate;
+            ordH = forzate - rol;   // il ROL resta la quota della fascia contrattuale
+        }
+        var coppie = new Dictionary<int, List<(string Sigla, string Ore)>>();
+        for (var g = 1; g <= ngiorni; g++)
+        {
+            var domenica = new DateTime(dal.Year, dal.Month, g).DayOfWeek == DayOfWeek.Sunday;
+            if (!d.Giorni.TryGetValue(g, out var cod))
+            {
+                if (!domenica && completa == true)
+                    coppie[g] = new() { ("ORD", PresenzeNum(ordH)), ("RO", PresenzeNum(rol)) };
+                continue;
+            }
+            if (cod is "PRE" or "INT")
+                coppie[g] = new() { ("ORD", PresenzeNum(ordH)), ("RO", PresenzeNum(rol)) };
+            else if (presenzeAssenze.TryGetValue(cod, out var sigla))
+                coppie[g] = new() { ("ORD", ""), (sigla, PresenzeNum(tot)) };
+            else if (cod.StartsWith("PE") && cod.Length == 3 && char.IsDigit(cod[2]))
+            {
+                var n = cod[2] - '0';
+                coppie[g] = new() { ("ORD", PresenzeNum(ordH - n)), ("RO", PresenzeNum(rol + n)) };
+            }
+            else if (cod is "C05" or "C10")
+                coppie[g] = new() { ("ORD", ""), ("CIG", PresenzeNum(tot)) };
+            // NLV e codici non gestiti: giorno vuoto
+        }
+
+        righeFile.Add(Riga(new() { [0] = "DIPE", [6] = "Matricola:", [8] = d.Matricola,
+                                   [10] = "Nominativo:", [12] = d.Nome }));
+        righeFile.Add(Riga(testataGiorni));
+        righeFile.Add(Riga(testataSigle));
+        for (var slot = 0; slot < 7; slot++)
+        {
+            var campi = new Dictionary<int, string>
+            { [0] = "PRES", [1] = label, [2] = azienda.ToString(), [3] = filialeTs, [4] = d.Matricola };
+            foreach (var (g, elenco) in coppie)
+                if (slot < elenco.Count)
+                {
+                    campi[6 + (g - 1) * 2] = elenco[slot].Sigla;
+                    campi[6 + (g - 1) * 2 + 1] = elenco[slot].Ore;
+                }
+            righeFile.Add(Riga(campi));
+        }
+        if (nd < dipendenti.Count - 1) righeFile.Add(Riga(new()));
+    }
+
+    // ANSI come il modello dello studio (per i caratteri usati Latin1 == cp1252)
+    var bytes = System.Text.Encoding.Latin1.GetBytes(string.Join("\r\n", righeFile) + "\r\n");
+    return Results.File(bytes, "text/csv", $"Presenze_TS_Fil{filialeTs}_{label}.csv");
+}).RequireAuthorization();
+
+// === Scontrini di Fine Gita ===
+// Replica della videata legacy "Scontrini Fine Gita": riepilogo delle gite dei
+// driver (stessa query dell'interrogazione 1026) con scontrino a video dalle
+// stored legacy ElencoFineGita/ElencoFineGitaDettaglio. I cedolini PDF passano
+// dal proxy /api/report gia' esistente (DELIVERY_FINEGITA[Dettaglio].fr3).
+
+// Elenco gite: una riga per driver/giorno (idFineGita NULL = gita ancora aperta).
+app.MapGet("/api/finegita/elenco", async (string? dal, string? al, bool? tutte, ClaimsPrincipal user) =>
+{
+    var idFiliale = int.TryParse(user.FindFirstValue("idFiliale"), out var f) ? f : 0;
+    var dDal = DateTime.TryParse(dal, out var d1) ? d1.Date : DateTime.Today.AddDays(-7);
+    var dAl = (DateTime.TryParse(al, out var d2) ? d2.Date : DateTime.Today).AddDays(1);
+
+    await using var cn = new SqlConnection(ConnString());
+    var righe = await cn.QueryAsync(@"
+        SELECT pa.idPalmFineGita AS idFineGita, pa.DriverAssegnato AS driver, u.Nome AS nome,
+               u.IdFiliale AS idFiliale, f.FILIALE AS filiale,
+               CONVERT(varchar(10), CONVERT(date, pa.DataEffettiva), 120) AS data,
+               CONVERT(varchar(5), CONVERT(time, ua.Login)) AS login,
+               CONVERT(varchar(5), CONVERT(time, ua.Logout)) AS logout,
+               SUM(CASE WHEN pa.idPalmServizio = 0 THEN 1 ELSE 0 END) AS cert,
+               SUM(CASE WHEN pa.idPalmServizio = 1 THEN 1 ELSE 0 END) AS parc,
+               SUM(CASE WHEN pa.idPalmServizio = 2 THEN 1 ELSE 0 END) AS racc,
+               SUM(CASE WHEN pa.idPalmServizio = 3 THEN 1 ELSE 0 END) AS raccAr,
+               SUM(CASE WHEN pa.idPalmServizio = 4 THEN 1 ELSE 0 END) AS ag,
+               SUM(CASE WHEN pa.idPalmServizio = 5 THEN 1 ELSE 0 END) AS notifiche,
+               COUNT(*) AS totale
+        FROM PALM_ATTIVITA pa (nolock)
+        INNER JOIN UTENTI u (nolock) ON u.codAppLogin = pa.DriverAssegnato
+        LEFT JOIN FILIALI f (nolock) ON f.IDFILIALE = u.IdFiliale
+        LEFT JOIN UTENTI_ATTIVITA ua (nolock)
+               ON ua.data = CONVERT(date, pa.DataEffettiva) AND ua.idUtente = u.IdUtente
+        WHERE pa.STATO = '02'
+          AND pa.DataEffettiva >= @dal AND pa.DataEffettiva < @al
+          AND (@tutte = 1 OR u.IdFiliale = @idFiliale)
+        GROUP BY pa.idPalmFineGita, pa.DriverAssegnato, u.Nome, u.IdFiliale, f.FILIALE,
+                 CONVERT(varchar(10), CONVERT(date, pa.DataEffettiva), 120), ua.Login, ua.Logout
+        ORDER BY 6 DESC, u.Nome",
+        new { dal = dDal, al = dAl, tutte = tutte == true ? 1 : 0, idFiliale },
+        commandTimeout: 90);
+    return Results.Ok(righe);
+}).RequireAuthorization();
+
+// Scontrino a video: righe raggruppate per distinta di reso/servizio/evento.
+// La stored legacy per la filiale 1 (hub) aggiunge il prodotto nell'evento.
+app.MapGet("/api/finegita/{id:int}/scontrino", async (int id) =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var righe = await cn.QueryAsync("ElencoFineGita",
+        new { IdPalmFineGita = id },
+        commandType: CommandType.StoredProcedure, commandTimeout: 90);
+    return Results.Ok(righe);
+}).RequireAuthorization();
+
+// Dettaglio atto per atto (barcode + destinatario) della gita.
+app.MapGet("/api/finegita/{id:int}/dettaglio", async (int id) =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var righe = await cn.QueryAsync("ElencoFineGitaDettaglio",
+        new { IdPalmFineGita = id },
+        commandType: CommandType.StoredProcedure, commandTimeout: 90);
+    return Results.Ok(righe);
+}).RequireAuthorization();
+
+// === Lavorato Driver (videata legacy Lavoratodriver) ===
+// Riepilogo mensile del lavorato per driver: la stored legacy getLavoratoByIdUtente
+// accetta piu' driver (CSV di IdUtente) e restituisce i conteggi per giorno.
+app.MapGet("/api/lavorato/driver", async (ClaimsPrincipal user) =>
+{
+    int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
+    await using var cn = new SqlConnection(ConnString());
+    var driver = await cn.QueryAsync(@"
+        SELECT u.IdUtente AS idUtente, u.Nome AS nome, u.codAppLogin AS codAppLogin
+        FROM UTENTI u
+        WHERE u.IdFiliale = @idFiliale AND ISNULL(u.codAppLogin, '') <> ''
+          AND u.DataFine IS NULL
+        ORDER BY u.Nome", new { idFiliale });
+    return Results.Ok(driver);
+}).RequireAuthorization();
+
+app.MapGet("/api/lavorato", async (string idUtenti, int mese, int anno) =>
+{
+    // un driver alla volta: la stored dichiara un CSV ma il ramo AG confronta il
+    // parametro con un int e col CSV esplode (il legacy la chiamava per singolo id)
+    if (!int.TryParse(idUtenti.Split(',')[0], out var idDriver) || mese is < 1 or > 12 || anno < 2000)
+        return Results.BadRequest(new { errore = "Driver, mese e anno sono obbligatori" });
+
+    await using var cn = new SqlConnection(ConnString());
+    var righe = await cn.QueryAsync("dbo.getLavoratoByIdUtente",
+        new { idMesso = idDriver.ToString(), mese, anno },
+        commandType: CommandType.StoredProcedure, commandTimeout: 180);
+    return Results.Ok(righe);
+}).RequireAuthorization();
+
+// === Il mio profilo (videata legacy Profilo) ===
+app.MapGet("/api/profilo", async (ClaimsPrincipal user) =>
+{
+    var idUtente = int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    await using var cn = new SqlConnection(ConnString());
+    var p = await cn.QueryFirstOrDefaultAsync(@"
+        SELECT u.IdUtente AS idUtente, u.Utente AS utente, u.Nome AS nome, u.Email AS email,
+               u.Telefono AS telefono, u.CodiceFiscale AS codiceFiscale, u.Matricola AS matricola,
+               u.codAppLogin AS codAppLogin, r.Ruolo AS ruolo, f.FILIALE AS filiale,
+               c.RagioneSociale AS cliente,
+               CONVERT(varchar(16), u.DataUltimoAccesso, 120) AS ultimoAccesso,
+               CONVERT(varchar(10), u.DataInizio, 120) AS attivoDal
+        FROM UTENTI u
+        LEFT JOIN RUOLI r ON r.IdRuolo = u.IdRuolo
+        LEFT JOIN FILIALI f ON f.IDFILIALE = u.IdFiliale
+        LEFT JOIN CLIENTI c ON c.IdCliente = u.IdCliente
+        WHERE u.IdUtente = @idUtente", new { idUtente });
+    return p is null ? Results.NotFound(new { errore = "Utente non trovato" }) : Results.Ok(p);
+}).RequireAuthorization();
+
+app.MapPost("/api/profilo/password", async (CambiaPasswordRequest req, ClaimsPrincipal user) =>
+{
+    var idUtente = int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    await using var cn = new SqlConnection(ConnString());
+    var esito = await cn.ExecuteScalarAsync<int>("dbo.AI_UTENTI_CambiaPassword",
+        new { IdUtente = idUtente, VecchiaPwd = req.VecchiaPwd ?? "", NuovaPwd = req.NuovaPwd ?? "" },
+        commandType: CommandType.StoredProcedure);
+    return esito switch
+    {
+        0 => Results.Ok(new { ok = true }),
+        1 => Results.BadRequest(new { errore = "La vecchia password non è corretta" }),
+        3 => Results.BadRequest(new { errore = "La nuova password deve avere almeno 6 caratteri" }),
+        _ => Results.BadRequest(new { errore = "Utente non abilitato al cambio password" })
+    };
+}).RequireAuthorization();
+
+// === Creazione Scatole e Ceste blu (videate legacy Scatola / Ceste) ===
+app.MapGet("/api/scatole/tipi", async () =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    // il tipo 0 e' la spedizione interna, che ha la sua pagina dedicata
+    var tipi = await cn.QueryAsync(@"
+        SELECT IdTipoScatola AS idTipoScatola, Descrizione AS descrizione, Prefisso AS prefisso
+        FROM SCATOLE_TIPI WHERE IdTipoScatola <> 0 ORDER BY IdTipoScatola");
+    return Results.Ok(tipi);
+}).RequireAuthorization();
+
+app.MapPost("/api/scatole", async (CreaScatolaRequest req, ClaimsPrincipal user) =>
+{
+    if (req.IdTipoScatola <= 0)
+        return Results.BadRequest(new { errore = "Tipo scatola non valido" });
+    var idUtente = int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
+
+    await using var cn = new SqlConnection(ConnString());
+    try
+    {
+        var r = await cn.QueryFirstOrDefaultAsync("dbo.SCATOLA_Crea", new
+        {
+            IdUtente = idUtente,
+            IdFiliale = idFiliale,
+            req.IdFilialeDestinazione,
+            NotaConsegna = req.NotaConsegna ?? "",
+            req.RiferimentoEsterno1,
+            req.IdTipoScatola
+        }, commandType: CommandType.StoredProcedure) as IDictionary<string, object>;
+
+        if (r is null)
+            return Results.Json(new { errore = "SCATOLA_Crea non ha restituito la scatola" },
+                statusCode: StatusCodes.Status500InternalServerError);
+        return Results.Ok(new
+        {
+            idSpedizione = r["IdSpedizione"],
+            barcode = r["Barcode"],
+            distinta = r["distinta"],
+            webReport = r["webreport"]
+        });
+    }
+    catch (SqlException ex)
+    {
+        return Results.Json(new { errore = ex.Message }, statusCode: StatusCodes.Status400BadRequest);
+    }
+}).RequireAuthorization();
+
+app.MapGet("/api/scatole/aperte", async (int idTipoScatola, ClaimsPrincipal user) =>
+{
+    int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
+    await using var cn = new SqlConnection(ConnString());
+    var righe = await cn.QueryAsync("dbo.ElencoScatoleAperte",
+        new { IdTipoScatola = idTipoScatola, IdFiliale = idFiliale },
+        commandType: CommandType.StoredProcedure, commandTimeout: 90);
+    return Results.Ok(righe);
+}).RequireAuthorization();
+
+// Monitor delle ceste blu: ultimo evento per cesta (fndCesteBlu; gli hub 1 e 20
+// vedono tutte le ceste, le altre filiali solo le proprie)
+app.MapGet("/api/ceste", async (ClaimsPrincipal user) =>
+{
+    int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
+    await using var cn = new SqlConnection(ConnString());
+    var righe = await cn.QueryAsync("dbo.fndCesteBlu", new { idFiliale },
+        commandType: CommandType.StoredProcedure, commandTimeout: 90);
+    return Results.Ok(righe);
+}).RequireAuthorization();
+
+// === Dipendenti di Filiale (videata legacy Dipendenti) ===
+// Vista HR in sola lettura dei dipendenti della filiale corrente.
+app.MapGet("/api/dipendenti-filiale", async (bool? ancheCessati, ClaimsPrincipal user) =>
+{
+    int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
+    await using var cn = new SqlConnection(ConnString());
+    var righe = await cn.QueryAsync(@"
+        SELECT u.IdUtente AS idUtente, u.Matricola AS matricola, u.Nome AS nome,
+               u.CodiceFiscale AS codiceFiscale, u.Mansione AS mansione, u.Livello AS livello,
+               u.TipoContratto AS tipoContratto, u.CCNL AS ccnl,
+               CONVERT(varchar(10), u.DataInizio, 120) AS assunto,
+               CONVERT(varchar(10), u.DataFineContratto, 120) AS fineContratto,
+               CONVERT(varchar(10), u.DataFine, 120) AS cessato,
+               u.Partime AS partime, u.OreSettimanali AS oreSettimanali,
+               u.Telefono AS telefono, u.Email AS email, u.codAppLogin AS codAppLogin
+        FROM UTENTI u
+        WHERE u.IdFiliale = @idFiliale
+          AND LEN(ISNULL(u.CodiceFiscale, '')) = 16
+          AND (@anche = 1 OR u.DataFine IS NULL)
+        ORDER BY u.Nome",
+        new { idFiliale, anche = ancheCessati == true ? 1 : 0 });
+    return Results.Ok(righe);
+}).RequireAuthorization();
+
+// === Punteggi driver (videata legacy Punteggi) ===
+// Dalla vista V_UtentiAttivita2024: una riga per driver/giorno con i conteggi
+// per prodotto e il punteggio; il riepilogo per driver lo fa il frontend.
+app.MapGet("/api/punteggi", async (string? dal, string? al, bool? tutte, ClaimsPrincipal user) =>
+{
+    var idFiliale = int.TryParse(user.FindFirstValue("idFiliale"), out var f) ? f : 0;
+    var dDal = DateTime.TryParse(dal, out var d1) ? d1.Date : DateTime.Today.AddDays(-15);
+    var dAl = (DateTime.TryParse(al, out var d2) ? d2.Date : DateTime.Today).AddDays(1);
+
+    await using var cn = new SqlConnection(ConnString());
+    var righe = await cn.QueryAsync(@"
+        SELECT CONVERT(varchar(10), Data, 120) AS data, Driver AS driver, Filiale AS filiale,
+               IDFILIALE AS idFiliale, Punteggio AS punteggio, KmPercorsi AS km,
+               Parcel_Poste AS parcelPoste, Parcel_Speedy AS parcelSpeedy,
+               Parcel_Hermes + Parcel_InPost + Parcel_iMile + Parcel_Folletto + Parcel_Gofo + Parcel_Altri AS parcelAltri,
+               RAC140_Cons AS rac140, RAC140_AvvSco AS rac140Avv,
+               M1_Cons AS m1, M1_Ass + M1_Sco AS m1Altro,
+               M2_Cons AS m2, M2_Ass + M2_Sco AS m2Altro, AG AS ag
+        FROM V_UtentiAttivita2024
+        WHERE Data >= @dal AND Data < @al
+          AND (@tutte = 1 OR IDFILIALE = @idFiliale)
+        ORDER BY Data DESC, Driver",
+        new { dal = dDal, al = dAl, tutte = tutte == true ? 1 : 0, idFiliale },
+        commandTimeout: 120);
+    return Results.Ok(righe);
+}).RequireAuthorization();
+
+// === Nuovo Pickup su richiesta (videata legacy Pickup, gruppo Ministero GG) ===
+// La stored legacy PICKUP_Genera crea la spedizione PCK# (barcode 96+9 cifre)
+// verso l'ufficio speditore MGG e restituisce il report della ricevuta.
+app.MapGet("/api/pickup/lookups", async (ClaimsPrincipal user) =>
+{
+    var idUtente = int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    if (!int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale))
+        return Results.BadRequest(new { errore = "Filiale non disponibile nel profilo" });
+    await using var cn = new SqlConnection(ConnString());
+    var uffici = await cn.QueryAsync(@"
+        SELECT IdMggMittenti AS idMittente, UFFICIOSPEDITORE AS ufficio, COMUNE AS comune, PROV AS prov
+        FROM MGG_Mittenti ORDER BY UFFICIOSPEDITORE");
+    var destinazioni = await cn.QueryAsync("dbo.ElencoFiliali",
+        new { idtipo = 10, IdFiliale = idFiliale, IdUtente = idUtente }, commandType: CommandType.StoredProcedure);
+    return Results.Ok(new { uffici, destinazioni });
+}).RequireAuthorization();
+
+app.MapPost("/api/pickup", async (CreaPickupRequest req, ClaimsPrincipal user) =>
+{
+    if (req.IdMittente <= 0 || req.IdFilialeDestinazione <= 0)
+        return Results.BadRequest(new { errore = "Ufficio e filiale di destinazione sono obbligatori" });
+    var idUtente = int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
+
+    await using var cn = new SqlConnection(ConnString());
+    try
+    {
+        var r = await cn.QueryFirstOrDefaultAsync("dbo.PICKUP_Genera", new
+        {
+            IdUtente = idUtente,
+            req.IdFilialeDestinazione,
+            req.IdMittente,
+            NotaConsegna = req.NotaConsegna ?? "",
+            DataPickup = req.DataPickup
+        }, commandType: CommandType.StoredProcedure) as IDictionary<string, object>;
+
+        if (r is null)
+            return Results.Json(new { errore = "PICKUP_Genera non ha restituito la spedizione" },
+                statusCode: StatusCodes.Status500InternalServerError);
+        return Results.Ok(new
+        {
+            idSpedizione = r["IdSpedizione"],
+            barcode = r["Barcode"],
+            webReport = r["WebReport"],
+            parametri = r["Parametri"]
+        });
+    }
+    catch (SqlException ex)
+    {
+        return Results.Json(new { errore = ex.Message }, statusCode: StatusCodes.Status400BadRequest);
+    }
+}).RequireAuthorization();
+
+app.MapGet("/api/pickup/elenco", async (ClaimsPrincipal user) =>
+{
+    int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
+    await using var cn = new SqlConnection(ConnString());
+    var righe = await cn.QueryAsync(@"
+        SELECT TOP 200 sa.IdSpedizione AS idSpedizione, sa.Barcode AS barcode,
+               CONVERT(varchar(16), sa.DataInserimento, 120) AS inserita,
+               sa.DestinazioneRagioneSociale AS ufficio, u.Nome AS utente,
+               sa.ContattoDestDescrizione AS nota, sa.Stato AS stato, st.Descrizione AS statoDescrizione
+        FROM SPED_ATTIVITA sa (nolock)
+        LEFT JOIN UTENTI u (nolock) ON u.IdUtente = sa.IdUtente
+        LEFT JOIN SPED_STATI st (nolock) ON st.Stato = sa.Stato
+        WHERE sa.nota2 = 'PCK#' AND sa.IdFiliale = @idFiliale
+        ORDER BY sa.IdSpedizione DESC", new { idFiliale }, commandTimeout: 90);
+    return Results.Ok(righe);
+}).RequireAuthorization();
+
 // === Dati storici Speedy (consegne NEXIVE ott 2019 - set 2020) ===
 // Le viste NEXIVE_consegne / NEXIVE_Servizio / NEXIVE_TipologieServizio sono
 // passanti verso Speedy.dbo.*; la Filiale e' un testo libero dell'export NEXIVE,
@@ -3399,8 +4185,13 @@ record VideoCodificaRigaRequest(
 record VideoCodificaChiudiRequest(int IdLotto);
 record CheckinRequest(List<int> IdLotti, bool CreaDistinta, DateTime? DataCheckin);
 record MenuDuplicaRequest(int IdMenuElemento, bool ConFoglie);
+record SpedInternaRequest(int IdFilialeDestinazione, string? NotaConsegna);
+record CambiaPasswordRequest(string? VecchiaPwd, string? NuovaPwd);
+record CreaScatolaRequest(int IdTipoScatola, int? IdFilialeDestinazione, string? NotaConsegna, string? RiferimentoEsterno1);
+record CreaPickupRequest(int IdMittente, int IdFilialeDestinazione, string? NotaConsegna, string? DataPickup);
 record GruppoMenuReq(int IdMenu);
 record GruppoUtenteReq(int IdUtente);
+record PresenzeDip(string Matricola, string Nome, double? Partime, Dictionary<int, string> Giorni);
 record SpedNuovaRequest(
     int IdCliente, int IdProdotto, int? IdMittente, string? TariffarioCodice, string? Barcode,
     bool RitiroRichiesto, DateTime? DataRitiro,
@@ -3414,7 +4205,7 @@ record SpedNuovaRequest(
     string? ContattoNome, string? ContattoTelefono, string? ContattoEmail,
     decimal? Importo, bool Contrassegno, decimal? ImportoContrassegno,
     decimal? PesoKg, string? Nota);
-record EseguiInterrogazioneRequest(int IdQuery, string? SWhere);
+record EseguiInterrogazioneRequest(int IdQuery, string? SWhere, Dictionary<string, string>? Valori);
 record CambiaFilialeRequest(int IdFiliale);
 record ColMeta(string Col, string Tipo, int MaxLen, bool Nullable, bool Identita, bool Pk);
 record GruppoReq(int IdGruppo);

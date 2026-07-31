@@ -87,16 +87,70 @@ UPDATE MENU_ELEMENTI SET Link = '/clienti' WHERE Videata = 'Clienti';
 UPDATE MENU_ELEMENTI SET Link = '/accettazione-file'
 WHERE Videata IN ('AccettazioneDaFile', 'AccettazioneDaFileFamiglia', 'Accettazione Da File Famiglia');
 
--- Accettazione da banco (senza/con CodFamiglia e varianti con uffici mittenti;
--- resta da migrare la sola "Accettazione Da Banco MGG")
+-- Accettazione da banco (senza/con CodFamiglia, varianti con uffici mittenti,
+-- Adexuffici che passa idCliente/idProdotto nei Parametri)
 UPDATE MENU_ELEMENTI SET Link = '/accettazione-banco'
 WHERE Videata IN ('AccettazioneDaBanco', 'AccettazioneDaBancoFamiglia',
-                  'AccettazioneDaBancoMittenti', 'Accettazione Da Banco Mittenti');
+                  'AccettazioneDaBancoMittenti', 'Accettazione Da Banco Mittenti',
+                  'Adexuffici');
 
--- VideoCodifica e Checkin lotti (restano da migrare le varianti
--- Videocodificamgg/Videocodificafamiglia/Adexvideocodifica e Checkin MGG/Checkindb)
-UPDATE MENU_ELEMENTI SET Link = '/videocodifica' WHERE Videata = 'Videocodifica';
-UPDATE MENU_ELEMENTI SET Link = '/checkin' WHERE Videata IN ('Checkin', 'Checkin Famiglia');
+-- Variante MGG (Ministero GG): il link dedicato preimposta cliente 5318,
+-- famiglia P e prodotto PICKUP MG (la videata legacy li fissava nel codice)
+UPDATE MENU_ELEMENTI SET Link = '/accettazione-banco-mgg'
+WHERE Videata = 'Accettazione Da Banco MGG';
+
+-- VideoCodifica: le varianti famiglia/Adex passano i filtri nei Parametri,
+-- la MGG ha il link dedicato che fissa il cliente 5318
+UPDATE MENU_ELEMENTI SET Link = '/videocodifica'
+WHERE Videata IN ('Videocodifica', 'Videocodificafamiglia', 'Adexvideocodifica');
+UPDATE MENU_ELEMENTI SET Link = '/videocodifica-mgg' WHERE Videata = 'Videocodificamgg';
+
+-- Checkin lotti: le varianti MGG/Checkindb passano idCliente nei Parametri
+UPDATE MENU_ELEMENTI SET Link = '/checkin'
+WHERE Videata IN ('Checkin', 'Checkin Famiglia', 'Checkin MGG', 'Checkindb');
 
 -- Gestione gruppi dedicata (sostituisce la config generica /config/gruppi)
 UPDATE MENU_ELEMENTI SET Link = '/gruppi' WHERE Videata = 'Gruppi';
+
+-- Presenze TeamSystem (pagina NUOVA): file mensile per lo studio paghe,
+-- voce nel gruppo "Gestione Dipendenti" (IdMenuElemento 1460)
+IF NOT EXISTS (SELECT 1 FROM MENU_ELEMENTI WHERE Link = '/presenze-ts')
+  INSERT INTO MENU_ELEMENTI (ParentID, [Text], Link, Sorting)
+  VALUES (1460, 'Presenze TeamSystem', '/presenze-ts', 32);
+
+-- Scontrini di Fine Gita (14 voci, una per filiale)
+UPDATE MENU_ELEMENTI SET Link = '/scontrini-gita' WHERE Videata = 'Scontrini Fine Gita';
+
+-- Spedizioni Interne (trasferimenti di materiale tra filiali, azione 1036)
+UPDATE MENU_ELEMENTI SET Link = '/sped-interna' WHERE Videata = 'Spedizioneinterna';
+
+-- Distinta Riepilogativa Giornaliera MGG (la variante Notifiche resta da migrare)
+UPDATE MENU_ELEMENTI SET Link = '/distinta-riepilogativa' WHERE Videata = 'Distinta Riepilogativa';
+
+-- Ricerche costruite sulle interrogazioni: Ricerca Multipla (IN su elenco
+-- barcode), Trova Distinte (form su query 1012), Ricerca con parametri (&[...])
+UPDATE MENU_ELEMENTI SET Link = '/ricerca-multipla'
+WHERE Videata IN ('RicercaMultipla', 'Ricerca Multipla');
+UPDATE MENU_ELEMENTI SET Link = '/trova-distinte'
+WHERE Videata IN ('TrovaDistinte', 'Trova Distinte');
+UPDATE MENU_ELEMENTI SET Link = '/ricerca-params' WHERE Videata = 'Ricercaparams';
+
+-- Pagine residue (senza la famiglia Giri, da migrare a parte)
+UPDATE MENU_ELEMENTI SET Link = '/lavorato-driver' WHERE Videata = 'Lavoratodriver';
+UPDATE MENU_ELEMENTI SET Link = '/profilo' WHERE Videata = 'Profilo';
+UPDATE MENU_ELEMENTI SET Link = '/scatole' WHERE Videata = 'Scatola';
+UPDATE MENU_ELEMENTI SET Link = '/ceste' WHERE Videata = 'Ceste';
+UPDATE MENU_ELEMENTI SET Link = '/dipendenti-filiale' WHERE Videata = 'Dipendenti';
+UPDATE MENU_ELEMENTI SET Link = '/punteggi' WHERE Videata = 'Punteggi';
+UPDATE MENU_ELEMENTI SET Link = '/pickup' WHERE Videata = 'Pickup';
+
+-- Manutenzioni/Sinistri mezzi: config generica su MEZZI_NOTE / MEZZI_SINISTRI
+UPDATE MENU_ELEMENTI SET Link = '/config/manutenzioni' WHERE Videata = 'Manutenzioni';
+UPDATE MENU_ELEMENTI SET Link = '/config/sinistri' WHERE Videata = 'Sinistri';
+
+-- Tracciato file (menu di test): stesso editor della config tracciati
+UPDATE MENU_ELEMENTI SET Link = '/config/tracciati' WHERE Videata = 'Tracciatofile';
+
+-- Ricerca Barcode Clienti Lite: stesso tracking (il claim idCliente
+-- dell'utente limita gia' i risultati alle sue spedizioni)
+UPDATE MENU_ELEMENTI SET Link = '/tracking' WHERE Videata = 'Ricerca Barcode Clienti Lite';

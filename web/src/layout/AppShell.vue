@@ -37,7 +37,21 @@ import AccettazioneFileView from '../views/AccettazioneFileView.vue'
 import AccettazioneBancoView from '../views/AccettazioneBancoView.vue'
 import VideoCodificaView from '../views/VideoCodificaView.vue'
 import CheckinLottiView from '../views/CheckinLottiView.vue'
+import ScontriniGitaView from '../views/ScontriniGitaView.vue'
+import SpedizioniInterneView from '../views/SpedizioniInterneView.vue'
+import DistintaRiepilogativaView from '../views/DistintaRiepilogativaView.vue'
+import RicercaMultiplaView from '../views/RicercaMultiplaView.vue'
+import RicercaParamsView from '../views/RicercaParamsView.vue'
+import TrovaDistinteView from '../views/TrovaDistinteView.vue'
+import LavoratoDriverView from '../views/LavoratoDriverView.vue'
+import ProfiloView from '../views/ProfiloView.vue'
+import ScatoleView from '../views/ScatoleView.vue'
+import CesteView from '../views/CesteView.vue'
+import DipendentiFilialeView from '../views/DipendentiFilialeView.vue'
+import PunteggiView from '../views/PunteggiView.vue'
+import PickupView from '../views/PickupView.vue'
 import GruppiView from '../views/GruppiView.vue'
+import PresenzeTsView from '../views/PresenzeTsView.vue'
 import ClientiView from '../views/ClientiView.vue'
 
 const auth = useAuthStore()
@@ -277,6 +291,65 @@ const chiavePagina = computed(() =>
         <CheckinLottiView
           v-else-if="nav.corrente.tipo === 'checkin'"
           :key="chiavePagina"
+          :parametri="nav.corrente.parametri"
+        />
+        <ScontriniGitaView
+          v-else-if="nav.corrente.tipo === 'scontrini-gita'"
+          :key="chiavePagina"
+        />
+        <SpedizioniInterneView
+          v-else-if="nav.corrente.tipo === 'sped-interna'"
+          :key="chiavePagina"
+        />
+        <DistintaRiepilogativaView
+          v-else-if="nav.corrente.tipo === 'distinta-riepilogativa'"
+          :key="chiavePagina"
+        />
+        <RicercaMultiplaView
+          v-else-if="nav.corrente.tipo === 'ricerca-multipla'"
+          :key="chiavePagina"
+          :id-query="nav.corrente.idQuery"
+          :s-where="nav.corrente.sWhere"
+        />
+        <RicercaParamsView
+          v-else-if="nav.corrente.tipo === 'ricerca-params'"
+          :key="chiavePagina"
+          :id-query="nav.corrente.idQuery"
+          :s-where="nav.corrente.sWhere"
+        />
+        <TrovaDistinteView
+          v-else-if="nav.corrente.tipo === 'trova-distinte'"
+          :key="chiavePagina"
+          :id-query="nav.corrente.idQuery"
+          :s-where="nav.corrente.sWhere"
+        />
+        <LavoratoDriverView
+          v-else-if="nav.corrente.tipo === 'lavorato-driver'"
+          :key="chiavePagina"
+        />
+        <ProfiloView
+          v-else-if="nav.corrente.tipo === 'profilo'"
+          :key="chiavePagina"
+        />
+        <ScatoleView
+          v-else-if="nav.corrente.tipo === 'scatole'"
+          :key="chiavePagina"
+        />
+        <CesteView
+          v-else-if="nav.corrente.tipo === 'ceste'"
+          :key="chiavePagina"
+        />
+        <DipendentiFilialeView
+          v-else-if="nav.corrente.tipo === 'dipendenti-filiale'"
+          :key="chiavePagina"
+        />
+        <PunteggiView
+          v-else-if="nav.corrente.tipo === 'punteggi'"
+          :key="chiavePagina"
+        />
+        <PickupView
+          v-else-if="nav.corrente.tipo === 'pickup'"
+          :key="chiavePagina"
         />
         <ClientiView
           v-else-if="nav.corrente.tipo === 'clienti'"
@@ -284,6 +357,10 @@ const chiavePagina = computed(() =>
         />
         <GruppiView
           v-else-if="nav.corrente.tipo === 'gruppi'"
+          :key="chiavePagina"
+        />
+        <PresenzeTsView
+          v-else-if="nav.corrente.tipo === 'presenze-ts'"
           :key="chiavePagina"
         />
         <PlaceholderView

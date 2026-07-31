@@ -11,17 +11,23 @@ export const CONFIG_TABELLE = {
   Filiali: { key: 'filiali', titolo: 'Filiali' },
   // 'Clienti' non e' piu' qui: ha la pagina dedicata (vedi isVideataClienti)
   'FILE TRACCIATO': { key: 'tracciati', titolo: 'File tracciato' },
+  // videata gemella usata nei menu di test: stesso editor dei tracciati
+  Tracciatofile: { key: 'tracciati', titolo: 'File tracciato' },
   Fornitori: { key: 'fornitori', titolo: 'Fornitori' },
   Lista: { key: 'lista', titolo: 'Lista valori' },
   Mittenti: { key: 'mittenti', titolo: 'Mittenti' },
-  Stati: { key: 'stati', titolo: 'Stati' }
+  Stati: { key: 'stati', titolo: 'Stati' },
+  // gestione mezzi: manutenzioni (MEZZI_NOTE) e sinistri (MEZZI_SINISTRI)
+  Manutenzioni: { key: 'manutenzioni', titolo: 'Manutenzioni mezzi' },
+  Sinistri: { key: 'sinistri', titolo: 'Sinistri mezzi' }
 }
 
 const TITOLI = {
   coperture: 'Coperture', prodotti: 'Prodotti', listini: 'Listini', processi: 'Processi',
   gruppi: 'Gruppi', aziende: 'Aziende', filiali: 'Filiali',
   clienti: 'Clienti', tracciati: 'File tracciato', fornitori: 'Fornitori',
-  lista: 'Lista valori', mittenti: 'Mittenti', stati: 'Stati'
+  lista: 'Lista valori', mittenti: 'Mittenti', stati: 'Stati',
+  manutenzioni: 'Manutenzioni mezzi', sinistri: 'Sinistri mezzi'
 }
 
 export function configDaVideata(videata) {
@@ -42,9 +48,11 @@ export function isVideataAzioniOld(videata) {
   return videata === 'Azioni'
 }
 
-// videata legacy del tracking spedizioni (voci "Ricerca/Tracking Barcode")
+// videata legacy del tracking spedizioni (voci "Ricerca/Tracking Barcode");
+// la variante "Clienti Lite" e' lo stesso tracking: il filtro sul cliente
+// arriva dal claim idCliente dell'utente collegato
 export function isVideataTracking(videata) {
-  return videata === 'Ricerca Barcode'
+  return ['Ricerca Barcode', 'Ricerca Barcode Clienti Lite'].includes(videata)
 }
 
 // videata legacy dei contatori giornalieri di filiale ("Attivita Filiali")
@@ -88,20 +96,85 @@ export function isVideataAccettazioneFile(videata) {
 }
 
 // videate legacy "Accettazione da Banco" (senza e con parametro CodFamiglia;
-// le varianti Mittenti passano IdCliente nei parametri)
+// le varianti Mittenti/Adexuffici passano IdCliente nei parametri)
 export function isVideataAccettazioneBanco(videata) {
   return ['AccettazioneDaBanco', 'AccettazioneDaBancoFamiglia',
-    'AccettazioneDaBancoMittenti', 'Accettazione Da Banco Mittenti'].includes(videata)
+    'AccettazioneDaBancoMittenti', 'Accettazione Da Banco Mittenti', 'Adexuffici'].includes(videata)
 }
 
-// videata legacy "Videocodifica" (correzione dei lotti da file)
+// variante MGG (Ministero GG, cliente 5318): stessa pagina banco con
+// cliente/famiglia/prodotto PICKUP MG preimpostati (la videata legacy li fissava nel codice)
+export const PARAMETRI_BANCO_MGG = 'IdCliente=5318|CodFamiglia="P"|IdProdotto=69'
+export function isVideataAccettazioneBancoMgg(videata) {
+  return videata === 'Accettazione Da Banco MGG'
+}
+
+// videate legacy "Videocodifica" (correzione dei lotti da file); la variante
+// famiglia passa i filtri in sWhere, la Adex il cliente 5389, la MGG fissa il 5318
 export function isVideataVideoCodifica(videata) {
-  return videata === 'Videocodifica'
+  return ['Videocodifica', 'Videocodificafamiglia', 'Adexvideocodifica'].includes(videata)
+}
+export const PARAMETRI_VIDEOCODIFICA_MGG = 'IdCliente=5318'
+export function isVideataVideoCodificaMgg(videata) {
+  return videata === 'Videocodificamgg'
 }
 
-// videate legacy "Checkin" (accettazione dei lotti in filiale)
+// videate legacy "Checkin" (accettazione dei lotti in filiale); le varianti
+// MGG/Checkindb passano idCliente nei parametri
 export function isVideataCheckin(videata) {
-  return ['Checkin', 'Checkin Famiglia'].includes(videata)
+  return ['Checkin', 'Checkin Famiglia', 'Checkin MGG', 'Checkindb'].includes(videata)
+}
+
+// videate legacy di ricerca costruite sulle interrogazioni: "Ricerca Multipla"
+// (IN su un elenco di barcode), "Trova Distinte" (form di ricerca sulla 1012),
+// "Ricercaparams" (form dai segnaposto &[...] della query)
+export function isVideataRicercaMultipla(videata) {
+  return ['RicercaMultipla', 'Ricerca Multipla'].includes(videata)
+}
+export function isVideataTrovaDistinte(videata) {
+  return ['TrovaDistinte', 'Trova Distinte'].includes(videata)
+}
+export function isVideataRicercaParams(videata) {
+  return videata === 'Ricercaparams'
+}
+
+// videata legacy "Scontrini Fine Gita" (riepilogo gite driver + cedolini)
+export function isVideataScontriniGita(videata) {
+  return videata === 'Scontrini Fine Gita'
+}
+
+// videata legacy "Spedizioneinterna" (trasferimenti di materiale tra filiali)
+export function isVideataSpedInterna(videata) {
+  return videata === 'Spedizioneinterna'
+}
+
+// videate legacy delle pagine residue migrate a pagina dedicata
+export function isVideataLavoratoDriver(videata) {
+  return videata === 'Lavoratodriver'
+}
+export function isVideataProfilo(videata) {
+  return videata === 'Profilo'
+}
+export function isVideataScatole(videata) {
+  return videata === 'Scatola'
+}
+export function isVideataCeste(videata) {
+  return videata === 'Ceste'
+}
+export function isVideataDipendentiFiliale(videata) {
+  return videata === 'Dipendenti'
+}
+export function isVideataPunteggi(videata) {
+  return videata === 'Punteggi'
+}
+export function isVideataPickup(videata) {
+  return videata === 'Pickup'
+}
+
+// videata legacy "Distinta Riepilogativa" (modello ministeriale MGG; la variante
+// "Distinta Riepilogativa Notifiche" resta da migrare)
+export function isVideataDistintaRiepilogativa(videata) {
+  return videata === 'Distinta Riepilogativa'
 }
 
 // videata legacy "Clienti": gestione dedicata (anagrafica + condizioni + listini)
@@ -138,8 +211,32 @@ export function navDaVideata(videata, parametri = '') {
   if (isVideataSpedNuova(v)) return { tipo: 'sped-nuova' }
   if (isVideataAccettazioneFile(v)) return { tipo: 'accettazione-file', parametri: parametri ?? '' }
   if (isVideataAccettazioneBanco(v)) return { tipo: 'accettazione-banco', parametri: parametri ?? '' }
+  if (isVideataAccettazioneBancoMgg(v)) return { tipo: 'accettazione-banco', parametri: parametri || PARAMETRI_BANCO_MGG }
   if (isVideataVideoCodifica(v)) return { tipo: 'videocodifica', parametri: parametri ?? '' }
-  if (isVideataCheckin(v)) return { tipo: 'checkin' }
+  if (isVideataVideoCodificaMgg(v)) return { tipo: 'videocodifica', parametri: parametri || PARAMETRI_VIDEOCODIFICA_MGG }
+  if (isVideataCheckin(v)) return { tipo: 'checkin', parametri: parametri ?? '' }
+  if (isVideataRicercaMultipla(v)) {
+    const { idQuery, sWhere } = parseParametriMenu(parametri)
+    return { tipo: 'ricerca-multipla', idQuery, sWhere }
+  }
+  if (isVideataTrovaDistinte(v)) {
+    const { idQuery, sWhere } = parseParametriMenu(parametri)
+    return { tipo: 'trova-distinte', idQuery: idQuery ?? 1012, sWhere }
+  }
+  if (isVideataRicercaParams(v)) {
+    const { idQuery, sWhere } = parseParametriMenu(parametri)
+    return { tipo: 'ricerca-params', idQuery, sWhere }
+  }
+  if (isVideataScontriniGita(v)) return { tipo: 'scontrini-gita' }
+  if (isVideataSpedInterna(v)) return { tipo: 'sped-interna' }
+  if (isVideataDistintaRiepilogativa(v)) return { tipo: 'distinta-riepilogativa' }
+  if (isVideataLavoratoDriver(v)) return { tipo: 'lavorato-driver' }
+  if (isVideataProfilo(v)) return { tipo: 'profilo' }
+  if (isVideataScatole(v)) return { tipo: 'scatole' }
+  if (isVideataCeste(v)) return { tipo: 'ceste' }
+  if (isVideataDipendentiFiliale(v)) return { tipo: 'dipendenti-filiale' }
+  if (isVideataPunteggi(v)) return { tipo: 'punteggi' }
+  if (isVideataPickup(v)) return { tipo: 'pickup' }
   if (isVideataClienti(v)) return { tipo: 'clienti' }
   if (isVideataGruppi(v)) return { tipo: 'gruppi' }
   // videata non ancora migrata: placeholder
@@ -167,18 +264,43 @@ export function navDaLink(voce) {
   if (link === '/esiti') return { tipo: 'esiti', parametri: voce.Parametri ?? '' }
   if (link === '/giri-mappa') return { tipo: 'giri-mappa' }
   if (link === '/export-hr') return { tipo: 'export-hr' }
+  if (link === '/presenze-ts') return { tipo: 'presenze-ts' }
   if (link === '/unilav') return { tipo: 'unilav' }
   if (link === '/storici') return { tipo: 'storici' }
   if (link === '/sped-nuova') return { tipo: 'sped-nuova' }
   if (link === '/accettazione-file') return { tipo: 'accettazione-file', parametri: voce.Parametri ?? '' }
   if (link === '/accettazione-banco') return { tipo: 'accettazione-banco', parametri: voce.Parametri ?? '' }
+  if (link === '/accettazione-banco-mgg') return { tipo: 'accettazione-banco', parametri: voce.Parametri || PARAMETRI_BANCO_MGG }
   if (link === '/videocodifica') return { tipo: 'videocodifica', parametri: voce.Parametri ?? '' }
-  if (link === '/checkin') return { tipo: 'checkin' }
+  if (link === '/videocodifica-mgg') return { tipo: 'videocodifica', parametri: voce.Parametri || PARAMETRI_VIDEOCODIFICA_MGG }
+  if (link === '/checkin') return { tipo: 'checkin', parametri: voce.Parametri ?? '' }
+  if (link === '/scontrini-gita') return { tipo: 'scontrini-gita' }
+  if (link === '/sped-interna') return { tipo: 'sped-interna' }
+  if (link === '/distinta-riepilogativa') return { tipo: 'distinta-riepilogativa' }
+  if (link === '/lavorato-driver') return { tipo: 'lavorato-driver' }
+  if (link === '/profilo') return { tipo: 'profilo' }
+  if (link === '/scatole') return { tipo: 'scatole' }
+  if (link === '/ceste') return { tipo: 'ceste' }
+  if (link === '/dipendenti-filiale') return { tipo: 'dipendenti-filiale' }
+  if (link === '/punteggi') return { tipo: 'punteggi' }
+  if (link === '/pickup') return { tipo: 'pickup' }
   if (link === '/clienti') return { tipo: 'clienti' }
   if (link === '/gruppi') return { tipo: 'gruppi' }
   if (link === '/interrogazioni') {
     const { idQuery, sWhere } = parseParametriMenu(voce.Parametri)
     return { tipo: 'interrogazioni', idQuery, sWhere }
+  }
+  if (link === '/ricerca-multipla') {
+    const { idQuery, sWhere } = parseParametriMenu(voce.Parametri)
+    return { tipo: 'ricerca-multipla', idQuery, sWhere }
+  }
+  if (link === '/trova-distinte') {
+    const { idQuery, sWhere } = parseParametriMenu(voce.Parametri)
+    return { tipo: 'trova-distinte', idQuery: idQuery ?? 1012, sWhere }
+  }
+  if (link === '/ricerca-params') {
+    const { idQuery, sWhere } = parseParametriMenu(voce.Parametri)
+    return { tipo: 'ricerca-params', idQuery, sWhere }
   }
   if (link.startsWith('/config/')) {
     const key = link.slice('/config/'.length)

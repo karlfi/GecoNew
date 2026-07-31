@@ -2,7 +2,6 @@
 import { ref, computed, onMounted } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import api from '../api'
-import { parseParametriComando } from '../lib/parametri'
 import Button from 'primevue/button'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
@@ -18,8 +17,12 @@ import Column from 'primevue/column'
 // e marca DataVideoCodifica (da li' il lotto passa al Checkin).
 
 const props = defineProps({ parametri: { type: String, default: '' } })
-const codFamigliaParam = (parseParametriComando(props.parametri).CodFamiglia ?? '')
-  .replace(/^"|"$/g, '').trim()
+// filtri estratti con regex direttamente dai Parametri della voce: il legacy li
+// scrive sia come coppie (CodFamiglia="N") sia annidati in sWhere="CodFamiglia='N'
+// and IdProdotto=78", con maiuscole/minuscole alternate
+const codFamigliaParam = (/CodFamiglia\s*=\s*["']*([A-Za-z0-9]+)/i.exec(props.parametri)?.[1] ?? '').trim()
+const idClienteParam = parseInt(/IdCliente\s*=\s*["']*(\d+)/i.exec(props.parametri)?.[1], 10) || null
+const idProdottoParam = parseInt(/IdProdotto\s*=\s*["']*(\d+)/i.exec(props.parametri)?.[1], 10) || null
 
 const toast = useToast()
 const errore = ref('')
@@ -38,7 +41,12 @@ async function caricaLotti() {
   caricamento.value = true
   try {
     const { data } = await api.get('/videocodifica/lotti', {
-      params: { tutte: tutteFiliali.value || undefined, codFamiglia: codFamigliaParam || undefined }
+      params: {
+        tutte: tutteFiliali.value || undefined, codFamiglia: codFamigliaParam || undefined,
+        idCliente: idClienteParam || undefined, idProdotto: idProdottoParam || undefined,
+        // i lotti da banco del cliente (es. MGG) hanno gia' DataCarico valorizzata
+        conCarico: idClienteParam ? true : undefined
+      }
     })
     lotti.value = data
   } catch (e) {

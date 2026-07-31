@@ -2710,3 +2710,41 @@ GRANT EXECUTE ON dbo.AI_FATT_LISTINI_Del TO claude;
 -- Gestione clienti dedicata (sostituisce la config generica /config/clienti)
 UPDATE MENU_ELEMENTI SET Link = '/clienti' WHERE Videata = 'Clienti';
 GO
+
+-- =============================================================
+-- SCONTRINI DI FINE GITA (pagina /scontrini-gita)
+-- Pagina in sola lettura: l'elenco gite e' una SELECT diretta (stessa query
+-- dell'interrogazione 1026), lo scontrino usa le stored legacy.
+-- =============================================================
+GRANT EXECUTE ON dbo.ElencoFineGita TO claude;
+GRANT EXECUTE ON dbo.ElencoFineGitaDettaglio TO claude;
+GO
+
+-- =============================================================
+-- SPEDIZIONI INTERNE (pagina /sped-interna) e DISTINTA RIEPILOGATIVA
+-- La creazione usa la stored legacy SPED_INTERNA; l'elenco e la
+-- riepilogativa MGG sono SELECT in sola lettura.
+-- =============================================================
+GRANT EXECUTE ON dbo.SPED_INTERNA TO claude;
+GO
+
+-- =============================================================
+-- PAGINE RESIDUE: Lavorato Driver, Profilo, Scatole, Ceste,
+-- Manutenzioni/Sinistri mezzi (config generica), Punteggi, Pickup MGG
+-- =============================================================
+-- Upsert per la config generica dei mezzi (vedi AI_MEZZI_NOTE_Save.sql
+-- e AI_MEZZI_SINISTRI_Save.sql per il corpo completo)
+GRANT EXECUTE ON dbo.AI_MEZZI_NOTE_Save TO claude;
+GRANT EXECUTE ON dbo.AI_MEZZI_SINISTRI_Save TO claude;
+-- Stored legacy riusate in sola esecuzione
+GRANT EXECUTE ON dbo.getLavoratoByIdUtente TO claude;
+GRANT EXECUTE ON dbo.SCATOLA_Crea TO claude;
+GRANT EXECUTE ON dbo.ElencoScatoleAperte TO claude;
+GRANT EXECUTE ON dbo.fndCesteBlu TO claude;
+GRANT EXECUTE ON dbo.PICKUP_Genera TO claude;
+GRANT EXECUTE ON dbo.UTENTI_Manutenzione TO claude;
+GO
+
+-- Cambio password dal profilo (corpo completo in AI_UTENTI_CambiaPassword.sql)
+GRANT EXECUTE ON dbo.AI_UTENTI_CambiaPassword TO claude;
+GO
