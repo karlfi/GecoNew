@@ -2226,6 +2226,15 @@ app.MapGet("/api/hr/anagrafica", async (HttpRequest req) =>
 // Il PDF "Comunicazione Obbligatoria" ha campi "Etichetta: valore"; il parsing
 // affetta il testo sulle etichette note. Il client mostra il confronto e su
 // conferma chiama /applica (SP AI_UTENTI_Unilav_Applica, aggiornamento selettivo).
+//
+// Dalla stessa pagina si caricano tutti e quattro i modelli UNILAV; il tipo si
+// riconosce dal tracciato (tipoMovimento) o dalla riga "Modello:" del PDF, e da
+// quello dipende la sezione dei dati rapporto e cosa si propone di aggiornare:
+//   Inizio (AL)        -> assunzione: anagrafica + rapporto
+//   Proroga (PL)       -> nuova scadenza: DataFineContratto e DataFine
+//   Trasformazione (TL)-> nuovo contratto/orario/sede; se diventa a tempo
+//                         indeterminato le date di fine si svuotano
+//   Cessazione (CL)    -> DataFine = data di cessazione
 
 app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
 {
@@ -2272,6 +2281,7 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
     Dictionary<string, string?>? estratti = null;
     var fonte = "testo del PDF";
     string? belfioreDom = null;
+    var tipo = "assunzione";   // assunzione | proroga | trasformazione | cessazione
     if (!string.IsNullOrWhiteSpace(tracciatoJson))
     {
         try
@@ -2290,6 +2300,21 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
                     _ => null
                 };
             }
+            // i dati del rapporto stanno in una sezione diversa per ogni modello
+            tipo = (J("tipoMovimento") ?? "").ToUpperInvariant() switch
+            {
+                "PL" => "proroga",
+                "TL" => "trasformazione",
+                "CL" => "cessazione",
+                _ => "assunzione"
+            };
+            var sez = tipo switch
+            {
+                "proroga" => "proroga",
+                "trasformazione" => "trasformazione",
+                "cessazione" => "cessazione",
+                _ => "inizioRapporto"
+            };
             estratti = new()
             {
                 ["CodiceFiscale"] = J("lavoratore", "codiceFiscale"),
@@ -2308,18 +2333,24 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
                 ["CapDomicilio"] = J("lavoratore", "cap"),
                 ["IndirizzoDomicilio"] = J("lavoratore", "indirizzo"),
                 ["TitoloStudio"] = J("lavoratore", "livelloIstruzioneDescrizione"),
-                ["DataInizioRapporto"] = J("inizioRapporto", "dataInizioDescrizione"),
-                ["DataFineRapporto"] = J("inizioRapporto", "dataFineDescrizione"),
-                ["TipoContratto"] = J("inizioRapporto", "tipologiaContrattualeDescrizione"),
-                ["TipoOrario"] = J("inizioRapporto", "tipoOrarioDescrizione"),
-                ["OreSettimanali"] = J("inizioRapporto", "oreSettimanaliMedie"),
-                ["Qualifica"] = J("inizioRapporto", "qualificaProfessionaleDescrizione"),
-                ["CCNL"] = J("inizioRapporto", "ccnlDescrizione"),
-                ["LivelloInquadramento"] = J("inizioRapporto", "livelloInquadramentoDescrizione"),
-                ["PatInail"] = J("inizioRapporto", "patINAIL"),
+                ["DataInizioRapporto"] = J(sez, "dataInizioDescrizione"),
+                ["DataFineRapporto"] = J(sez, "dataFineDescrizione"),
+                ["TipoContratto"] = J(sez, "tipologiaContrattualeDescrizione"),
+                ["TipoOrario"] = J(sez, "tipoOrarioDescrizione"),
+                ["OreSettimanali"] = J(sez, "oreSettimanaliMedie"),
+                ["Qualifica"] = J(sez, "qualificaProfessionaleDescrizione"),
+                ["CCNL"] = J(sez, "ccnlDescrizione"),
+                ["LivelloInquadramento"] = J(sez, "livelloInquadramentoDescrizione"),
+                ["PatInail"] = J(sez, "patINAIL"),
                 ["SedeLavoroComune"] = J("datoreLavoro", "comuneSedeLavoroDescrizione"),
                 ["UnilavCodice"] = J("codiceComunicazione"),
                 ["UnilavData"] = J("dataInvioDescrizione"),
+                // campi propri dei modelli diversi dall'assunzione
+                ["DataFineProroga"] = J("proroga", "dataFineProrogaDescrizione"),
+                ["DataTrasformazione"] = J("trasformazione", "dataTrasformazioneDescrizione"),
+                ["CausaTrasformazione"] = J("trasformazione", "codiceTrasformazioneDescrizione"),
+                ["DataCessazione"] = J("cessazione", "dataCessazioneDescrizione"),
+                ["MotivoCessazione"] = J("cessazione", "codiceCausaDescrizione"),
             };
             belfioreDom = J("lavoratore", "comune"); // Belfiore del comune di domicilio
             fonte = "tracciato.json incorporato";
@@ -2349,10 +2380,14 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
         "Tipo orario:", "Ore settimali medie:", "Ore settimanali medie:", "Socio lavoratore:",
         "Qualifica professionale:", "Assunzione Obbligatoria:", "Categoria Lavoratore:",
         "Contratto collettivo applicato:", "Livello di inquadramento:", "Retribuzione / Compenso:",
-        "Lavoro in agricoltura:", "Giornate lavorative previste:", "Tipo lavorazione:", "Data invio:", "Note:"
+        "Lavoro in agricoltura:", "Giornate lavorative previste:", "Tipo lavorazione:", "Data invio:", "Note:",
+        // etichette dei modelli proroga / trasformazione / cessazione
+        "Data fine proroga", "Data trasformazione:", "Data cessazione:", "Motivo cessazione:",
+        "Comune sede di lavoro precedente:", "Indirizzo sede di lavoro precedente:"
     };
     // titoli di sezione: non sono campi ma delimitano i valori che li precedono
-    var sezioni = new[] { "Datore di Lavoro", "Lavoratore", "Dati Rapporto", "Dati invio", "Inizio", "Pagina " };
+    var sezioni = new[] { "Datore di Lavoro", "Lavoratore", "Dati Rapporto", "Dati invio", "Inizio", "Pagina ",
+        "Dati Proroga", "Dati Trasformazione", "Dati Cessazione" };
     // posizioni di tutte le occorrenze di etichette e titoli di sezione
     var occ = new List<(int Pos, string Lab)>();
     foreach (var lab in etichette.Concat(sezioni))
@@ -2405,7 +2440,21 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
         ["SedeLavoroComune"] = Valore("Comune sede di lavoro:"),
         ["UnilavCodice"] = Valore("Codice comunicazione:"),
         ["UnilavData"] = Valore("Trasmessa il:"),
+        ["DataFineProroga"] = Valore("Data fine proroga"),
+        ["DataTrasformazione"] = Valore("Data trasformazione:"),
+        ["DataCessazione"] = Valore("Data cessazione:"),
+        ["MotivoCessazione"] = Valore("Motivo cessazione:"),
+        // la causa e' spezzata su due righe dalla tabella del PDF ("Causa ... trasformazione: ...")
+        ["CausaTrasformazione"] = System.Text.RegularExpressions.Regex.Match(
+            testo.Replace('\n', ' '), @"TRASFORMAZIONE\s+DA\s+.{3,60}?\s+A\s+TEMPO\s+\w+",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase).Value,
     };
+    // il modello e' scritto in testata: "Comunicazioni Obbligatorie/Cessazione"
+    var modello = Valore("Modello:").ToUpperInvariant();
+    tipo = modello.Contains("PROROGA") ? "proroga"
+        : modello.Contains("TRASFORMAZIONE") ? "trasformazione"
+        : modello.Contains("CESSAZIONE") ? "cessazione"
+        : "assunzione";
     }
 
     var cf = (estratti["CodiceFiscale"] ?? "").Trim().ToUpperInvariant();
@@ -2424,9 +2473,13 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
     if (mLiv.Success)
         livello = mLiv.Groups[1].Value + (mLiv.Groups[2].Value == "SENIOR" ? "S" : mLiv.Groups[2].Value == "JUNIOR" ? "J" : "");
     var qual = (estratti["Qualifica"] ?? "").ToUpperInvariant();
+    // la qualifica del PDF e' quella ISTAT ("Addetti allo smistamento e al recapito
+    // della posta"); in scheda la mansione e' un dato interno, spesso con la zona
+    // ("FI Bagno a Ripoli - DRIVER"). Quindi si mappa sulle mansioni note, e la
+    // descrizione ISTAT si propone solo per riempire una mansione ancora vuota.
     string? mansione = qual.Contains("FACCHIN") ? "FACCHINO"
         : qual.Contains("CONDUCENT") || qual.Contains("AUTIST") || qual.Contains("CORRIER") ? "DRIVER"
-        : estratti["Qualifica"] is { Length: > 0 } q ? (q.Length > 50 ? q[..50] : q) : null;
+        : null;
 
     // provincia del comune di domicilio: dal Belfiore (se il tracciato lo da') o dal nome
     await using var cn = new SqlConnection(ConnString());
@@ -2450,7 +2503,7 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
                u.IndirizzoRes, u.CapRes, u.ComuneRes, u.ProvRes, u.Livello, u.Mansione,
                u.Cittadinanza, u.LuogoNascita, u.TitoloStudio, u.TipoContratto,
                CONVERT(varchar(10), u.DataFineContratto, 120) AS DataFineContratto,
-               u.OreSettimanali, u.CCNL, u.SoggiornoTipo, u.SoggiornoNumero, u.SoggiornoMotivo,
+               u.OreSettimanali, u.Partime, u.CCNL, u.SoggiornoTipo, u.SoggiornoNumero, u.SoggiornoMotivo,
                CONVERT(varchar(10), u.SoggiornoScadenza, 120) AS SoggiornoScadenza,
                u.SoggiornoQuestura, u.UnilavCodice, u.IdFiliale, f.FILIALE AS Filiale
         FROM UTENTI u LEFT JOIN FILIALI f ON f.IDFILIALE = u.IdFiliale
@@ -2463,7 +2516,7 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
 
     // proposte di aggiornamento (campo tabella -> valore dal PDF), solo se diverse
     var proposte = new List<object>();
-    void Proponi(string campo, string etichetta, string? nuovo)
+    void Proponi(string campo, string etichetta, string? nuovo, string? testo = null, object? opzioni = null)
     {
         if (u0 is null || string.IsNullOrWhiteSpace(nuovo)) return;
         var attuale = Val(u0, campo)?.ToString()?.Trim() ?? "";
@@ -2474,23 +2527,34 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
             // in tabella le date girano come yyyy-MM-dd; dal PDF come dd/MM/yyyy
             if (Data(nuovoCmp) is DateTime dn) nuovoCmp = dn.ToString("yyyy-MM-dd");
         }
-        if (campo == "OreSettimanali"
+        if (campo is "OreSettimanali" or "Partime"
             && decimal.TryParse(attualeCmp.Replace(',', '.'), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var oa)
             && decimal.TryParse(nuovoCmp.Replace(',', '.'), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var on)
             && oa == on) return;
         if (string.Equals(attualeCmp, nuovoCmp, StringComparison.OrdinalIgnoreCase)) return;
-        proposte.Add(new { campo, etichetta, attuale, nuovo = nuovoCmp });
+        proposte.Add(new { campo, etichetta, attuale, nuovo = nuovoCmp, testo, opzioni, azzera = false });
     }
+    // svuotamento di una data gia' in scheda (es. contratto diventato indeterminato):
+    // ISNULL(NULL, campo) non potrebbe farlo, quindi la SP ha i flag @Azzera*
+    void ProponiAzzeramento(string campo, string etichetta, string motivo)
+    {
+        if (u0 is null) return;
+        var attuale = Val(u0, campo)?.ToString()?.Trim() ?? "";
+        if (attuale == "") return;
+        proposte.Add(new { campo, etichetta, attuale, nuovo = "", testo = motivo, opzioni = (object?)null, azzera = true });
+    }
+
     Proponi("Nome", "Cognome e nome", (cognome + " " + nome).Trim());
     Proponi("DataNascita", "Data di nascita", estratti["DataNascita"]);
     Proponi("DataInizio", "Inizio rapporto", estratti["DataInizioRapporto"]);
-    Proponi("DataFineContratto", "Fine prevista contratto", estratti["DataFineRapporto"]);
     Proponi("IndirizzoRes", "Indirizzo (domicilio)", estratti["IndirizzoDomicilio"]);
     Proponi("CapRes", "CAP", estratti["CapDomicilio"]);
     Proponi("ComuneRes", "Comune", estratti["ComuneDomicilio"]);
     Proponi("ProvRes", "Provincia", provDom);
     Proponi("Livello", "Livello", livello);
-    Proponi("Mansione", "Mansione", mansione);
+    var mansioneAttuale = u0 is null ? "" : Val(u0, "Mansione")?.ToString()?.Trim() ?? "";
+    var qualTroncata = estratti["Qualifica"] is { Length: > 0 } qd ? (qd.Length > 50 ? qd[..50] : qd) : null;
+    Proponi("Mansione", "Mansione", mansione ?? (mansioneAttuale == "" ? qualTroncata : null));
     Proponi("Cittadinanza", "Cittadinanza", estratti["Cittadinanza"]);
     Proponi("LuogoNascita", "Luogo di nascita", estratti["ComuneNascita"]);
     Proponi("TitoloStudio", "Titolo di studio", estratti["TitoloStudio"]);
@@ -2504,7 +2568,113 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
     Proponi("SoggiornoQuestura", "Questura", estratti["SoggiornoQuestura"]);
     Proponi("UnilavCodice", "Codice comunicazione", estratti["UnilavCodice"]);
 
-    return Results.Ok(new { fonte, estratti, utente = u0, altriAccount = utenti.Count - (u0 is null ? 0 : 1), proposte, avvisi });
+    // --- part time: in scheda e' la percentuale sulle 40 ore settimanali
+    // (0 = tempo pieno), il PDF da' il tipo orario e le ore medie ---
+    var tipoOrario = (estratti["TipoOrario"] ?? "").ToUpperInvariant();
+    if (tipoOrario.Contains("PIENO"))
+        Proponi("Partime", "Part time %", "0", "tempo pieno");
+    else if (tipoOrario.Contains("PARZIALE")
+        && decimal.TryParse((estratti["OreSettimanali"] ?? "").Replace(',', '.'),
+            System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var oreSet)
+        && oreSet > 0)
+    {
+        var perc = Math.Round(oreSet / 40m * 100m, 2);
+        Proponi("Partime", "Part time %",
+            perc.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture), $"{oreSet:0.#} ore su 40");
+    }
+
+    // --- sede di lavoro -> filiale: il comune non basta (piu' filiali per comune,
+    // e le sedi SDA hanno il comune solo nel nome), quindi si cercano le candidate
+    // e si propone solo se l'attuale non e' gia' coerente ---
+    var comuneSede = (estratti["SedeLavoroComune"] ?? "").Trim().ToUpperInvariant();
+    if (u0 is not null && comuneSede.Length > 2)
+    {
+        var candidate = (await cn.QueryAsync(@"
+            SELECT IDFILIALE, FILIALE FROM FILIALI
+            WHERE UPPER(LTRIM(RTRIM(ISNULL(Comune, '')))) = @c
+               OR UPPER(FILIALE) LIKE '%' + @c + '%'
+            ORDER BY FILIALE", new { c = comuneSede }))
+            .Select(f => new { valore = ((int)f.IDFILIALE).ToString(), etichetta = (string)f.FILIALE })
+            .ToList();
+        var idFilAttuale = Val(u0, "IdFiliale")?.ToString() ?? "";
+        if (candidate.Count == 0)
+            avvisi.Add($"Sede di lavoro '{estratti["SedeLavoroComune"]}': nessuna filiale corrispondente, controlla a mano");
+        else if (!candidate.Any(c => c.valore == idFilAttuale))
+        {
+            if (candidate.Count == 1)
+                Proponi("IdFiliale", "Filiale (sede di lavoro)", candidate[0].valore, candidate[0].etichetta);
+            else
+            {
+                // ambiguo: la riga esce con la tendina, senza valore preselezionato
+                proposte.Add(new
+                {
+                    campo = "IdFiliale",
+                    etichetta = "Filiale (sede di lavoro)",
+                    attuale = Val(u0, "Filiale")?.ToString() ?? "",
+                    nuovo = "",
+                    testo = $"{candidate.Count} filiali a {estratti["SedeLavoroComune"]}: scegli quella giusta",
+                    opzioni = candidate,
+                    azzera = false
+                });
+            }
+        }
+    }
+
+    // --- cosa comporta il modello sulle date del rapporto ---
+    string? causale = null;
+    switch (tipo)
+    {
+        case "proroga":
+            // la proroga sposta in avanti la scadenza: fine contratto e fine rapporto
+            causale = estratti["DataFineProroga"] is { Length: > 0 } dfp ? $"nuova scadenza {dfp}" : null;
+            Proponi("DataFineContratto", "Fine contratto (prorogata)", estratti["DataFineProroga"]);
+            Proponi("DataFine", "Fine rapporto (prorogata)", estratti["DataFineProroga"]);
+            if (string.IsNullOrWhiteSpace(estratti["DataFineProroga"]))
+                avvisi.Add("Proroga senza data di fine: controlla il PDF");
+            break;
+
+        case "cessazione":
+            causale = estratti["MotivoCessazione"];
+            Proponi("DataFine", "Fine rapporto (cessazione)", estratti["DataCessazione"]);
+            if (string.IsNullOrWhiteSpace(estratti["DataCessazione"]))
+                avvisi.Add("Cessazione senza data: controlla il PDF");
+            break;
+
+        case "trasformazione":
+            causale = estratti["CausaTrasformazione"];
+            // il contratto risultante e' quello nella sezione trasformazione: se e'
+            // a tempo indeterminato le date di fine non hanno piu' senso
+            if ((estratti["TipoContratto"] ?? "").ToUpperInvariant().Contains("INDETERMINATO"))
+            {
+                ProponiAzzeramento("DataFineContratto", "Fine contratto", "contratto a tempo indeterminato");
+                ProponiAzzeramento("DataFine", "Fine rapporto", "contratto a tempo indeterminato");
+            }
+            else
+            {
+                Proponi("DataFineContratto", "Fine contratto", estratti["DataFineRapporto"]);
+                Proponi("DataFine", "Fine rapporto", estratti["DataFineRapporto"]);
+            }
+            break;
+
+        default: // assunzione
+            Proponi("DataFineContratto", "Fine prevista contratto", estratti["DataFineRapporto"]);
+            Proponi("DataFine", "Fine rapporto", estratti["DataFineRapporto"]);
+            break;
+    }
+
+    var titoloTipo = tipo switch
+    {
+        "proroga" => "Proroga",
+        "trasformazione" => "Trasformazione",
+        "cessazione" => "Cessazione",
+        _ => "Assunzione"
+    };
+
+    return Results.Ok(new
+    {
+        fonte, tipo, titoloTipo, causale, estratti, utente = u0,
+        altriAccount = utenti.Count - (u0 is null ? 0 : 1), proposte, avvisi
+    });
 }).RequireAuthorization();
 
 app.MapPost("/api/hr/unilav/applica", async (UnilavApplicaRequest req) =>
@@ -2513,21 +2683,33 @@ app.MapPost("/api/hr/unilav/applica", async (UnilavApplicaRequest req) =>
         return Results.Json(new { errore = "Nessun campo da applicare" }, statusCode: 400);
     var ammessi = new[] { "Nome", "DataNascita", "DataInizio", "IndirizzoRes", "CapRes", "ComuneRes", "ProvRes",
         "Livello", "Mansione", "Cittadinanza", "LuogoNascita", "TitoloStudio", "TipoContratto", "DataFineContratto",
-        "OreSettimanali", "CCNL", "SoggiornoTipo", "SoggiornoNumero", "SoggiornoMotivo", "SoggiornoScadenza",
-        "SoggiornoQuestura", "UnilavCodice", "UnilavData" };
+        "DataFine", "OreSettimanali", "Partime", "IdFiliale", "CCNL", "SoggiornoTipo", "SoggiornoNumero",
+        "SoggiornoMotivo", "SoggiornoScadenza", "SoggiornoQuestura", "UnilavCodice", "UnilavData" };
     var par = new DynamicParameters();
     par.Add("IdUtente", req.IdUtente);
     foreach (var (k, v) in req.Valori)
     {
-        if (!ammessi.Contains(k, StringComparer.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(v)) continue;
-        if (k is "DataNascita" or "DataInizio" or "DataFineContratto" or "SoggiornoScadenza" or "UnilavData")
+        if (!ammessi.Contains(k, StringComparer.OrdinalIgnoreCase)) continue;
+        if (string.IsNullOrWhiteSpace(v))
+        {
+            // valore vuoto sulle date di fine = svuota il campo (trasformazione a
+            // tempo indeterminato); sugli altri campi non si fa nulla
+            if (k.Equals("DataFine", StringComparison.OrdinalIgnoreCase)) par.Add("AzzeraDataFine", true);
+            else if (k.Equals("DataFineContratto", StringComparison.OrdinalIgnoreCase)) par.Add("AzzeraDataFineContratto", true);
+            continue;
+        }
+        if (k is "DataNascita" or "DataInizio" or "DataFineContratto" or "DataFine" or "SoggiornoScadenza" or "UnilavData")
         {
             if (DateTime.TryParse(v, out var d)) par.Add(k, d);
         }
-        else if (k == "OreSettimanali")
+        else if (k is "OreSettimanali" or "Partime")
         {
             if (decimal.TryParse(v.Replace(',', '.'), System.Globalization.NumberStyles.Any,
-                System.Globalization.CultureInfo.InvariantCulture, out var ore)) par.Add(k, ore);
+                System.Globalization.CultureInfo.InvariantCulture, out var num)) par.Add(k, num);
+        }
+        else if (k == "IdFiliale")
+        {
+            if (int.TryParse(v, out var idf)) par.Add(k, idf);
         }
         else par.Add(k, v.Trim());
     }

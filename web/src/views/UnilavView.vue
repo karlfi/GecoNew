@@ -8,11 +8,16 @@ import Button from 'primevue/button'
 import Message from 'primevue/message'
 import Tag from 'primevue/tag'
 import Checkbox from 'primevue/checkbox'
+import Select from 'primevue/select'
 
 // Carica UNILAV: si trascina il PDF della Comunicazione Obbligatoria, il testo
 // viene estratto nel browser (pdfjs) e l'API lo scompone nei campi; la griglia
 // mostra il confronto con la scheda UTENTI e su conferma applica i campi scelti
 // (SP AI_UTENTI_Unilav_Applica, aggiornamento selettivo).
+//
+// Dalla stessa pagina passano tutti e quattro i modelli (assunzione, proroga,
+// trasformazione, cessazione): il tipo lo riconosce l'API dal tracciato del PDF
+// e cambia solo cosa viene proposto (le date di fine soprattutto).
 
 const toast = useToast()
 const errore = ref('')
@@ -21,6 +26,7 @@ const applicando = ref(false)
 const nomeFile = ref('')
 const dati = ref(null)      // risposta di /parse
 const selezione = ref({})   // campo -> bool
+const scelte = ref({})      // campo -> valore scelto a video (righe con tendina)
 const fileInput = ref(null)
 const trascina = ref(false)
 
@@ -77,8 +83,14 @@ async function caricaFile(file) {
     const { data } = await api.post('/hr/unilav/parse', { testo, pdfBase64 })
     dati.value = data
     const sel = {}
-    for (const p of data.proposte) sel[p.campo] = true
+    const sc = {}
+    for (const p of data.proposte) {
+      // le righe con la tendina (filiale ambigua) restano da scegliere: non le spunto
+      sel[p.campo] = !p.opzioni
+      if (p.opzioni) sc[p.campo] = null
+    }
     selezione.value = sel
+    scelte.value = sc
   } catch (e) {
     errore.value = e.response?.data?.errore ?? `Errore nella lettura del PDF: ${e.message}`
   } finally {
@@ -89,14 +101,17 @@ async function caricaFile(file) {
 function onFile(e) { caricaFile(e.target.files[0]); e.target.value = '' }
 function onDrop(e) { trascina.value = false; caricaFile(e.dataTransfer.files[0]) }
 
+// una riga con tendina conta solo se e' stata scelta una filiale
 const daApplicare = computed(() =>
-  (dati.value?.proposte ?? []).filter(p => selezione.value[p.campo]))
+  (dati.value?.proposte ?? []).filter(p =>
+    selezione.value[p.campo] && (!p.opzioni || scelte.value[p.campo])))
 
 async function applica() {
   applicando.value = true
   try {
     const valori = {}
-    for (const p of daApplicare.value) valori[p.campo] = p.nuovo
+    // stringa vuota = azzeramento voluto (la SP ha i flag @Azzera*)
+    for (const p of daApplicare.value) valori[p.campo] = p.opzioni ? scelte.value[p.campo] : p.nuovo
     // il codice comunicazione porta con se' anche la data di trasmissione
     if (valori.UnilavCodice && dati.value.estratti.UnilavData) {
       const m = dati.value.estratti.UnilavData.match(/(\d{2})\/(\d{2})\/(\d{4})/)
@@ -122,6 +137,9 @@ const ETICHETTE_ESTRATTI = [
   ['IndirizzoDomicilio', 'Domicilio'], ['CapDomicilio', 'CAP'], ['ComuneDomicilio', 'Comune'],
   ['TitoloStudio', 'Titolo di studio'],
   ['DataInizioRapporto', 'Inizio rapporto'], ['DataFineRapporto', 'Fine prevista'],
+  ['DataFineProroga', 'Fine proroga'], ['DataTrasformazione', 'Data trasformazione'],
+  ['CausaTrasformazione', 'Causa trasformazione'],
+  ['DataCessazione', 'Data cessazione'], ['MotivoCessazione', 'Motivo cessazione'],
   ['TipoContratto', 'Contratto'], ['TipoOrario', 'Orario'], ['OreSettimanali', 'Ore/sett.'],
   ['Qualifica', 'Qualifica'], ['LivelloInquadramento', 'Livello'], ['CCNL', 'CCNL'],
   ['SoggiornoTipo', 'Soggiorno'], ['SoggiornoNumero', 'N. titolo'], ['SoggiornoMotivo', 'Motivo'],
@@ -130,11 +148,19 @@ const ETICHETTE_ESTRATTI = [
 ]
 const estrattiVisibili = computed(() =>
   ETICHETTE_ESTRATTI.filter(([k]) => dati.value?.estratti?.[k]).map(([k, l]) => ({ etichetta: l, valore: dati.value.estratti[k] })))
+
+const SEVERITA_TIPO = {
+  assunzione: 'success', proroga: 'info', trasformazione: 'warn', cessazione: 'danger'
+}
+const ICONE_TIPO = {
+  assunzione: 'pi pi-user-plus', proroga: 'pi pi-calendar-plus',
+  trasformazione: 'pi pi-sync', cessazione: 'pi pi-user-minus'
+}
 </script>
 
 <template>
   <div class="pagina">
-    <h2 class="titolo">Carica UNILAV — assunzione da PDF</h2>
+    <h2 class="titolo">Carica UNILAV — assunzione, proroga, trasformazione, cessazione</h2>
     <Message v-if="errore" severity="error" :closable="false">{{ errore }}</Message>
 
     <div
@@ -150,6 +176,12 @@ const estrattiVisibili = computed(() =>
     </div>
 
     <template v-if="dati">
+      <div class="tipo-com">
+        <Tag :value="dati.titoloTipo" :severity="SEVERITA_TIPO[dati.tipo] ?? 'info'"
+          :icon="ICONE_TIPO[dati.tipo] ?? 'pi pi-file'" class="tag-tipo" />
+        <span v-if="dati.causale" class="causale">{{ dati.causale }}</span>
+      </div>
+
       <Message v-for="(a, i) in dati.avvisi" :key="i" severity="warn" :closable="false">{{ a }}</Message>
 
       <div v-if="dati.utente" class="scheda">
@@ -185,7 +217,17 @@ const estrattiVisibili = computed(() =>
               </template>
             </Column>
             <Column field="nuovo" header="Dal PDF">
-              <template #body="{ data }"><b>{{ data.nuovo }}</b></template>
+              <template #body="{ data }">
+                <!-- filiale ambigua: si sceglie a video; azzeramento: campo da svuotare -->
+                <Select v-if="data.opzioni" v-model="scelte[data.campo]" :options="data.opzioni"
+                  optionLabel="etichetta" optionValue="valore" filter size="small"
+                  placeholder="scegli la filiale…" class="sel-filiale" />
+                <span v-else-if="data.azzera" class="azzera">
+                  <i class="pi pi-eraser"></i> da svuotare
+                </span>
+                <b v-else>{{ data.campo === 'IdFiliale' ? data.testo : data.nuovo }}</b>
+                <small v-if="data.testo && data.campo !== 'IdFiliale'" class="nota-valore">({{ data.testo }})</small>
+              </template>
             </Column>
           </DataTable>
         </template>
@@ -213,7 +255,13 @@ const estrattiVisibili = computed(() =>
   cursor: pointer; color: var(--p-text-muted-color);
 }
 .dropzone.attiva { border-color: var(--p-primary-color); background: var(--p-highlight-background); }
+.tipo-com { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.tag-tipo { font-size: 0.95rem; padding: 0.3rem 0.7rem; }
+.causale { color: var(--p-text-muted-color); }
 .scheda { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.azzera { color: var(--p-orange-600); font-weight: 600; display: inline-flex; align-items: center; gap: 0.3rem; }
+.nota-valore { color: var(--p-text-muted-color); margin-left: 0.4rem; }
+.sel-filiale { min-width: 18rem; }
 .barra { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .vuoto { color: var(--p-text-muted-color); font-style: italic; }
 .estratti summary { cursor: pointer; color: var(--p-text-muted-color); }
