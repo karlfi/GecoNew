@@ -551,6 +551,36 @@ app.MapGet("/api/interrogazioni/{id:int}/ricerca-info", async (int id, ClaimsPri
 var httpReport = new HttpClient { Timeout = TimeSpan.FromSeconds(90) };
 string? reportServerCache = null;
 
+// Alcune stored legacy (RicercaBarcode, Tracking) restituiscono il link al PDF
+// gia' come URL completo del report server. Aperto cosi' dal browser non
+// funziona: il report server risponde solo dalla rete del server, non dai PC in
+// filiale. Qui l'URL viene riscritto sul proxy /api/report, che scarica il PDF
+// lato server; il link diretto non arriva mai al client.
+static string? LinkReportViaProxy(string? link)
+{
+    if (string.IsNullOrWhiteSpace(link)) return link;
+    var m = System.Text.RegularExpressions.Regex.Match(link,
+        @"^https?://[^/]+/result\?(?<query>.+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    if (!m.Success) return link;   // non e' un report: link a mappe, foto, ecc.
+
+    string? report = null;
+    var parametri = new List<string>();
+    foreach (var pezzo in m.Groups["query"].Value.Split('&', StringSplitOptions.RemoveEmptyEntries))
+    {
+        var i = pezzo.IndexOf('=');
+        if (i <= 0) continue;
+        var chiave = pezzo[..i];
+        var valore = pezzo[(i + 1)..];
+        if (chiave.Equals("report", StringComparison.OrdinalIgnoreCase)) report = valore;
+        else if (chiave.Equals("format", StringComparison.OrdinalIgnoreCase)) continue; // lo mette il proxy
+        else if (System.Text.RegularExpressions.Regex.IsMatch($"{chiave}={valore}", @"^\w+=[^&#|]*$"))
+            parametri.Add($"{chiave}={valore}");
+    }
+    if (report is null) return link;
+    var src = string.Join("|", new[] { report }.Concat(parametri));
+    return "/api/report?src=" + Uri.EscapeDataString(src);
+}
+
 app.MapGet("/api/report", async (string? src) =>
 {
     if (string.IsNullOrWhiteSpace(src))
@@ -1038,7 +1068,7 @@ app.MapGet("/api/tracking", async (string? barcode, ClaimsPrincipal user) =>
                 data = m.TryGetValue("Data", out var d) ? d : null,
                 elemento = m.TryGetValue("Elemento", out var e) ? e as string : null,
                 valore = m.TryGetValue("Valore", out var v) ? v as string : null,
-                link = m.TryGetValue("Link", out var l) ? l as string : null,
+                link = LinkReportViaProxy(m.TryGetValue("Link", out var l) ? l as string : null),
                 tipo = m.TryGetValue("MapIco", out var t) ? t as string : null
             });
 
