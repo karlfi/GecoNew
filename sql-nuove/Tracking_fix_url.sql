@@ -1,16 +1,17 @@
 -- =============================================================
--- Tracking - indirizzo del report server aggiornato
+-- Tracking - indirizzo del report server
 --
--- La procedura componeva un link al PDF con l'indirizzo vecchio
--- (cruscotto.speedyworld.it): ora e' report.speedyworld.it, come in
--- PARAMETRI.ReportServer.
+-- Un link al PDF erano composti con cruscotto.speedyworld.it, che non e' piu'
+-- l'indirizzo giusto. Ora usano http://192.168.0.176:8097, cioe' l'indirizzo
+-- diretto del server dei report, che gira sulla stessa macchina.
 --
--- Nota: dalla nuova webapp quei link non vengono piu' aperti direttamente dal
--- browser. L'API li riscrive su /api/report (vedi LinkReportViaProxy in
--- Program.cs), che scarica il PDF lato server usando l'indirizzo configurato in
--- PARAMETRI: e' l'unico modo perche' funzionino anche dai PC in filiale, che il
--- report server non lo raggiungono. L'indirizzo qui dentro resta comunque
--- corretto per chi usa ancora l'applicazione vecchia.
+-- Si usa l'IP e non un nome perche' la chiamata e' sempre interna: il PDF lo
+-- scarica l'API (proxy /api/report) e lo mostra nella pagina, il browser non
+-- contatta mai il report server. Cosi' non serve ne' DNS ne' file hosts.
+--
+-- Per la webapp l'indirizzo scritto qui dentro non viene comunque usato:
+-- l'API tiene solo nome del report e parametri, e ricompone l'URL con
+-- PARAMETRI.ReportServer. Resta valido per l'applicazione vecchia.
 -- =============================================================
 
 
@@ -131,7 +132,7 @@ BEGIN
 					isnull(sd.Nota,st.Descrizione)
 				end +' del '+CONVERT(varchar(10),s.datastato,103) Descrizione,
 				--case when ISNULL(pa1.tipoEventoCodice,'')='S_002' then 
-				--	'<a title="Visuliazza Ricevuta firmata" href="http://report.speedyworld.it:8097/result?report=DELIVERY_RicevutaFirmata.fr3&format=PDF&idspedizione='+convert(varchar(50),s.IdSpedizione)+'" target="_blank" >'+isnull(sd.Nota,st.Descrizione)+'</a>'
+				--	'<a title="Visuliazza Ricevuta firmata" href="http://192.168.0.176:8097/result?report=DELIVERY_RicevutaFirmata.fr3&format=PDF&idspedizione='+convert(varchar(50),s.IdSpedizione)+'" target="_blank" >'+isnull(sd.Nota,st.Descrizione)+'</a>'
 				--	else isnull(sd.Nota,st.Descrizione) 
 				--end Descrizione,
 				case when s.IdCliente=5318 then fl.Descrizione else p.Prodotto end Prodotto,
