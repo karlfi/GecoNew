@@ -6,6 +6,7 @@ import InputText from 'primevue/inputtext'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Message from 'primevue/message'
+import Dialog from 'primevue/dialog'
 
 // Tracking Barcode: replica della videata legacy. Un barcode -> SP Tracking
 // (testata destinatario) + SP RicercaBarcode (movimenti con link ai report).
@@ -32,6 +33,32 @@ async function cerca() {
   } finally {
     caricamento.value = false
   }
+}
+
+// Report PDF: il server dei report risponde solo dalla rete del server, quindi
+// il PDF lo scarica l'API (proxy /api/report) e qui si mostra in un frame.
+// Va chiesto con axios, che aggiunge il token: aprendo il link direttamente il
+// browser non manderebbe le credenziali e riceverebbe un 401.
+const pdf = ref({ visibile: false, url: null, caricamento: false })
+
+async function apriReport(link) {
+  pdf.value = { visibile: true, url: null, caricamento: true }
+  try {
+    const { data } = await api.get(link.replace(/^\/api/, ''), { responseType: 'blob' })
+    if (pdf.value.url) URL.revokeObjectURL(pdf.value.url)
+    pdf.value.url = URL.createObjectURL(data)
+  } catch (e) {
+    pdf.value.visibile = false
+    let msg = 'Errore nella generazione del report'
+    try { msg = JSON.parse(await e.response.data.text()).errore ?? msg } catch { /* risposta non JSON */ }
+    errore.value = msg
+  } finally {
+    pdf.value.caricamento = false
+  }
+}
+function chiudiPdf() {
+  if (pdf.value.url) URL.revokeObjectURL(pdf.value.url)
+  pdf.value = { visibile: false, url: null, caricamento: false }
 }
 
 // campi della testata, nell'ordine del legacy: [etichetta, chiave]
@@ -136,8 +163,17 @@ function classeRiga(r) {
           <Column field="valore" header="Valore" />
           <Column header="" style="width: 3.5rem; text-align: center">
             <template #body="{ data }">
+              <!-- i report passano dal proxy dell'API e vanno chiesti con il token:
+                   un link normale aprirebbe una richiesta senza credenziali (401) -->
               <a
-                v-if="data.link"
+                v-if="data.link?.startsWith('/api/')"
+                href="#" title="Apri il report PDF"
+                @click.prevent="apriReport(data.link)"
+              >
+                <i class="pi pi-file-pdf pdf-ico" />
+              </a>
+              <a
+                v-else-if="data.link"
                 :href="data.link" target="_blank" rel="noopener"
                 :title="data.tipo === 'pdf' ? 'Apri il report PDF' : 'Apri il documento'"
               >
@@ -152,10 +188,19 @@ function classeRiga(r) {
     <p v-else-if="!errore && !caricamento" class="suggerimento">
       Inserisci un barcode e premi Ricerca per vedere il tracking della spedizione.
     </p>
+
+    <!-- report: PDF servito dal backend, mostrato in un frame interno -->
+    <Dialog :visible="pdf.visibile" @update:visible="v => { if (!v) chiudiPdf() }"
+      modal maximizable header="Report" :style="{ width: '62rem' }">
+      <div v-if="pdf.caricamento" class="pdf-attesa">Generazione in corso…</div>
+      <iframe v-else-if="pdf.url" :src="pdf.url" class="pdf-frame" title="Report"></iframe>
+    </Dialog>
   </div>
 </template>
 
 <style scoped>
+.pdf-frame { width: 100%; height: 75vh; border: 0; }
+.pdf-attesa { padding: 3rem; text-align: center; color: #666; }
 .titolo { margin: 0 0 .75rem; }
 .ricerca {
   display: flex;

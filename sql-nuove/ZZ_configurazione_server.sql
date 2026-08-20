@@ -33,3 +33,14 @@ GO
 -- Per allinearli:
 --   ALTER LOGIN sa WITH DEFAULT_LANGUAGE = Italiano;
 --   EXEC sp_configure 'default language', 6; RECONFIGURE;   -- 6 = Italiano
+
+-- INDIRIZZO DEL REPORT SERVER
+-- Il server dei report (FastReport, porta 8097) gira sulla stessa macchina
+-- della webapp. Il PDF non viene mai aperto dal browser: lo scarica l'API
+-- (proxy /api/report) e lo presenta nella pagina, quindi la chiamata resta
+-- interna e non ha bisogno ne' di DNS ne' di voci nel file hosts.
+UPDATE PARAMETRI SET Valore = 'http://192.168.0.176:8097/result?report='
+WHERE Nome = 'ReportServer';
+GO
+-- Dopo la modifica va riavviata l'applicazione: il valore viene letto una volta
+-- sola e tenuto in memoria (basta toccare web.config).
