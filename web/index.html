@@ -1,12 +1,23 @@
 <!doctype html>
-<html lang="en">
+<!--
+  lang="it": senza questo il browser crede che la pagina sia in inglese (era il
+  default di Vite) e, se ha la traduzione automatica attiva, la "traduce" in
+  italiano storpiando tutto: "Speedy Web" diventava "Web veloce", "Driver"
+  "Autista", "Giornate lavorate" "Giornalista".
+
+  translate="no" + notranslate: la traduzione non deve proprio partire, perche'
+  toccherebbe anche i dati che arrivano dal database (nomi di filiale, stati,
+  descrizioni) falsandoli a video.
+-->
+<html lang="it" translate="no">
   <head>
     <meta charset="UTF-8" />
+    <meta name="google" content="notranslate" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Speedy Web</title>
   </head>
-  <body>
+  <body class="notranslate">
     <div id="app"></div>
     <script type="module" src="/src/main.js"></script>
   </body>
