@@ -12,7 +12,7 @@
 --
 -- Convenzione: prefisso AI_ per tutte le SP della nuova webapp.
 -- =============================================================
-CREATE PROCEDURE dbo.AI_AuthLogin
+CREATE OR ALTER PROCEDURE dbo.AI_AuthLogin
     @Utente    varchar(100),
     @Pwd       varchar(250),
     @MaxErrori int = 10          -- soglia di blocco: allineare a quella dell'app InDe
@@ -27,7 +27,11 @@ BEGIN
            @LoginErrors = ISNULL(u.LoginErrors, 0)
     FROM dbo.UTENTI u
     WHERE u.Utente = @Utente
-      AND u.DataFine IS NULL;          -- stesso criterio di "utente attivo" di LogInCSO
+      -- Utente attivo: DataFine vuota, oppure non ancora arrivata. Il campo viene
+      -- usato anche per la scadenza del contratto, quindi una data futura non
+      -- deve chiudere l'accesso: chi ha il contratto fino al 31/12 entra fino a
+      -- quel giorno e da li' in avanti viene escluso da solo, senza interventi.
+      AND (u.DataFine IS NULL OR u.DataFine >= CONVERT(date, GETDATE()));
 
     -- Utente inesistente o disattivato: esito generico, non riveliamo quale dei due
     IF @IdUtente IS NULL

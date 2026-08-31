@@ -792,7 +792,8 @@ app.MapGet("/api/gruppi/{id:int}", async (int id) =>
         WHERE mg.IdGruppo = @id ORDER BY me.Text", new { id });
     var utenti = await cn.QueryAsync(@"
         SELECT ug.IdUtenteGruppo AS id, ug.IdUtente AS idUtente, u.Utente AS utente, u.Nome AS nome,
-               CAST(CASE WHEN u.DataFine IS NULL THEN 1 ELSE 0 END AS bit) AS attivo
+               CAST(CASE WHEN u.DataFine IS NULL OR u.DataFine >= CONVERT(date, GETDATE())
+                         THEN 1 ELSE 0 END AS bit) AS attivo
         FROM UTENTI_GRUPPI ug
         LEFT JOIN UTENTI u ON u.IdUtente = ug.IdUtente
         WHERE ug.IdGruppo = @id ORDER BY u.Utente", new { id });
@@ -1892,7 +1893,8 @@ app.MapGet("/api/utenti", async (HttpRequest req) =>
         SELECT u.IdUtente, u.Utente, u.Nome, u.Email, u.IdRuolo, r.Ruolo,
                u.IdFiliale, f.FILIALE AS Filiale, u.IdCliente, cl.RagioneSociale AS Cliente,
                u.codAppLogin, u.DataUltimoAccesso,
-               CAST(CASE WHEN u.DataFine IS NULL THEN 1 ELSE 0 END AS bit) AS Attivo
+               CAST(CASE WHEN u.DataFine IS NULL OR u.DataFine >= CONVERT(date, GETDATE())
+                         THEN 1 ELSE 0 END AS bit) AS Attivo
         FROM UTENTI u
         LEFT JOIN RUOLI r ON r.IdRuolo = u.IdRuolo
         LEFT JOIN FILIALI f ON f.IDFILIALE = u.IdFiliale
@@ -1921,7 +1923,7 @@ app.MapGet("/api/utenti/lookups", async () =>
     var filiali = await cn.QueryAsync("SELECT IDFILIALE AS idFiliale, FILIALE AS filiale FROM FILIALI WHERE DataChiusura IS NULL ORDER BY FILIALE");
     var clienti = await cn.QueryAsync("SELECT IdCliente AS idCliente, RagioneSociale AS ragioneSociale FROM CLIENTI ORDER BY RagioneSociale");
     var aziende = await cn.QueryAsync("SELECT IdAzienda AS idAzienda, Azienda AS azienda FROM AZIENDE ORDER BY Azienda");
-    var padri = await cn.QueryAsync("SELECT IdUtente AS idUtente, ISNULL(NULLIF(Nome,''), Utente) + ' (' + Utente + ')' AS label FROM UTENTI WHERE DataFine IS NULL ORDER BY label");
+    var padri = await cn.QueryAsync("SELECT IdUtente AS idUtente, ISNULL(NULLIF(Nome,''), Utente) + ' (' + Utente + ')' AS label FROM UTENTI WHERE DataFine IS NULL OR DataFine >= CONVERT(date, GETDATE()) ORDER BY label");
     var gruppi = await cn.QueryAsync("SELECT IdGruppo AS idGruppo, Gruppo AS gruppo FROM GRUPPI ORDER BY Gruppo");
     var processi = await cn.QueryAsync("SELECT IdProcesso AS idProcesso, Processo AS processo FROM PROCESSI ORDER BY Processo");
     var famiglie = await cn.QueryAsync("SELECT CodFamiglia AS codFamiglia, FamigliaDiProdotto AS famiglia FROM PROD_FAMIGLIE ORDER BY FamigliaDiProdotto");
@@ -4071,7 +4073,7 @@ app.MapGet("/api/lavorato/driver", async (ClaimsPrincipal user) =>
         SELECT u.IdUtente AS idUtente, u.Nome AS nome, u.codAppLogin AS codAppLogin
         FROM UTENTI u
         WHERE u.IdFiliale = @idFiliale AND ISNULL(u.codAppLogin, '') <> ''
-          AND u.DataFine IS NULL
+          AND (u.DataFine IS NULL OR u.DataFine >= CONVERT(date, GETDATE()))
         ORDER BY u.Nome", new { idFiliale });
     return Results.Ok(driver);
 }).RequireAuthorization();
@@ -4207,13 +4209,14 @@ app.MapGet("/api/dipendenti-filiale", async (bool? ancheCessati, ClaimsPrincipal
                u.TipoContratto AS tipoContratto, u.CCNL AS ccnl,
                CONVERT(varchar(10), u.DataInizio, 120) AS assunto,
                CONVERT(varchar(10), u.DataFineContratto, 120) AS fineContratto,
-               CONVERT(varchar(10), u.DataFine, 120) AS cessato,
+               CASE WHEN u.DataFine < CONVERT(date, GETDATE())
+                    THEN CONVERT(varchar(10), u.DataFine, 120) END AS cessato,
                u.Partime AS partime, u.OreSettimanali AS oreSettimanali,
                u.Telefono AS telefono, u.Email AS email, u.codAppLogin AS codAppLogin
         FROM UTENTI u
         WHERE u.IdFiliale = @idFiliale
           AND LEN(ISNULL(u.CodiceFiscale, '')) = 16
-          AND (@anche = 1 OR u.DataFine IS NULL)
+          AND (@anche = 1 OR u.DataFine IS NULL OR u.DataFine >= CONVERT(date, GETDATE()))
         ORDER BY u.Nome",
         new { idFiliale, anche = ancheCessati == true ? 1 : 0 });
     return Results.Ok(righe);
