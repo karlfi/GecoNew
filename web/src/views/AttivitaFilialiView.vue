@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import { useAuthStore } from '../stores/auth'
 import api from '../api'
+import { frecceCampi } from '../lib/frecceGriglia'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Button from 'primevue/button'
@@ -149,7 +150,7 @@ function fmtData(v) {
             <DatePicker v-model="form.Data" dateFormat="dd/mm/yy" showIcon :disabled="!nuova" fluid />
           </label>
 
-          <table class="griglia">
+          <table class="griglia" @keydown="frecceCampi">
             <thead>
               <tr>
                 <th></th>

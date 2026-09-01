@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import { useAuthStore } from '../stores/auth'
 import api from '../api'
+import { frecceCellEdit } from '../lib/frecceGriglia'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import ColumnGroup from 'primevue/columngroup'
@@ -120,59 +121,6 @@ async function onCellEditComplete(e) {
   }
 }
 
-// --- spostamento tra le celle con le frecce, come in un foglio di calcolo ---
-// La griglia salva quando la cella esce dalla modifica: muovendosi con le frecce
-// si conferma la cella corrente (Invio) e si apre subito quella di arrivo, senza
-// doverlo premere a mano.
-function cellaVicina(cella, passoRiga, passoCol) {
-  const riga = cella.parentElement
-  const corpo = riga.parentElement
-  const iCol = [...riga.children].indexOf(cella)
-  if (passoRiga) {
-    const righeDom = [...corpo.children]
-    const iRiga = righeDom.indexOf(riga) + passoRiga
-    return righeDom[iRiga] ? { iRiga, iCol } : null
-  }
-  // di lato: si salta alle celle non modificabili (targa, login, palmare...)
-  const iRiga = [...corpo.children].indexOf(riga)
-  for (let i = iCol + passoCol; i >= 0 && i < riga.children.length; i += passoCol) {
-    if (riga.children[i].dataset.pEditableColumn === 'true') return { iRiga, iCol: i }
-  }
-  return null
-}
-
-function onFrecce(e) {
-  const direzioni = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }
-  const dir = direzioni[e.key]
-  if (!dir) return
-  const cella = e.target.closest?.('td[data-p-cell-editing="true"]')
-  if (!cella) return
-
-  const dentroTendina = !!e.target.closest('.p-select')
-  const numerico = !!e.target.closest('.p-inputnumber')
-  const campo = e.target
-  if (dir[0] !== 0 && dentroTendina) return          // su/giu' nelle tendine sceglie l'opzione
-  if (dir[1] !== 0 && !dentroTendina && !numerico) {
-    // solo nel testo libero (Note) le frecce laterali servono a muovere il
-    // cursore: da li' si esce quando si e' gia' a inizio o fine riga.
-    const pos = campo.selectionStart, fine = (campo.value ?? '').length
-    if (pos !== campo.selectionEnd) return
-    if (dir[1] < 0 && pos !== 0) return
-    if (dir[1] > 0 && pos !== fine) return
-  }
-
-  const arrivo = cellaVicina(cella, dir[0], dir[1])
-  if (!arrivo) return
-  e.preventDefault()
-  const corpo = cella.parentElement.parentElement
-  // Invio chiude la cella e fa partire il salvataggio, poi si apre quella di arrivo
-  campo.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }))
-  setTimeout(() => {
-    const dest = corpo.children[arrivo.iRiga]?.children[arrivo.iCol]
-    // la griglia apre l'editor sul click: serve un evento completo, non .click()
-    dest?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
-  }, 0)
-}
 </script>
 
 <template>
@@ -206,7 +154,7 @@ function onFrecce(e) {
       dataKey="idAttivita"
       :editMode="modificabile ? 'cell' : undefined"
       @cell-edit-complete="onCellEditComplete"
-      @keydown.capture="onFrecce"
+      @keydown.capture="frecceCellEdit"
       scrollable scrollHeight="calc(100vh - 220px)"
       size="small" stripedRows
       class="griglia"
@@ -319,5 +267,16 @@ function onFrecce(e) {
 .griglia :deep(td.g-speedy), .griglia :deep(th.g-speedy) { background: #e6f0fa; }
 .griglia :deep(td.g-bko), .griglia :deep(th.g-bko) { background: #c9d5f6; }
 .griglia :deep(td.g-sda), .griglia :deep(th.g-sda) { background: #ece7f6; }
-:deep(.editor-num) { width: 4.5rem; text-align: right; padding: .2rem .3rem; }
+/* La cella non deve cambiare misura quando si apre la modifica: l'editor sta
+   dentro lo spazio che c'e' gia', con meno bordi e senza larghezze proprie.
+   Le colonne dei contatori tengono una larghezza minima stabile, cosi' la
+   griglia non si riassesta a ogni cella aperta. */
+.griglia.p-datatable :deep(td.num), .griglia.p-datatable :deep(th.num) { min-width: 3.6rem; }
+.griglia.p-datatable :deep(td[data-p-cell-editing="true"]) { padding: 2px 4px; }
+.griglia.p-datatable :deep(td[data-p-cell-editing="true"] .p-inputtext),
+.griglia.p-datatable :deep(td[data-p-cell-editing="true"] .p-select) {
+  width: 100%; min-width: 0; box-sizing: border-box;
+  padding: 2px 4px; border-radius: 3px; font-size: inherit;
+}
+:deep(.editor-num) { width: 100%; min-width: 0; box-sizing: border-box; text-align: right; }
 </style>

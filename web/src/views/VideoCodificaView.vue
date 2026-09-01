@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import api from '../api'
+import { frecceRowEdit } from '../lib/frecceGriglia'
 import Button from 'primevue/button'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
@@ -171,6 +172,7 @@ async function chiudiVideocodifica() {
 
           <DataTable :value="righeVisibili" size="small" stripedRows dataKey="IdSpedizione"
             editMode="row" v-model:editingRows="righeInEdit" @row-edit-save="salvaRiga"
+            @keydown.capture="frecceRowEdit"
             paginator :rows="25" class="tab-righe">
             <Column field="IdSpedizione" header="Id" style="width: 6rem" />
             <Column field="Barcode" header="Barcode" style="width: 13rem">
