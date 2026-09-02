@@ -368,6 +368,36 @@ app.MapGet("/api/me/menu", async (ClaimsPrincipal user) =>
     }
 }).RequireAuthorization();
 
+// Traccia l'apertura di una pagina dal menu, sulla stessa LOG_CALL che scrive
+// tweb (stored legacy LOG_AddCall): cosi' le due applicazioni finiscono nello
+// stesso registro e si continuano a leggere insieme.
+// Origine: "0" e' tweb, "1" e' questa webapp. L'utente lo prende dal token,
+// non dal client, e un errore qui non deve mai fermare la navigazione.
+app.MapPost("/api/log/videata", async (LogVideataRequest req, ClaimsPrincipal user) =>
+{
+    var videata = (req.Videata ?? "").Trim();
+    if (videata.Length == 0) return Results.NoContent();
+    try
+    {
+        await using var cn = new SqlConnection(ConnString());
+        await cn.ExecuteAsync("dbo.LOG_AddCall", new
+        {
+            Videata = Tronca(videata, 500),                 // lunghezze della tabella
+            Parametri = Tronca(req.Parametri, 5000),
+            IdUtente = int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var id) ? id : (int?)null,
+            Origine = "1"
+        }, commandType: CommandType.StoredProcedure);
+    }
+    catch (SqlException)
+    {
+        // il log non e' il lavoro dell'utente: se non si scrive, pazienza
+    }
+    return Results.NoContent();
+}).RequireAuthorization();
+
+static string? Tronca(string? v, int max) =>
+    string.IsNullOrEmpty(v) ? v : v.Length <= max ? v : v[..max];
+
 // Esegue un'interrogazione del catalogo INTERROGAZIONI componendo l'SQL come il legacy:
 // SqlSelect + SqlFrom + SqlWhere + sWhere extra (dal menu o dal tasto destro) + SqlGroup + SqlOrder.
 // Le parti sono unite con newline (gli sWhere possono contenere commenti --).
@@ -4442,6 +4472,7 @@ record SpedNuovaRequest(
     decimal? PesoKg, string? Nota);
 record EseguiInterrogazioneRequest(int IdQuery, string? SWhere, Dictionary<string, string>? Valori);
 record UtenteStatoRequest(int IdUtente, string? Stato);
+record LogVideataRequest(string? Videata, string? Parametri);
 record CambiaFilialeRequest(int IdFiliale);
 record ColMeta(string Col, string Tipo, int MaxLen, bool Nullable, bool Identita, bool Pk);
 record GruppoReq(int IdGruppo);

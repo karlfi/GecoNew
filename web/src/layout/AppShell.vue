@@ -2,6 +2,7 @@
 import { onMounted, computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
+import api from '../api'
 import { useAuthStore } from '../stores/auth'
 import { useNavStore } from '../stores/nav'
 import { buildMenuTree } from '../lib/menuTree'
@@ -109,8 +110,20 @@ async function cambiaFiliale(idFiliale) {
   }
 }
 
+// Registra l'apertura su LOG_CALL, la stessa tabella che scrive tweb: si tiene
+// la Videata legacy come nome, cosi' le due applicazioni restano confrontabili
+// (per le pagine nuove, che una Videata non ce l'hanno, si scrive il Link).
+// E' un "manda e dimentica": se il log non passa, la pagina si apre lo stesso.
+function tracciaApertura(voce) {
+  const videata = (voce.Videata || voce.Link || '').trim()
+  if (!videata) return
+  api.post('/log/videata', { videata, parametri: voce.Parametri ?? null })
+    .catch(() => {})
+}
+
 function naviga(voce) {
   if (schermoStretto()) sidebarAperta.value = false   // sul telefono libera subito la pagina
+  tracciaApertura(voce)
   if (voce.NavigateUrl) {
     window.open(voce.NavigateUrl, '_blank')
     return
