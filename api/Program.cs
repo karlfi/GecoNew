@@ -2605,9 +2605,12 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
             SELECT TOP 1 sigla_provincia FROM MAP_comuni_nazioni_cf
             WHERE data_fine_validita IS NULL AND codice_belfiore = @b", new { b = belfioreDom });
     if (provDom is null && (estratti["ComuneDomicilio"] ?? "") != "")
+        // il confronto ignora gli accenti (COLLATE ..._AI): l'UNILAV scrive
+        // "TORTOLI" con l'accento, le nostre tabelle spesso senza
         provDom = await cn.ExecuteScalarAsync<string?>(@"
             SELECT TOP 1 sigla_provincia FROM MAP_comuni_nazioni_cf
-            WHERE data_fine_validita IS NULL AND UPPER(denominazione_ita) = @c",
+            WHERE data_fine_validita IS NULL
+              AND UPPER(denominazione_ita) COLLATE Latin1_General_CI_AI = @c",
             new { c = estratti["ComuneDomicilio"]!.ToUpperInvariant() });
     if (provDom == "OT") provDom = "SS"; // provincia abolita
 
@@ -2705,10 +2708,14 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
     var comuneSede = (estratti["SedeLavoroComune"] ?? "").Trim().ToUpperInvariant();
     if (u0 is not null && comuneSede.Length > 2)
     {
+        // Confronto senza accenti: l'UNILAV riporta il comune come sta all'anagrafe
+        // ("TORTOLI" con l'accento finale), mentre in FILIALI e' scritto piano.
+        // Con la collation del database, che gli accenti li distingue, la filiale
+        // di Tortoli non si trovava e il caricamento finiva in errore.
         var candidate = (await cn.QueryAsync(@"
             SELECT IDFILIALE, FILIALE FROM FILIALI
-            WHERE UPPER(LTRIM(RTRIM(ISNULL(Comune, '')))) = @c
-               OR UPPER(FILIALE) LIKE '%' + @c + '%'
+            WHERE UPPER(LTRIM(RTRIM(ISNULL(Comune, '')))) COLLATE Latin1_General_CI_AI = @c
+               OR UPPER(FILIALE) COLLATE Latin1_General_CI_AI LIKE '%' + @c + '%'
             ORDER BY FILIALE", new { c = comuneSede }))
             .Select(f => new { valore = ((int)f.IDFILIALE).ToString(), etichetta = (string)f.FILIALE })
             .ToList();
