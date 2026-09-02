@@ -124,6 +124,17 @@ object? JsonToClr(JsonElement e) => e.ValueKind switch
     _ => e.ToString()
 };
 
+// Province soppresse nel 2016: le tabelle dei comuni portano ancora le sigle
+// vecchie, ma i dipendenti vanno registrati con la provincia di oggi.
+static string ProvinciaAttuale(string? p) => (p ?? "").Trim().ToUpperInvariant() switch
+{
+    "OT" => "SS",   // Olbia-Tempio    -> Sassari
+    "OG" => "NU",   // Ogliastra       -> Nuoro
+    "VS" => "SU",   // Medio Campidano -> Sud Sardegna
+    "CI" => "SU",   // Carbonia-Iglesias -> Sud Sardegna
+    var x => x
+};
+
 app.MapGet("/api/ping", () => Results.Ok(new { ok = true, ora = DateTime.Now }));
 
 // Login: verifica via SP AI_AuthLogin, emette il JWT
@@ -2104,8 +2115,7 @@ app.MapGet("/api/hr/anagrafica", async (HttpRequest req) =>
         SELECT codice_belfiore AS Codice, UPPER(denominazione_ita) AS Nome, sigla_provincia AS Prov
         FROM MAP_comuni_nazioni_cf WHERE data_fine_validita IS NULL"))
         .Cast<IDictionary<string, object>>().ToList();
-    // la provincia OT (Olbia-Tempio) non esiste piu': oggi quei comuni sono in SS
-    string ProvFix(string p) => p == "OT" ? "SS" : p;
+    string ProvFix(string p) => ProvinciaAttuale(p);
     var perCodice = comuni.GroupBy(c => S(Val(c, "Codice"))).ToDictionary(g => g.Key, g => g.First());
     // chiave senza accenti: nel DB gli indirizzi liberi li perdono ("ALA DEI SARDI")
     var perNome = comuni.GroupBy(c => NoAccenti(S(Val(c, "Nome")))).ToDictionary(g => g.Key, g => g.First());
@@ -2612,7 +2622,7 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
             WHERE data_fine_validita IS NULL
               AND UPPER(denominazione_ita) COLLATE Latin1_General_CI_AI = @c",
             new { c = estratti["ComuneDomicilio"]!.ToUpperInvariant() });
-    if (provDom == "OT") provDom = "SS"; // provincia abolita
+    if (provDom is { Length: > 0 }) provDom = ProvinciaAttuale(provDom);
 
     // scheda utente per CF (preferisce l'account attivo)
     var utenti = (await cn.QueryAsync(@"
