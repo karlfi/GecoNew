@@ -462,6 +462,26 @@ app.MapPost("/api/interrogazioni/esegui", async (EseguiInterrogazioneRequest req
     }
 }).RequireAuthorization();
 
+// Stato di archiviazione del dipendente, modificabile dalla griglia "Elenco
+// Dipendenti" (interrogazione 1093). I valori ammessi li controlla la SP.
+app.MapPost("/api/hr/utente-stato", async (UtenteStatoRequest req) =>
+{
+    if (req.IdUtente <= 0)
+        return Results.BadRequest(new { errore = "Utente non indicato" });
+    await using var cn = new SqlConnection(ConnString());
+    try
+    {
+        var r = await cn.QueryFirstOrDefaultAsync("dbo.AI_UTENTI_Stato_Save",
+            new { req.IdUtente, req.Stato },
+            commandType: CommandType.StoredProcedure) as IDictionary<string, object>;
+        return Results.Ok(new { idUtente = req.IdUtente, stato = r?["Stato"] });
+    }
+    catch (SqlException ex)
+    {
+        return Results.Json(new { errore = ex.Message }, statusCode: StatusCodes.Status400BadRequest);
+    }
+}).RequireAuthorization();
+
 // Metadati per le pagine di ricerca legacy costruite sulle interrogazioni:
 // - colonnaBarcode: campo su cui la "Ricerca Multipla" applica l'IN sull'elenco
 //   incollato (alias qualificato tipo sa.Barcode, o Barcode secco per select *)
@@ -4421,6 +4441,7 @@ record SpedNuovaRequest(
     decimal? Importo, bool Contrassegno, decimal? ImportoContrassegno,
     decimal? PesoKg, string? Nota);
 record EseguiInterrogazioneRequest(int IdQuery, string? SWhere, Dictionary<string, string>? Valori);
+record UtenteStatoRequest(int IdUtente, string? Stato);
 record CambiaFilialeRequest(int IdFiliale);
 record ColMeta(string Col, string Tipo, int MaxLen, bool Nullable, bool Identita, bool Pk);
 record GruppoReq(int IdGruppo);

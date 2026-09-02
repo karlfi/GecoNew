@@ -16,6 +16,7 @@ import Select from 'primevue/select'
 import DashboardView from '../views/DashboardView.vue'
 import PlaceholderView from '../views/PlaceholderView.vue'
 import RisultatoInterrogazioni from '../views/RisultatoInterrogazioni.vue'
+import ElencoDipendentiView from '../views/ElencoDipendentiView.vue'
 import ConfigTable from '../views/ConfigTable.vue'
 import WorkflowView from '../views/WorkflowView.vue'
 import InterrogazioniEditor from '../views/InterrogazioniEditor.vue'
@@ -206,6 +207,12 @@ const chiavePagina = computed(() =>
         <DashboardView v-if="nav.corrente.tipo === 'dashboard'" />
         <RisultatoInterrogazioni
           v-else-if="nav.corrente.tipo === 'interrogazioni'"
+          :key="chiavePagina"
+          :id-query="nav.corrente.idQuery"
+          :s-where="nav.corrente.sWhere"
+        />
+        <ElencoDipendentiView
+          v-else-if="nav.corrente.tipo === 'elenco-dipendenti'"
           :key="chiavePagina"
           :id-query="nav.corrente.idQuery"
           :s-where="nav.corrente.sWhere"

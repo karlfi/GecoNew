@@ -290,6 +290,12 @@ export function navDaLink(voce) {
     const { idQuery, sWhere } = parseParametriMenu(voce.Parametri)
     return { tipo: 'interrogazioni', idQuery, sWhere }
   }
+  // stessa query dell'interrogazione, ma con la griglia dell'Elenco Dipendenti
+  // (colonna Stato modificabile): in tweb la voce resta RisultatoInterrogazioni
+  if (link === '/elenco-dipendenti') {
+    const { idQuery, sWhere } = parseParametriMenu(voce.Parametri)
+    return { tipo: 'elenco-dipendenti', idQuery, sWhere }
+  }
   if (link === '/ricerca-multipla') {
     const { idQuery, sWhere } = parseParametriMenu(voce.Parametri)
     return { tipo: 'ricerca-multipla', idQuery, sWhere }
