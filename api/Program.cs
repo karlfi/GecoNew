@@ -2317,6 +2317,12 @@ app.MapGet("/api/hr/anagrafica", async (HttpRequest req) =>
 //   Trasformazione (TL)-> nuovo contratto/orario/sede; se diventa a tempo
 //                         indeterminato le date di fine si svuotano
 //   Cessazione (CL)    -> DataFine = data di cessazione
+// C'e' poi l'annullamento (tipoComunicazione 04), che non e' un modello a se':
+// e' una comunicazione che ne cancella una precedente e porta con se' il
+// tracciato di quella annullata. Attenzione: il tipoMovimento resta quello del
+// modello annullato (una cessazione annullata dice ancora CL), quindi va letto
+// prima il tipo di comunicazione, altrimenti si finisce per riapplicare proprio
+// la cessazione che il documento sta cancellando.
 
 app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
 {
@@ -2363,7 +2369,8 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
     Dictionary<string, string?>? estratti = null;
     var fonte = "testo del PDF";
     string? belfioreDom = null;
-    var tipo = "assunzione";   // assunzione | proroga | trasformazione | cessazione
+    var tipo = "assunzione";   // assunzione | proroga | trasformazione | cessazione | annullamento
+    var annullamento = false;
     if (!string.IsNullOrWhiteSpace(tracciatoJson))
     {
         try
@@ -2383,6 +2390,9 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
                 };
             }
             // i dati del rapporto stanno in una sezione diversa per ogni modello
+            annullamento = (J("tipoComunicazione") ?? "") == "04"
+                || string.Equals(J("statoComunicazione"), "ANNULLAMENTO", StringComparison.OrdinalIgnoreCase)
+                || (J("tipoComunicazioneDescrizione") ?? "").StartsWith("Annullam", StringComparison.OrdinalIgnoreCase);
             tipo = (J("tipoMovimento") ?? "").ToUpperInvariant() switch
             {
                 "PL" => "proroga",
@@ -2433,6 +2443,9 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
                 ["CausaTrasformazione"] = J("trasformazione", "codiceTrasformazioneDescrizione"),
                 ["DataCessazione"] = J("cessazione", "dataCessazioneDescrizione"),
                 ["MotivoCessazione"] = J("cessazione", "codiceCausaDescrizione"),
+                // annullamento: la comunicazione cancellata e il perche' (in chiaro nelle note)
+                ["CodiceAnnullato"] = J("codiceComunicazionePrecedente"),
+                ["Note"] = J("note"),
             };
             belfioreDom = J("lavoratore", "comune"); // Belfiore del comune di domicilio
             fonte = "tracciato.json incorporato";
@@ -2465,11 +2478,15 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
         "Lavoro in agricoltura:", "Giornate lavorative previste:", "Tipo lavorazione:", "Data invio:", "Note:",
         // etichette dei modelli proroga / trasformazione / cessazione
         "Data fine proroga", "Data trasformazione:", "Data cessazione:", "Motivo cessazione:",
+        "Codice comunicazione collegata (annullata):",
         "Comune sede di lavoro precedente:", "Indirizzo sede di lavoro precedente:"
     };
     // titoli di sezione: non sono campi ma delimitano i valori che li precedono
     var sezioni = new[] { "Datore di Lavoro", "Lavoratore", "Dati Rapporto", "Dati invio", "Inizio", "Pagina ",
-        "Dati Proroga", "Dati Trasformazione", "Dati Cessazione" };
+        "Dati Proroga", "Dati Trasformazione", "Dati Cessazione",
+        // titoli di sezione dei modelli diversi dall'assunzione: senza questi il
+        // valore che li precede (il titolo di studio) se li porta dietro
+        "Proroga", "Trasformazione", "Cessazione" };
     // posizioni di tutte le occorrenze di etichette e titoli di sezione
     var occ = new List<(int Pos, string Lab)>();
     foreach (var lab in etichette.Concat(sezioni))
@@ -2526,13 +2543,20 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
         ["DataTrasformazione"] = Valore("Data trasformazione:"),
         ["DataCessazione"] = Valore("Data cessazione:"),
         ["MotivoCessazione"] = Valore("Motivo cessazione:"),
+        ["CodiceAnnullato"] = Valore("Codice comunicazione collegata (annullata):"),
+        ["Note"] = Valore("Note:"),
         // la causa e' spezzata su due righe dalla tabella del PDF ("Causa ... trasformazione: ...")
         ["CausaTrasformazione"] = System.Text.RegularExpressions.Regex.Match(
             testo.Replace('\n', ' '), @"TRASFORMAZIONE\s+DA\s+.{3,60}?\s+A\s+TEMPO\s+\w+",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase).Value,
     };
     // il modello e' scritto in testata: "Comunicazioni Obbligatorie/Cessazione"
-    var modello = Valore("Modello:").ToUpperInvariant();
+    // il valore sta sulla stessa riga dell'etichetta o su quella dopo
+    string Testata(string etichetta) => System.Text.RegularExpressions.Regex.Match(
+        testo, "^" + System.Text.RegularExpressions.Regex.Escape(etichetta) + @"[ \t]*\n?(.*)$",
+        System.Text.RegularExpressions.RegexOptions.Multiline).Groups[1].Value.Trim().ToUpperInvariant();
+    var modello = Testata("Modello:");
+    annullamento = Testata("Tipo comunicazione:").Contains("ANNULLAM");
     tipo = modello.Contains("PROROGA") ? "proroga"
         : modello.Contains("TRASFORMAZIONE") ? "trasformazione"
         : modello.Contains("CESSAZIONE") ? "cessazione"
@@ -2587,7 +2611,7 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
                CONVERT(varchar(10), u.DataFineContratto, 120) AS DataFineContratto,
                u.OreSettimanali, u.Partime, u.CCNL, u.SoggiornoTipo, u.SoggiornoNumero, u.SoggiornoMotivo,
                CONVERT(varchar(10), u.SoggiornoScadenza, 120) AS SoggiornoScadenza,
-               u.SoggiornoQuestura, u.UnilavCodice, u.IdFiliale, f.FILIALE AS Filiale
+               u.SoggiornoQuestura, u.UnilavCodice, u.Stato, u.IdFiliale, f.FILIALE AS Filiale
         FROM UTENTI u LEFT JOIN FILIALI f ON f.IDFILIALE = u.IdFiliale
         WHERE u.CodiceFiscale = @cf
         ORDER BY CASE WHEN u.DataFine IS NULL THEN 0 ELSE 1 END, u.DataInizio DESC", new { cf }))
@@ -2704,8 +2728,68 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
 
     // --- cosa comporta il modello sulle date del rapporto ---
     string? causale = null;
+    // il movimento annullato resta quello scritto nel tracciato: lo si tiene da
+    // parte per sapere che cosa disfare, poi il tipo diventa "annullamento"
+    var movimentoAnnullato = tipo;
+    if (annullamento) tipo = "annullamento";
     switch (tipo)
     {
+        case "annullamento":
+            // la comunicazione cancellata e' identificata dal suo codice; il motivo
+            // sta nelle note, ed e' l'unica spiegazione che il documento porta
+            causale = string.Join(" — ", new[]
+            {
+                estratti["CodiceAnnullato"] is { Length: > 0 } ca ? $"annulla la comunicazione {ca}" : null,
+                estratti["Note"]
+            }.Where(x => !string.IsNullOrWhiteSpace(x)));
+
+            if (movimentoAnnullato == "cessazione")
+            {
+                // Il rapporto non si e' chiuso, ma non e' detto che torni "senza
+                // fine": un contratto a termine torna alla sua scadenza naturale.
+                // La si cerca prima nel documento (la sezione annullata porta la
+                // data di fine rapporto quando c'e'), poi nella fine contratto gia'
+                // in scheda; se non c'e' nessuna delle due la riga esce vuota e la
+                // data la scrive l'operatore, che il documento non la dice.
+                var fineOriginale = estratti["DataFineRapporto"] ?? "";
+                if (fineOriginale.Trim().Length == 0 && u0 is not null)
+                    fineOriginale = Val(u0, "DataFineContratto")?.ToString() ?? "";
+                if (Data(fineOriginale.Trim()) is DateTime dfo) fineOriginale = dfo.ToString("yyyy-MM-dd");
+                fineOriginale = fineOriginale.Trim();
+
+                if (u0 is not null)
+                    proposte.Add(new
+                    {
+                        campo = "DataFine",
+                        etichetta = "Fine rapporto",
+                        attuale = Val(u0, "DataFine")?.ToString()?.Trim() ?? "",
+                        nuovo = fineOriginale,
+                        testo = fineOriginale.Length > 0
+                            ? "cessazione annullata: torna la scadenza del contratto"
+                            : "cessazione annullata: se il rapporto ha una scadenza, scrivila qui",
+                        opzioni = (object?)null,
+                        azzera = fineOriginale.Length == 0,
+                        editabile = "data"      // la riga esce con la casella della data
+                    });
+
+                if (u0 is not null)
+                {
+                    // lo stato di archiviazione dell'elenco dipendenti segue il rapporto
+                    if (string.Equals(Val(u0, "Stato")?.ToString()?.Trim(), "CESSATO", StringComparison.OrdinalIgnoreCase))
+                        Proponi("Stato", "Stato", "SI", "rientra in forza");
+                    if (string.IsNullOrWhiteSpace(Val(u0, "DataFine")?.ToString()))
+                        avvisi.Add("In scheda la data di fine e' gia' vuota: il dipendente risulta gia' attivo");
+                }
+            }
+            else
+            {
+                // per gli altri modelli non si sa che cosa fosse stato scritto prima:
+                // meglio dirlo che indovinare
+                avvisi.Add($"Annullamento di una comunicazione di {movimentoAnnullato}: "
+                    + "le date del rapporto non vengono toccate, controlla la scheda a mano");
+            }
+            break;
+
         case "proroga":
             // la proroga sposta in avanti la scadenza: fine contratto e fine rapporto
             causale = estratti["DataFineProroga"] is { Length: > 0 } dfp ? $"nuova scadenza {dfp}" : null;
@@ -2749,6 +2833,7 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
         "proroga" => "Proroga",
         "trasformazione" => "Trasformazione",
         "cessazione" => "Cessazione",
+        "annullamento" => "Annullamento " + movimentoAnnullato,
         _ => "Assunzione"
     };
 
@@ -2769,8 +2854,14 @@ app.MapPost("/api/hr/unilav/applica", async (UnilavApplicaRequest req) =>
         "SoggiornoMotivo", "SoggiornoScadenza", "SoggiornoQuestura", "UnilavCodice", "UnilavData" };
     var par = new DynamicParameters();
     par.Add("IdUtente", req.IdUtente);
+    // lo Stato non appartiene al tracciato UNILAV: e' la colonna dell'elenco
+    // dipendenti, e ha la sua stored (che ne controlla i valori ammessi). Arriva
+    // qui solo con l'annullamento di una cessazione, per rimettere il dipendente
+    // in forza insieme alla data di fine.
+    string? statoNuovo = null;
     foreach (var (k, v) in req.Valori)
     {
+        if (k.Equals("Stato", StringComparison.OrdinalIgnoreCase)) { statoNuovo = v; continue; }
         if (!ammessi.Contains(k, StringComparer.OrdinalIgnoreCase)) continue;
         if (string.IsNullOrWhiteSpace(v))
         {
@@ -2798,7 +2889,16 @@ app.MapPost("/api/hr/unilav/applica", async (UnilavApplicaRequest req) =>
     await using var cn = new SqlConnection(ConnString());
     try
     {
-        var righe = await cn.QueryFirstAsync<int>("dbo.AI_UTENTI_Unilav_Applica", par, commandType: CommandType.StoredProcedure);
+        var righe = par.ParameterNames.Count() > 1
+            ? await cn.QueryFirstAsync<int>("dbo.AI_UTENTI_Unilav_Applica", par, commandType: CommandType.StoredProcedure)
+            : 0;
+        if (statoNuovo is not null)
+        {
+            await cn.ExecuteAsync("dbo.AI_UTENTI_Stato_Save",
+                new { req.IdUtente, Stato = string.IsNullOrWhiteSpace(statoNuovo) ? null : statoNuovo.Trim() },
+                commandType: CommandType.StoredProcedure);
+            righe++;
+        }
         return Results.Ok(new { righe });
     }
     catch (SqlException ex)

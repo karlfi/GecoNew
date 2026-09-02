@@ -9,6 +9,7 @@ import Message from 'primevue/message'
 import Tag from 'primevue/tag'
 import Checkbox from 'primevue/checkbox'
 import Select from 'primevue/select'
+import DatePicker from 'primevue/datepicker'
 
 // Carica UNILAV: si trascina il PDF della Comunicazione Obbligatoria, il testo
 // viene estratto nel browser (pdfjs) e l'API lo scompone nei campi; la griglia
@@ -16,7 +17,8 @@ import Select from 'primevue/select'
 // (SP AI_UTENTI_Unilav_Applica, aggiornamento selettivo).
 //
 // Dalla stessa pagina passano tutti e quattro i modelli (assunzione, proroga,
-// trasformazione, cessazione): il tipo lo riconosce l'API dal tracciato del PDF
+// trasformazione, cessazione) e gli annullamenti, che cancellano una
+// comunicazione gia' inviata: il tipo lo riconosce l'API dal tracciato del PDF
 // e cambia solo cosa viene proposto (le date di fine soprattutto).
 
 const toast = useToast()
@@ -88,6 +90,9 @@ async function caricaFile(file) {
       // le righe con la tendina (filiale ambigua) restano da scegliere: non le spunto
       sel[p.campo] = !p.opzioni
       if (p.opzioni) sc[p.campo] = null
+      // riga con la data scrivibile (annullamento di cessazione): parte dal valore
+      // proposto, che puo' essere vuoto se il documento non dice la scadenza
+      if (p.editabile === 'data') sc[p.campo] = p.nuovo ? new Date(p.nuovo) : null
     }
     selezione.value = sel
     scelte.value = sc
@@ -111,7 +116,11 @@ async function applica() {
   try {
     const valori = {}
     // stringa vuota = azzeramento voluto (la SP ha i flag @Azzera*)
-    for (const p of daApplicare.value) valori[p.campo] = p.opzioni ? scelte.value[p.campo] : p.nuovo
+    for (const p of daApplicare.value) {
+      valori[p.campo] = p.opzioni ? scelte.value[p.campo]
+        : p.editabile === 'data' ? isoData(scelte.value[p.campo])   // vuota = svuota il campo
+        : p.nuovo
+    }
     // il codice comunicazione porta con se' anche la data di trasmissione
     if (valori.UnilavCodice && dati.value.estratti.UnilavData) {
       const m = dati.value.estratti.UnilavData.match(/(\d{2})\/(\d{2})\/(\d{4})/)
@@ -131,6 +140,13 @@ async function applica() {
   }
 }
 
+// il server vuole le date come yyyy-MM-dd; vuoto significa "svuota il campo"
+function isoData(d) {
+  if (!(d instanceof Date) || isNaN(d)) return ''
+  const p = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
 const ETICHETTE_ESTRATTI = [
   ['CodiceFiscale', 'Codice fiscale'], ['Cognome', 'Cognome'], ['Nome', 'Nome'], ['Sesso', 'Sesso'],
   ['DataNascita', 'Nato il'], ['ComuneNascita', 'Luogo di nascita'], ['Cittadinanza', 'Cittadinanza'],
@@ -140,6 +156,7 @@ const ETICHETTE_ESTRATTI = [
   ['DataFineProroga', 'Fine proroga'], ['DataTrasformazione', 'Data trasformazione'],
   ['CausaTrasformazione', 'Causa trasformazione'],
   ['DataCessazione', 'Data cessazione'], ['MotivoCessazione', 'Motivo cessazione'],
+  ['CodiceAnnullato', 'Annulla la comunicazione'], ['Note', 'Note'],
   ['TipoContratto', 'Contratto'], ['TipoOrario', 'Orario'], ['OreSettimanali', 'Ore/sett.'],
   ['Qualifica', 'Qualifica'], ['LivelloInquadramento', 'Livello'], ['CCNL', 'CCNL'],
   ['SoggiornoTipo', 'Soggiorno'], ['SoggiornoNumero', 'N. titolo'], ['SoggiornoMotivo', 'Motivo'],
@@ -150,17 +167,19 @@ const estrattiVisibili = computed(() =>
   ETICHETTE_ESTRATTI.filter(([k]) => dati.value?.estratti?.[k]).map(([k, l]) => ({ etichetta: l, valore: dati.value.estratti[k] })))
 
 const SEVERITA_TIPO = {
-  assunzione: 'success', proroga: 'info', trasformazione: 'warn', cessazione: 'danger'
+  assunzione: 'success', proroga: 'info', trasformazione: 'warn',
+  cessazione: 'danger', annullamento: 'contrast'
 }
 const ICONE_TIPO = {
   assunzione: 'pi pi-user-plus', proroga: 'pi pi-calendar-plus',
-  trasformazione: 'pi pi-sync', cessazione: 'pi pi-user-minus'
+  trasformazione: 'pi pi-sync', cessazione: 'pi pi-user-minus',
+  annullamento: 'pi pi-undo'
 }
 </script>
 
 <template>
   <div class="pagina">
-    <h2 class="titolo">Carica UNILAV — assunzione, proroga, trasformazione, cessazione</h2>
+    <h2 class="titolo">Carica UNILAV — assunzione, proroga, trasformazione, cessazione, annullamento</h2>
     <Message v-if="errore" severity="error" :closable="false">{{ errore }}</Message>
 
     <div
@@ -222,6 +241,11 @@ const ICONE_TIPO = {
                 <Select v-if="data.opzioni" v-model="scelte[data.campo]" :options="data.opzioni"
                   optionLabel="etichetta" optionValue="valore" filter size="small"
                   placeholder="scegli la filiale…" class="sel-filiale" />
+                <!-- annullamento di cessazione: la fine rapporto la puo' correggere
+                     l'operatore, perche' il documento non sempre dice la scadenza -->
+                <DatePicker v-else-if="data.editabile === 'data'" v-model="scelte[data.campo]"
+                  dateFormat="dd/mm/yy" showIcon showButtonBar size="small"
+                  placeholder="nessuna scadenza" class="data-scrivibile" />
                 <span v-else-if="data.azzera" class="azzera">
                   <i class="pi pi-eraser"></i> da svuotare
                 </span>
@@ -261,6 +285,7 @@ const ICONE_TIPO = {
 .scheda { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 .azzera { color: var(--p-orange-600); font-weight: 600; display: inline-flex; align-items: center; gap: 0.3rem; }
 .nota-valore { color: var(--p-text-muted-color); margin-left: 0.4rem; }
+.data-scrivibile { width: 13rem; }
 .sel-filiale { min-width: 18rem; }
 .barra { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .vuoto { color: var(--p-text-muted-color); font-style: italic; }
