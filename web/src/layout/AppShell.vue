@@ -61,7 +61,12 @@ const toast = useToast()
 
 const filtro = ref('')
 const expandedKeys = ref({})
-const sidebarAperta = ref(true)
+// Sotto i 900px (telefoni e tablet stretti) il menu da 300px coprirebbe quasi
+// tutta la pagina: li' parte chiuso e si apre sopra il contenuto invece che di
+// fianco. Il "come si dispone" lo decide il CSS con una media query, cosi' resta
+// giusto anche ridimensionando la finestra; qui si tiene solo aperto/chiuso.
+const schermoStretto = () => window.matchMedia('(max-width: 900px)').matches
+const sidebarAperta = ref(!schermoStretto())
 
 onMounted(() => {
   if (!auth.menu.length) auth.caricaMenu()
@@ -104,6 +109,7 @@ async function cambiaFiliale(idFiliale) {
 }
 
 function naviga(voce) {
+  if (schermoStretto()) sidebarAperta.value = false   // sul telefono libera subito la pagina
   if (voce.NavigateUrl) {
     window.open(voce.NavigateUrl, '_blank')
     return
@@ -147,9 +153,10 @@ const chiavePagina = computed(() =>
   <div class="shell">
     <header class="topbar">
       <Button
-        :icon="sidebarAperta ? 'pi pi-angle-double-left' : 'pi pi-bars'"
+        icon="pi pi-bars"
         text rounded severity="contrast"
         :title="sidebarAperta ? 'Nascondi menu' : 'Mostra menu'"
+        aria-label="Menu"
         @click="sidebarAperta = !sidebarAperta"
       />
       <span class="brand" @click="nav.vaiHome()">Speedy <b>Web</b></span>
@@ -175,6 +182,8 @@ const chiavePagina = computed(() =>
       <Button icon="pi pi-sign-out" text rounded severity="contrast" title="Esci" @click="esci" />
     </header>
     <div class="body">
+      <!-- sul telefono il menu copre la pagina: toccando fuori si richiude -->
+      <div v-if="sidebarAperta" class="velo" @click="sidebarAperta = false" />
       <aside class="sidebar" :class="{ chiusa: !sidebarAperta }">
         <IconField class="menu-filtro">
           <InputIcon class="pi pi-search" />
@@ -483,5 +492,42 @@ const chiavePagina = computed(() =>
   background: #29b96e;
   margin-right: .5rem;
   flex: 0 0 auto;
+}
+
+/* --- schermi stretti (telefoni, tablet in verticale) ---------------------
+   Il menu non sta piu' di fianco: si apre sopra la pagina come un cassetto e
+   si richiude scegliendo una voce o toccando fuori. Nella barra in alto
+   restano solo le cose indispensabili, altrimenti non ci sta niente. */
+/* sul desktop il velo non serve: il menu sta di fianco, non copre niente */
+.velo { display: none; }
+
+@media (max-width: 900px) {
+  .velo {
+    display: block;
+    position: fixed;
+    inset: 52px 0 0 0;
+    background: rgba(0, 0, 0, .35);
+    z-index: 20;
+  }
+  .sidebar {
+    position: fixed;
+    top: 52px;
+    left: 0;
+    bottom: 0;
+    /* la larghezza resta quella base (300px): l'apertura e' animata da una
+       transizione, e con min()/calc() il browser non interpola e il menu
+       resterebbe largo zero. Il limite in percentuale lo mette max-width. */
+    max-width: 84vw;
+    height: auto;
+    z-index: 30;
+    box-shadow: 4px 0 18px rgba(0, 0, 0, .3);
+  }
+  .sidebar.chiusa { box-shadow: none; }
+  .topbar { gap: .5rem; padding: .5rem; }
+  /* indirizzo della filiale e nome utente: sacrificabili, lo spazio serve */
+  .filiale-info, .user { display: none; }
+  .brand { font-size: 1.05rem; }
+  .filiale-select { max-width: 45vw; }
+  .content { padding: .75rem; height: calc(100vh - 52px); }
 }
 </style>
