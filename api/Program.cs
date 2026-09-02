@@ -2487,19 +2487,29 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
         // titoli di sezione dei modelli diversi dall'assunzione: senza questi il
         // valore che li precede (il titolo di studio) se li porta dietro
         "Proroga", "Trasformazione", "Cessazione" };
-    // posizioni di tutte le occorrenze di etichette e titoli di sezione
-    var occ = new List<(int Pos, string Lab)>();
+    // Posizioni di tutte le occorrenze di etichette e titoli di sezione.
+    // Nelle colonne strette del PDF le etichette vanno a capo ("Data fine" su una
+    // riga e "rapporto:" sulla successiva), quindi si cercano con gli spazi
+    // elastici: dove l'etichetta ha uno spazio, il testo puo' avere anche un a
+    // capo. La ricerca resta sensibile alle maiuscole, altrimenti "Nome:"
+    // aggancerebbe "Cognome:". Si tiene anche la lunghezza trovata, che con l'a
+    // capo non e' quella dell'etichetta.
+    var occ = new List<(int Pos, int Len, string Lab)>();
     foreach (var lab in etichette.Concat(sezioni))
     {
-        int i = 0;
-        while ((i = testo.IndexOf(lab, i, StringComparison.Ordinal)) >= 0) { occ.Add((i, lab)); i += lab.Length; }
+        var patt = string.Join(@"\s+", lab.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Select(System.Text.RegularExpressions.Regex.Escape))
+            + (lab.EndsWith(" ") ? @"\s+" : "");
+        foreach (System.Text.RegularExpressions.Match m in
+                 System.Text.RegularExpressions.Regex.Matches(testo, patt))
+            occ.Add((m.Index, m.Length, lab));
     }
     occ.Sort((a, b) => a.Pos.CompareTo(b.Pos));
     string Valore(string lab, int daPos = 0)
     {
         var hit = occ.FirstOrDefault(o => o.Lab == lab && o.Pos >= daPos);
         if (hit.Lab is null) return "";
-        var inizio = hit.Pos + lab.Length;
+        var inizio = hit.Pos + hit.Len;
         var next = occ.FirstOrDefault(o => o.Pos >= inizio);
         var fine = next.Lab is null ? testo.Length : next.Pos;
         return string.Join(" ", testo[inizio..fine].Split('\n', StringSplitOptions.RemoveEmptyEntries)
