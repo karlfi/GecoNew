@@ -93,6 +93,8 @@ async function caricaFile(file) {
       // riga con la data scrivibile (annullamento di cessazione): parte dal valore
       // proposto, che puo' essere vuoto se il documento non dice la scadenza
       if (p.editabile === 'data') sc[p.campo] = p.nuovo ? new Date(p.nuovo) : null
+      // riga con testo scrivibile (riassunzione: matricola, login, codice palmare)
+      if (p.editabile === 'testo') sc[p.campo] = p.nuovo ?? ''
     }
     selezione.value = sel
     scelte.value = sc
@@ -119,6 +121,7 @@ async function applica() {
     for (const p of daApplicare.value) {
       valori[p.campo] = p.opzioni ? scelte.value[p.campo]
         : p.editabile === 'data' ? isoData(scelte.value[p.campo])   // vuota = svuota il campo
+        : p.editabile === 'testo' ? (scelte.value[p.campo] ?? '').trim()
         : p.nuovo
     }
     // il codice comunicazione porta con se' anche la data di trasmissione
@@ -128,9 +131,17 @@ async function applica() {
     }
     const { data } = await api.post('/hr/unilav/applica', {
       idUtente: dati.value.utente.IdUtente,
-      valori
+      valori,
+      // riassunzione: la scheda precedente resta com'e', se ne crea una nuova
+      nuovaScheda: !!dati.value.riassunzione
     })
-    toast.add({ severity: 'success', summary: 'Scheda aggiornata', detail: `${daApplicare.value.length} campi applicati`, life: 3000 })
+    if (data.nuovoIdUtente) {
+      toast.add({ severity: 'success', summary: 'Scheda nuova creata',
+        detail: `Nuova scheda ${data.nuovoIdUtente}; la precedente (${dati.value.riassunzione.idUtente}) resta chiusa`, life: 6000 })
+      dati.value.riassunzione = null
+    } else {
+      toast.add({ severity: 'success', summary: 'Scheda aggiornata', detail: `${daApplicare.value.length} campi applicati`, life: 3000 })
+    }
     // ricarica il confronto rifacendo il parse sullo stesso testo? piu' semplice: azzera le proposte applicate
     dati.value.proposte = dati.value.proposte.filter(p => !selezione.value[p.campo])
   } catch (e) {
@@ -202,6 +213,12 @@ const ICONE_TIPO = {
       </div>
 
       <Message v-for="(a, i) in dati.avvisi" :key="i" severity="warn" :closable="false">{{ a }}</Message>
+      <Message v-if="dati.riassunzione" severity="info" :closable="false" icon="pi pi-user-plus">
+        <b>Riassunzione.</b> Con questo codice fiscale c'è già la scheda {{ dati.riassunzione.idUtente }}
+        (matr. {{ dati.riassunzione.matricola || '—' }}, dal {{ dati.riassunzione.dal }} al {{ dati.riassunzione.al }}),
+        che resta com'è. Applicando si crea una <b>scheda nuova</b>: anagrafica copiata da quella, contratto dal PDF,
+        matricola da scrivere qui sotto.
+      </Message>
 
       <div v-if="dati.utente" class="scheda">
         <b>{{ dati.utente.Nome }}</b>
@@ -220,7 +237,8 @@ const ICONE_TIPO = {
         <template v-else>
           <div class="barra">
             <span>{{ daApplicare.length }} campi selezionati su {{ dati.proposte.length }} proposti</span>
-            <Button label="Applica i campi selezionati" icon="pi pi-check" severity="success"
+            <Button :label="dati.riassunzione ? 'Crea la scheda nuova' : 'Applica i campi selezionati'"
+              icon="pi pi-check" severity="success"
               :disabled="!daApplicare.length" :loading="applicando" @click="applica" />
           </div>
           <DataTable :value="dati.proposte" size="small" stripedRows>
@@ -230,7 +248,7 @@ const ICONE_TIPO = {
               </template>
             </Column>
             <Column field="etichetta" header="Campo" style="width: 14rem" />
-            <Column field="attuale" header="In scheda ora">
+            <Column field="attuale" :header="dati.riassunzione ? 'Scheda precedente' : 'In scheda ora'">
               <template #body="{ data }">
                 <span :class="{ vuoto: !data.attuale }">{{ data.attuale || '(vuoto)' }}</span>
               </template>
@@ -243,6 +261,8 @@ const ICONE_TIPO = {
                   placeholder="scegli la filiale…" class="sel-filiale" />
                 <!-- annullamento di cessazione: la fine rapporto la puo' correggere
                      l'operatore, perche' il documento non sempre dice la scadenza -->
+                <InputText v-else-if="data.editabile === 'testo'" v-model="scelte[data.campo]"
+                  size="small" class="testo-scrivibile" :placeholder="data.testo || ''" />
                 <DatePicker v-else-if="data.editabile === 'data'" v-model="scelte[data.campo]"
                   dateFormat="dd/mm/yy" showIcon showButtonBar size="small"
                   placeholder="nessuna scadenza" class="data-scrivibile" />
@@ -286,6 +306,7 @@ const ICONE_TIPO = {
 .azzera { color: var(--p-orange-600); font-weight: 600; display: inline-flex; align-items: center; gap: 0.3rem; }
 .nota-valore { color: var(--p-text-muted-color); margin-left: 0.4rem; }
 .data-scrivibile { width: 13rem; }
+.testo-scrivibile { width: 13rem; }
 .sel-filiale { min-width: 18rem; }
 .barra { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .vuoto { color: var(--p-text-muted-color); font-style: italic; }

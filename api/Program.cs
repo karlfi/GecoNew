@@ -2643,6 +2643,19 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
     if (u0 is null)
         avvisi.Add("Nessun utente con questo codice fiscale: crealo prima dalla pagina Utenti, poi ricarica il PDF");
 
+    // Riassunzione: con questo CF c'e' gia' una scheda, ma chiusa prima che il
+    // nuovo rapporto cominci. Non le si scrive sopra (e' la storia del rapporto
+    // precedente, con la sua matricola e le sue giornate): se ne propone una
+    // nuova, con l'anagrafica copiata da quella, il contratto dall'UNILAV e la
+    // matricola da scrivere. E' successo con CANGIOLU: l'assunzione di agosto
+    // era finita sulla scheda di gennaio.
+    DateTime? DataIso(string? s) => DateTime.TryParseExact(s ?? "", "yyyy-MM-dd", null,
+        System.Globalization.DateTimeStyles.None, out var d) ? d : null;
+    var inizioNuovo = Data((estratti["DataInizioRapporto"] ?? "").Trim());
+    var riassunzione = tipo == "assunzione" && u0 is not null
+        && DataIso(Val(u0, "DataFine")?.ToString()) is DateTime fineVecchia
+        && inizioNuovo is DateTime iniz && fineVecchia < iniz;
+
     // proposte di aggiornamento (campo tabella -> valore dal PDF), solo se diverse
     var proposte = new List<object>();
     void Proponi(string campo, string etichetta, string? nuovo, string? testo = null, object? opzioni = null)
@@ -2850,9 +2863,32 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
             break;
 
         default: // assunzione
-            Proponi("DataFineContratto", "Fine prevista contratto", estratti["DataFineRapporto"]);
-            Proponi("DataFine", "Fine rapporto", estratti["DataFineRapporto"]);
+            if (riassunzione && string.IsNullOrWhiteSpace(estratti["DataFineRapporto"]))
+            {
+                // contratto nuovo senza scadenza: la scheda nuova non deve ereditare
+                // la chiusura di quella vecchia
+                ProponiAzzeramento("DataFineContratto", "Fine contratto", "nuovo rapporto senza scadenza");
+                ProponiAzzeramento("DataFine", "Fine rapporto", "nuovo rapporto senza scadenza");
+            }
+            else
+            {
+                Proponi("DataFineContratto", "Fine prevista contratto", estratti["DataFineRapporto"]);
+                Proponi("DataFine", "Fine rapporto", estratti["DataFineRapporto"]);
+            }
             break;
+    }
+
+    if (riassunzione && u0 is not null)
+    {
+        // quello che una scheda nuova deve avere di suo: la matricola la da' il
+        // personale, il login si tiene quello di prima (in azienda si fa cosi'),
+        // il codice palmare segue la convenzione di oggi (le prime 11 lettere del CF)
+        proposte.Add(new { campo = "Matricola", etichetta = "Matricola (nuova)", attuale = Val(u0, "Matricola")?.ToString() ?? "",
+            nuovo = "", testo = "la assegna il personale", opzioni = (object?)null, azzera = false, editabile = "testo" });
+        proposte.Add(new { campo = "Utente", etichetta = "Login", attuale = Val(u0, "Utente")?.ToString() ?? "",
+            nuovo = Val(u0, "Utente")?.ToString() ?? "", testo = (string?)null, opzioni = (object?)null, azzera = false, editabile = "testo" });
+        proposte.Add(new { campo = "codAppLogin", etichetta = "Codice palmare", attuale = Val(u0, "codAppLogin")?.ToString() ?? "",
+            nuovo = cf.Length == 16 ? cf[..11] : "", testo = (string?)null, opzioni = (object?)null, azzera = false, editabile = "testo" });
     }
 
     var titoloTipo = tipo switch
@@ -2867,7 +2903,12 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
     return Results.Ok(new
     {
         fonte, tipo, titoloTipo, causale, estratti, utente = u0,
-        altriAccount = utenti.Count - (u0 is null ? 0 : 1), proposte, avvisi
+        altriAccount = utenti.Count - (u0 is null ? 0 : 1), proposte, avvisi,
+        riassunzione = riassunzione && u0 is not null ? new
+        {
+            idUtente = Val(u0, "IdUtente"), matricola = Val(u0, "Matricola"),
+            dal = Val(u0, "DataInizio"), al = Val(u0, "DataFine")
+        } : null
     });
 }).RequireAuthorization();
 
@@ -2875,6 +2916,69 @@ app.MapPost("/api/hr/unilav/applica", async (UnilavApplicaRequest req) =>
 {
     if (req.IdUtente <= 0 || req.Valori is null || req.Valori.Count == 0)
         return Results.Json(new { errore = "Nessun campo da applicare" }, statusCode: 400);
+
+    if (req.NuovaScheda)
+    {
+        // Riassunzione: req.IdUtente e' la scheda del rapporto precedente e resta
+        // com'e'. Se ne crea una nuova copiandone l'anagrafica; sopra si applicano
+        // i campi scelti a video (date e contratto dall'UNILAV, matricola, login).
+        // Quello che appartiene al vecchio rapporto (matricola, chiusura, UNILAV,
+        // accessi) non si porta dietro.
+        await using var cnN = new SqlConnection(ConnString());
+        var vecchia = (await cnN.QueryFirstOrDefaultAsync("SELECT * FROM UTENTI WHERE IdUtente = @id",
+            new { id = req.IdUtente })) as IDictionary<string, object>;
+        if (vecchia is null)
+            return Results.Json(new { errore = $"Scheda {req.IdUtente} non trovata" }, statusCode: 404);
+        var delVecchioRapporto = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Matricola", "DataFine", "DataFineContratto", "UnilavCodice", "UnilavData",
+            "LoginErrors", "DataUltimoAccesso", "tokenAutoLogin", "tokenRegistrazione", "RECHASH", "RECDATA"
+        };
+        var colonneUtenti = (await LoadColonne(cnN, "UTENTI"))
+            .Where(c => !c.Identita && c.Col != "Pass").Select(c => c.Col).ToList();
+        var parN = new DynamicParameters();
+        parN.Add("IdUtente", null);            // NULL = inserimento
+        foreach (var col in colonneUtenti)
+        {
+            var v = vecchia.TryGetValue(col, out var x) ? x : null;
+            if (delVecchioRapporto.Contains(col)) v = null;
+            if (col.Equals("Stato", StringComparison.OrdinalIgnoreCase)) v = "SI";
+            parN.Add(col, v);
+        }
+        foreach (var (k, v) in req.Valori)
+        {
+            var col = colonneUtenti.FirstOrDefault(c => c.Equals(k, StringComparison.OrdinalIgnoreCase));
+            if (col is null) continue;
+            if (string.IsNullOrWhiteSpace(v)) { parN.Add(col, null); continue; }
+            if (col is "DataNascita" or "DataInizio" or "DataFineContratto" or "DataFine" or "SoggiornoScadenza" or "UnilavData")
+            {
+                if (DateTime.TryParse(v, System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out var d)) parN.Add(col, d);
+            }
+            else if (col is "OreSettimanali" or "Partime")
+            {
+                if (decimal.TryParse(v.Replace(',', '.'), System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var num)) parN.Add(col, num);
+            }
+            else if (col == "IdFiliale") { if (int.TryParse(v, out var idf)) parN.Add(col, idf); }
+            else parN.Add(col, v.Trim());
+        }
+        try
+        {
+            var nuovoId = await cnN.QueryFirstOrDefaultAsync<int?>("dbo.AI_UTENTI_Save", parN,
+                commandType: CommandType.StoredProcedure);
+            // la vecchia, se non lo diceva gia', da oggi risulta cessata anche in elenco
+            var statoVecchio = vecchia.TryGetValue("Stato", out var st) ? st?.ToString()?.Trim() : null;
+            if (!string.Equals(statoVecchio, "CESSATO", StringComparison.OrdinalIgnoreCase))
+                await cnN.ExecuteAsync("dbo.AI_UTENTI_Stato_Save", new { req.IdUtente, Stato = "CESSATO" },
+                    commandType: CommandType.StoredProcedure);
+            return Results.Ok(new { righe = 1, nuovoIdUtente = nuovoId });
+        }
+        catch (SqlException ex)
+        {
+            return Results.Json(new { errore = ex.Message }, statusCode: 400);
+        }
+    }
     var ammessi = new[] { "Nome", "DataNascita", "DataInizio", "IndirizzoRes", "CapRes", "ComuneRes", "ProvRes",
         "Livello", "Mansione", "Cittadinanza", "LuogoNascita", "TitoloStudio", "TipoContratto", "DataFineContratto",
         "DataFine", "OreSettimanali", "Partime", "IdFiliale", "CCNL", "SoggiornoTipo", "SoggiornoNumero",
@@ -4607,7 +4711,7 @@ record SalvaWorkflowRequest(int? IdWorkflow, int IdAzione, string? Stato_Inizio,
 record ComandoSqlRequest(string Sql, string? Data, string? Valore);
 record EsitiVerificaRequest(string Barcode, int IdAzione, int IdProcesso, string? Comune, string? Operatore, string? Attributo, string? Data);
 record UnilavParseRequest(string? Testo, string? TracciatoJson, string? PdfBase64);
-record UnilavApplicaRequest(int IdUtente, Dictionary<string, string?> Valori);
+record UnilavApplicaRequest(int IdUtente, Dictionary<string, string?> Valori, bool NuovaScheda = false);
 record EsitiConfermaRequest(int IdAzione, int IdProcesso, string ElencoBarcode, string ElencoParametri1, string? Comune, string? Operatore, string? Data);
 record VerticeGiro(double Lat, double Lng);
 record CreaGiroRequest(string Nome, string? Colore, List<VerticeGiro> Vertici);
