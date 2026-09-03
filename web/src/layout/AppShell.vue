@@ -18,6 +18,7 @@ import DashboardView from '../views/DashboardView.vue'
 import PlaceholderView from '../views/PlaceholderView.vue'
 import RisultatoInterrogazioni from '../views/RisultatoInterrogazioni.vue'
 import ElencoDipendentiView from '../views/ElencoDipendentiView.vue'
+import FatturazioneAnciView from '../views/FatturazioneAnciView.vue'
 import ConfigTable from '../views/ConfigTable.vue'
 import WorkflowView from '../views/WorkflowView.vue'
 import InterrogazioniEditor from '../views/InterrogazioniEditor.vue'
@@ -229,6 +230,10 @@ const chiavePagina = computed(() =>
           :key="chiavePagina"
           :id-query="nav.corrente.idQuery"
           :s-where="nav.corrente.sWhere"
+        />
+        <FatturazioneAnciView
+          v-else-if="nav.corrente.tipo === 'fatturazione-anci'"
+          :key="chiavePagina"
         />
         <ConfigTable
           v-else-if="nav.corrente.tipo === 'config'"

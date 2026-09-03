@@ -292,6 +292,7 @@ export function navDaLink(voce) {
   }
   // stessa query dell'interrogazione, ma con la griglia dell'Elenco Dipendenti
   // (colonna Stato modificabile): in tweb la voce resta RisultatoInterrogazioni
+  if (link === '/fatturazione-anci') return { tipo: 'fatturazione-anci' }
   if (link === '/elenco-dipendenti') {
     const { idQuery, sWhere } = parseParametriMenu(voce.Parametri)
     return { tipo: 'elenco-dipendenti', idQuery, sWhere }

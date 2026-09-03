@@ -503,6 +503,9 @@ app.MapPost("/api/interrogazioni/esegui", async (EseguiInterrogazioneRequest req
     }
 }).RequireAuthorization();
 
+// Fatturazione ANCI (report Excel e mail di prefattura): vedi FatturazioneAnci.cs
+FatturazioneAnci.Map(app, ConnString);
+
 // Stato di archiviazione del dipendente, modificabile dalla griglia "Elenco
 // Dipendenti" (interrogazione 1093). I valori ammessi li controlla la SP.
 app.MapPost("/api/hr/utente-stato", async (UtenteStatoRequest req) =>
