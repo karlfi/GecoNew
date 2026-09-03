@@ -8,45 +8,62 @@ using MailKit.Security;
 using Microsoft.Data.SqlClient;
 using MimeKit;
 
-// === Fatturazione ANCI ===
-// Era uno step dello schedulatore (ANCI\DELIVERY-06_*.sql): elenco clienti,
-// FATT_Genera per ognuno, poi per ogni fattura tre export Excel (dettaglio,
-// voci, ripartizione CDC) e una mail di prefattura con i primi due allegati.
-// La parte SQL sta in FATT_ANCI_Genera; qui si fanno i file e le mail, che da
-// SQL non si possono fare. Si fattura a consuntivo: data fattura = primo del
-// mese corrente, la fattura copre quello che sta prima.
+// === Fatturazione a consuntivo per tipo di vendita (ANCI, ALIA/FFM) ===
+// Erano step dello schedulatore (DELIVERY-06_*.sql), uguali a parte il tipo di
+// vendita e i report: elenco clienti, FATT_Genera per ognuno, export Excel di
+// FATT_Report per fattura e la mail di prefattura con gli allegati.
+// La parte SQL sta in FATT_TIPO_Genera / FATT_TIPO_Previsione; qui i file
+// (ClosedXML) e le mail (MailKit, SMTP da LISTA_VALORI). Data fattura = primo
+// del mese corrente, la fattura copre quello che sta prima.
+//
+// Ogni tipo e' un "profilo": codice del tipo di vendita, famiglia delle
+// condizioni per l'elenco fatture, se produrre il report delle voci, quali
+// file allegare alla mail. Le rotte sono /api/fatturazione/{profilo}/...
 //
 // Le prove non devono arrivare ai clienti: con DestinatarioProva le mail vanno
 // solo a quell'indirizzo, con i destinatari veri scritti nel testo.
-static class FatturazioneAnci
+static class Fatturazione
 {
+    record Profilo(string Nome, string Titolo, string TipoVendita, string? CodFamiglia, bool Riepilogo, string[] Allegati);
+
+    static readonly Dictionary<string, Profilo> Profili = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // ANCI: dettaglio, voci e ripartizione CDC; in mail dettaglio e voci
+        ["anci"] = new("anci", "Fatturazione ANCI", "ANCI", null, true, new[] { "Dettaglio", "VociFattura" }),
+        // ALIA: tipo di vendita FFM, condizioni aperte di famiglia N; niente voci;
+        // in mail dettaglio e ripartizione CDC
+        ["alia"] = new("alia", "Fatturazione ALIA", "FFM", "N", false, new[] { "Dettaglio", "RipartizioneCDC" }),
+    };
+
     public static void Map(WebApplication app, Func<string> connString)
     {
         // stato per una data: chi e' ancora da fatturare e le fatture gia' fatte
-        app.MapGet("/api/fatturazione/anci/stato", async (DateTime? dataFattura) =>
+        app.MapGet("/api/fatturazione/{profilo}/stato", async (string profilo, DateTime? dataFattura) =>
         {
+            if (!Profili.TryGetValue(profilo, out var p)) return ProfiloIgnoto(profilo);
             var data = PrimoDelMese(dataFattura);
             await using var cn = new SqlConnection(connString());
-            var (daFatturare, fatture) = await Elenchi(cn, data, null, genera: false);
+            var (daFatturare, fatture) = await Elenchi(cn, p, data, null, genera: false);
             var cartella = await Cartella(cn);
             return Results.Ok(new
             {
-                dataFattura = data.ToString("yyyy-MM-dd"),
-                cartella,
+                profilo = p.Nome, titolo = p.Titolo, tipoVendita = p.TipoVendita,
+                riepilogo = p.Riepilogo, allegati = p.Allegati,
+                dataFattura = data.ToString("yyyy-MM-dd"), cartella,
                 daFatturare,
                 fatture = fatture.Select(f => Riga(f, cartella)).ToList()
             });
         }).RequireAuthorization();
 
-        // previsione: quanto verrebbe fatturato oggi, cliente per cliente, senza
-        // fatturare. FATT_ANCI_Previsione esegue davvero FATT_Genera e annulla:
-        // pezzi, importo e voci sono quelli che uscirebbero, non una stima a parte.
-        app.MapGet("/api/fatturazione/anci/previsione", async (DateTime? dataFattura, int? idCliente) =>
+        // previsione: quanto verrebbe fatturato oggi, senza fatturare (FATT_Genera
+        // eseguita davvero e annullata: pezzi, importo e voci sono quelli veri)
+        app.MapGet("/api/fatturazione/{profilo}/previsione", async (string profilo, DateTime? dataFattura, int? idCliente) =>
         {
+            if (!Profili.TryGetValue(profilo, out var p)) return ProfiloIgnoto(profilo);
             var data = PrimoDelMese(dataFattura);
             await using var cn = new SqlConnection(connString());
-            using var multi = await cn.QueryMultipleAsync("dbo.FATT_ANCI_Previsione",
-                new { DataFattura = data, IdCliente = idCliente },
+            using var multi = await cn.QueryMultipleAsync("dbo.FATT_TIPO_Previsione",
+                new { CodTipoVendita = p.TipoVendita, DataFattura = data, IdCliente = idCliente },
                 commandType: CommandType.StoredProcedure, commandTimeout: 900);
             var stime = (await multi.ReadAsync()).Cast<IDictionary<string, object>>().ToList();
             var voci = (await multi.ReadAsync()).Cast<IDictionary<string, object>>().ToList();
@@ -68,16 +85,15 @@ static class FatturazioneAnci
             }).ToList();
             return Results.Ok(new
             {
-                dataFattura = data.ToString("yyyy-MM-dd"),
-                clienti,
-                totalePezzi = clienti.Sum(c => c.pezzi),
-                totaleImporto = clienti.Sum(c => c.importo)
+                dataFattura = data.ToString("yyyy-MM-dd"), clienti,
+                totalePezzi = clienti.Sum(c => c.pezzi), totaleImporto = clienti.Sum(c => c.importo)
             });
         }).RequireAuthorization();
 
         // esecuzione: fatture (se richiesto), report Excel, mail
-        app.MapPost("/api/fatturazione/anci/esegui", async (FattAnciRequest req, ClaimsPrincipal user) =>
+        app.MapPost("/api/fatturazione/{profilo}/esegui", async (string profilo, FattRequest req, ClaimsPrincipal user) =>
         {
+            if (!Profili.TryGetValue(profilo, out var p)) return ProfiloIgnoto(profilo);
             var data = PrimoDelMese(req.DataFattura);
             await using var cn = new SqlConnection(connString());
             var cartella = await Cartella(cn);
@@ -87,7 +103,7 @@ static class FatturazioneAnci
                 return Results.Json(new { errore = $"Cartella dei file non utilizzabile ({cartella}): {ex.Message}" }, statusCode: 400);
             }
 
-            var (daFatturare, fatture) = await Elenchi(cn, data, req.IdCliente, req.Genera);
+            var (daFatturare, fatture) = await Elenchi(cn, p, data, req.IdCliente, req.Genera);
 
             // su quali fatture lavorare: quelle scelte a video; altrimenti quelle
             // appena generate; senza generazione, tutte quelle della data
@@ -113,10 +129,11 @@ static class FatturazioneAnci
                 string? erroreFile = null;
                 try
                 {
-                    // come lo schedulatore: Dettaglio (tipo 0, o 3 per Nexive), VociFattura (1),
-                    // RipartizioneCDC (2) solo dove prevista
+                    // Dettaglio (tipo 0, o 3 per Nexive), Voci (1) dove il profilo le
+                    // prevede, RipartizioneCDC (2) dove prevista per il cliente
                     file.Add(await Esporta(cn, cartella, idFattura, Int(f["TipoReport"]), $"{prefix}_Dettaglio.xlsx"));
-                    file.Add(await Esporta(cn, cartella, idFattura, Int(f["TipoRiepilogo"]), $"{prefix}_VociFattura.xlsx"));
+                    if (p.Riepilogo)
+                        file.Add(await Esporta(cn, cartella, idFattura, 1, $"{prefix}_VociFattura.xlsx"));
                     if (Int(f["ReportCDC"]) == 1)
                         file.Add(await Esporta(cn, cartella, idFattura, 2, $"{prefix}_RipartizioneCDC.xlsx"));
                 }
@@ -131,13 +148,13 @@ static class FatturazioneAnci
                     try
                     {
                         if (a.Count == 0) throw new InvalidOperationException("nessun indirizzo di prefattura sul cliente");
-                        // in allegato dettaglio e voci, non la ripartizione CDC (come prima)
-                        var allegati = file.Take(2).Select(n => Path.Combine(cartella, n)).Where(File.Exists).ToList();
+                        // gli allegati del profilo, se esistono (RimuoviAllegatiNonPresenti dello step)
+                        var allegati = p.Allegati.Select(n => Path.Combine(cartella, $"{prefix}_{n}.xlsx")).Where(File.Exists).ToList();
                         await InviaMail(smtp, f, data, a, allegati,
                             prova.Length > 0 ? $"destinatari reali: {string.Join(", ", destinatari)}" : null);
                         await cn.ExecuteAsync("dbo.AI_LOG_Exec_Add", new
                         {
-                            Chiamata = "FATT_ANCI_Mail",
+                            Chiamata = $"FATT_{p.Nome.ToUpperInvariant()}_Mail",
                             Parametri = $"IdFattura={idFattura}; a={string.Join(",", a)}; allegati={allegati.Count}"
                                 + (prova.Length > 0 ? "; PROVA" : "") + $"; utente={user.Identity?.Name}"
                         }, commandType: CommandType.StoredProcedure);
@@ -170,8 +187,9 @@ static class FatturazioneAnci
         }).RequireAuthorization();
 
         // scarica uno dei file prodotti (solo nomi nella forma FAT_..., niente percorsi)
-        app.MapGet("/api/fatturazione/anci/file", async (string nome) =>
+        app.MapGet("/api/fatturazione/{profilo}/file", async (string profilo, string nome) =>
         {
+            if (!Profili.ContainsKey(profilo)) return ProfiloIgnoto(profilo);
             if (!Regex.IsMatch(nome ?? "", @"^FAT_[\w\-]+\.xlsx$"))
                 return Results.BadRequest(new { errore = "Nome file non valido" });
             await using var cn = new SqlConnection(connString());
@@ -180,6 +198,9 @@ static class FatturazioneAnci
             return Results.File(percorso, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", nome);
         }).RequireAuthorization();
     }
+
+    static IResult ProfiloIgnoto(string profilo) =>
+        Results.NotFound(new { errore = $"Fatturazione '{profilo}' non prevista: {string.Join(", ", Profili.Keys)}" });
 
     static DateTime PrimoDelMese(DateTime? d)
     {
@@ -190,10 +211,10 @@ static class FatturazioneAnci
     static int Int(object? v) => v is null || v is DBNull ? 0 : Convert.ToInt32(v);
 
     static async Task<(List<object> DaFatturare, List<IDictionary<string, object>> Fatture)> Elenchi(
-        SqlConnection cn, DateTime data, int? idCliente, bool genera)
+        SqlConnection cn, Profilo p, DateTime data, int? idCliente, bool genera)
     {
-        using var multi = await cn.QueryMultipleAsync("dbo.FATT_ANCI_Genera",
-            new { DataFattura = data, IdCliente = idCliente, Genera = genera },
+        using var multi = await cn.QueryMultipleAsync("dbo.FATT_TIPO_Genera",
+            new { CodTipoVendita = p.TipoVendita, p.CodFamiglia, DataFattura = data, IdCliente = idCliente, Genera = genera },
             commandType: CommandType.StoredProcedure, commandTimeout: 900);
         var daFatturare = (await multi.ReadAsync()).Cast<object>().ToList();
         var fatture = (await multi.ReadAsync()).Cast<IDictionary<string, object>>().ToList();
@@ -287,7 +308,7 @@ static class FatturazioneAnci
         string? V(string k) => righe.FirstOrDefault(r => string.Equals(r.Valore, k, StringComparison.OrdinalIgnoreCase)).Codice;
         var server = V("SERVER"); var user = V("USER"); var pass = V("PASS");
         if (string.IsNullOrWhiteSpace(server) || string.IsNullOrWhiteSpace(user)) return null;
-        return new SmtpConfig(server.Trim(), int.TryParse(V("PORT"), out var p) ? p : 465, user.Trim(), pass ?? "");
+        return new SmtpConfig(server.Trim(), int.TryParse(V("PORT"), out var port) ? port : 465, user.Trim(), pass ?? "");
     }
 
     // la mail di prefattura, con lo stesso testo dello schedulatore (APRIMAIL)
@@ -320,5 +341,5 @@ static class FatturazioneAnci
     }
 }
 
-record FattAnciRequest(DateTime? DataFattura, int? IdCliente, bool Genera, bool InviaMail,
+record FattRequest(DateTime? DataFattura, int? IdCliente, bool Genera, bool InviaMail,
     string? DestinatarioProva, int[]? IdFatture);

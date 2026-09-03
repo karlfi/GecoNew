@@ -292,7 +292,9 @@ export function navDaLink(voce) {
   }
   // stessa query dell'interrogazione, ma con la griglia dell'Elenco Dipendenti
   // (colonna Stato modificabile): in tweb la voce resta RisultatoInterrogazioni
-  if (link === '/fatturazione-anci') return { tipo: 'fatturazione-anci' }
+  // fatturazioni a consuntivo: stessa pagina, profilo diverso (ANCI, ALIA)
+  if (link === '/fatturazione-anci') return { tipo: 'fatturazione', profilo: 'anci' }
+  if (link === '/fatturazione-alia') return { tipo: 'fatturazione', profilo: 'alia' }
   if (link === '/elenco-dipendenti') {
     const { idQuery, sWhere } = parseParametriMenu(voce.Parametri)
     return { tipo: 'elenco-dipendenti', idQuery, sWhere }

@@ -1,10 +1,11 @@
 <script setup>
-// Fatturazione ANCI: era uno step dello schedulatore, ora si lancia da qui.
-// Si fattura a consuntivo: la data fattura e' il primo del mese corrente e la
+// Fatturazione a consuntivo per tipo di vendita (ANCI, ALIA): erano step
+// dello schedulatore, ora si lanciano da qui. Il profilo arriva dalla voce di
+// menu; quali report e quali allegati li decide l'API per profilo, la pagina
+// li legge dallo stato. La data fattura e' il primo del mese corrente e la
 // fattura copre quello che sta prima. La pagina mostra chi e' da fatturare e
-// le fatture gia' fatte per quella data, poi esegue: FATT_ANCI_Genera per le
-// fatture, e per ognuna i tre Excel (dettaglio, voci, ripartizione CDC) e la
-// mail di prefattura con i primi due allegati.
+// le fatture gia' fatte per quella data, poi esegue: FATT_TIPO_Genera per le
+// fatture, e per ognuna gli Excel e la mail di prefattura con gli allegati.
 //
 // Le prove non arrivano ai clienti: con "manda tutto a" le mail vanno solo a
 // quell'indirizzo, coi destinatari veri scritti nel testo.
@@ -22,6 +23,9 @@ import Dialog from 'primevue/dialog'
 import Message from 'primevue/message'
 import Tag from 'primevue/tag'
 import ProgressSpinner from 'primevue/progressspinner'
+
+const props = defineProps({ profilo: { type: String, default: 'anci' } })
+const base = () => `/fatturazione/${props.profilo}`
 
 const toast = useToast()
 const auth = useAuthStore()
@@ -49,7 +53,7 @@ async function aggiorna() {
   errore.value = ''
   esito.value = null
   try {
-    const { data } = await api.get('/fatturazione/anci/stato', { params: { dataFattura: iso(dataFattura.value) } })
+    const { data } = await api.get(`${base()}/stato`, { params: { dataFattura: iso(dataFattura.value) } })
     stato.value = data
     genera.value = data.daFatturare.length > 0
     selezionate.value = []
@@ -83,7 +87,7 @@ async function esegui() {
   esecuzione.value = true
   errore.value = ''
   try {
-    const { data } = await api.post('/fatturazione/anci/esegui', {
+    const { data } = await api.post(`${base()}/esegui`, {
       dataFattura: iso(dataFattura.value),
       genera: genera.value,
       inviaMail: inviaMail.value,
@@ -96,7 +100,7 @@ async function esegui() {
     esito.value = data
     for (const a of data.avvisi ?? []) toast.add({ severity: 'warn', summary: 'Attenzione', detail: a, life: 8000 })
     // ricarica lo stato senza perdere l'esito
-    const s = await api.get('/fatturazione/anci/stato', { params: { dataFattura: iso(dataFattura.value) } })
+    const s = await api.get(`${base()}/stato`, { params: { dataFattura: iso(dataFattura.value) } })
     stato.value = s.data
     selezionate.value = []
   } catch (e) {
@@ -114,7 +118,7 @@ const espanse = ref([])
 async function calcolaPrevisione() {
   calcolando.value = true
   try {
-    const { data } = await api.get('/fatturazione/anci/previsione', { params: { dataFattura: iso(dataFattura.value) } })
+    const { data } = await api.get(`${base()}/previsione`, { params: { dataFattura: iso(dataFattura.value) } })
     previsione.value = data
     espanse.value = data.clienti.filter(c => c.voci.length)
   } catch (e) {
@@ -129,7 +133,7 @@ const stimaDi = idCliente => previsione.value?.clienti.find(c => c.idCliente ===
 async function rilancia(fattura, conMail) {
   esecuzione.value = true
   try {
-    const { data } = await api.post('/fatturazione/anci/esegui', {
+    const { data } = await api.post(`${base()}/esegui`, {
       dataFattura: iso(dataFattura.value), genera: false, inviaMail: conMail,
       destinatarioProva: destinatarioProva.value.trim() || null,
       idFatture: [fattura.idFattura]
@@ -142,7 +146,7 @@ async function rilancia(fattura, conMail) {
       detail: x?.erroreFile ? x.erroreFile : conMail ? (x?.mail?.inviata ? `mail inviata a ${x.mail.a}` : (x?.mail?.errore ?? 'mail non inviata')) : `${x?.file?.length ?? 0} file rifatti`,
       life: 6000
     })
-    const s = await api.get('/fatturazione/anci/stato', { params: { dataFattura: iso(dataFattura.value) } })
+    const s = await api.get(`${base()}/stato`, { params: { dataFattura: iso(dataFattura.value) } })
     stato.value = s.data
   } catch (e) {
     toast.add({ severity: 'error', summary: 'Fattura', detail: e.response?.data?.errore ?? 'Errore', life: 5000 })
@@ -154,7 +158,7 @@ async function rilancia(fattura, conMail) {
 // i file si scaricano passando dall'API (un link diretto non porterebbe il token)
 async function scarica(nome) {
   try {
-    const { data } = await api.get('/fatturazione/anci/file', { params: { nome }, responseType: 'blob' })
+    const { data } = await api.get(`${base()}/file`, { params: { nome }, responseType: 'blob' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(data)
     a.download = nome
@@ -170,11 +174,14 @@ function mettiMiaMail() { destinatarioProva.value = auth.utente?.email ?? auth.u
 
 <template>
   <div class="pagina">
-    <h2 class="titolo">Fatturazione ANCI</h2>
+    <h2 class="titolo">{{ stato?.titolo ?? 'Fatturazione' }}</h2>
     <p class="sotto">
       Fattura a consuntivo: la fattura del <b>{{ dataFattura.toLocaleDateString('it-IT') }}</b>
-      copre le attività fino al giorno prima. Per ogni fattura: dettaglio, voci e ripartizione CDC in Excel,
-      e la mail di prefattura con dettaglio e voci in allegato.
+      copre le attività fino al giorno prima.
+      <template v-if="stato">
+        Per ogni fattura: dettaglio{{ stato.riepilogo ? ', voci' : '' }} e ripartizione CDC in Excel,
+        e la mail di prefattura con {{ stato.allegati.join(' e ').replace('VociFattura', 'voci').replace('RipartizioneCDC', 'ripartizione CDC').replace('Dettaglio', 'dettaglio') }} in allegato.
+      </template>
     </p>
 
     <div class="barra">
@@ -224,9 +231,9 @@ function mettiMiaMail() { destinatarioProva.value = auth.utente?.email ?? auth.u
             </DataTable>
           </template>
         </DataTable>
-        <p v-else class="vuoto">Nessun cliente ANCI da fatturare per questa data.</p>
+        <p v-else class="vuoto">Nessun cliente da fatturare per questa data.</p>
         <small v-if="previsione && previsione.totalePezzi === 0" class="nota">
-          Zero pezzi per tutti: i clienti ANCI si fatturano sugli esiti di rendicontazione non ancora fatturati,
+          Zero pezzi per tutti: questi clienti si fatturano sugli esiti di rendicontazione non ancora fatturati,
           e oggi non ce ne sono. Di solito vuol dire che i rendiconti del mese non sono ancora stati caricati.
         </small>
       </section>
@@ -258,7 +265,7 @@ function mettiMiaMail() { destinatarioProva.value = auth.utente?.email ?? auth.u
             </template>
           </Column>
         </DataTable>
-        <p v-else class="vuoto">Nessuna fattura ANCI per questa data.</p>
+        <p v-else class="vuoto">Nessuna fattura per questa data.</p>
         <small v-if="stato.fatture.length" class="nota">
           I file si scaricano cliccandoli. "Reinvia mail" rispetta la casella "manda tutto a": vuota = ai destinatari veri.
         </small>
