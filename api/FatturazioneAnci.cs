@@ -216,12 +216,17 @@ static class FatturazioneAnci
         };
     }
 
-    // la cartella dei file sta in PARAMETRI, come le altre cartelle dell'app
+    // La cartella dei file sta in PARAMETRI, come le altre cartelle dell'app.
+    // Sul server l'unica cartella scrivibile dall'app e' la temp (la usa gia' il
+    // proxy dei report), quindi il valore puo' contenere %TEMP%: i file sono
+    // comunque rifacibili in ogni momento dalla pagina.
     static async Task<string> Cartella(SqlConnection cn)
     {
         var v = await cn.ExecuteScalarAsync<string?>(
             "SELECT Valore FROM PARAMETRI WHERE Nome = 'PercorsoFatturazione'");
-        return string.IsNullOrWhiteSpace(v) ? Path.Combine(AppContext.BaseDirectory, "Fatturazione") : v.Trim();
+        if (string.IsNullOrWhiteSpace(v)) return Path.Combine(Path.GetTempPath(), "speedyweb-fatturazione");
+        return Environment.ExpandEnvironmentVariables(v.Trim()
+            .Replace("%TEMP%", Path.GetTempPath().TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase));
     }
 
     // FATT_Report -> un foglio Excel con intestazione (era EXPORTXLS con EsportaIntestazione=1)

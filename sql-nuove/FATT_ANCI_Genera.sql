@@ -94,9 +94,10 @@ END
 GO
 
 -- la cartella dove finiscono i file: era Y:\DELIVERY\Fatturazione dello
--- schedulatore, ora sta sul server accanto alle altre cartelle dell'app
+-- schedulatore. Sul server l'app puo' scrivere solo nella temp (come il proxy
+-- dei report), e %TEMP% lo espande l'API; i file si rifanno dalla pagina.
 IF NOT EXISTS (SELECT 1 FROM dbo.PARAMETRI WHERE Nome = 'PercorsoFatturazione')
-    INSERT INTO dbo.PARAMETRI (Nome, Valore) VALUES ('PercorsoFatturazione', 'c:\progetti\Fatturazione\');
+    INSERT INTO dbo.PARAMETRI (Nome, Valore) VALUES ('PercorsoFatturazione', '%TEMP%\speedyweb-fatturazione\');
 GO
 IF EXISTS (SELECT 1 FROM sys.database_principals WHERE name = 'claude')
     EXEC('GRANT EXECUTE ON dbo.FATT_ANCI_Genera TO claude; GRANT EXECUTE ON dbo.AI_LOG_Exec_Add TO claude');
