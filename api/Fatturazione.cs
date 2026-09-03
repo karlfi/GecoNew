@@ -44,12 +44,13 @@ static class Fatturazione
             var data = PrimoDelMese(dataFattura);
             await using var cn = new SqlConnection(connString());
             var (daFatturare, fatture) = await Elenchi(cn, p, data, null, genera: false);
-            var cartella = await Cartella(cn);
+            var (cartella, avviso) = await CartellaScrivibile(cn);
             return Results.Ok(new
             {
                 profilo = p.Nome, titolo = p.Titolo, tipoVendita = p.TipoVendita,
                 riepilogo = p.Riepilogo, allegati = p.Allegati,
                 dataFattura = data.ToString("yyyy-MM-dd"), cartella,
+                avvisi = avviso is null ? Array.Empty<string>() : new[] { avviso },
                 daFatturare,
                 fatture = fatture.Select(f => Riga(f, cartella)).ToList()
             });
@@ -96,12 +97,7 @@ static class Fatturazione
             if (!Profili.TryGetValue(profilo, out var p)) return ProfiloIgnoto(profilo);
             var data = PrimoDelMese(req.DataFattura);
             await using var cn = new SqlConnection(connString());
-            var cartella = await Cartella(cn);
-            try { Directory.CreateDirectory(cartella); }
-            catch (Exception ex)
-            {
-                return Results.Json(new { errore = $"Cartella dei file non utilizzabile ({cartella}): {ex.Message}" }, statusCode: 400);
-            }
+            var (cartella, avvisoCartella) = await CartellaScrivibile(cn);
 
             var (daFatturare, fatture) = await Elenchi(cn, p, data, req.IdCliente, req.Genera);
 
@@ -114,6 +110,7 @@ static class Fatturazione
 
             SmtpConfig? smtp = null;
             var avvisi = new List<string>();
+            if (avvisoCartella is not null) avvisi.Add(avvisoCartella);
             if (req.InviaMail)
             {
                 smtp = await LeggiSmtp(cn);
@@ -193,7 +190,8 @@ static class Fatturazione
             if (!Regex.IsMatch(nome ?? "", @"^FAT_[\w\-]+\.xlsx$"))
                 return Results.BadRequest(new { errore = "Nome file non valido" });
             await using var cn = new SqlConnection(connString());
-            var percorso = Path.Combine(await Cartella(cn), nome!);
+            var (cartella, _) = await CartellaScrivibile(cn);
+            var percorso = Path.Combine(cartella, nome!);
             if (!File.Exists(percorso)) return Results.NotFound(new { errore = "File non trovato" });
             return Results.File(percorso, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", nome);
         }).RequireAuthorization();
@@ -237,17 +235,46 @@ static class Fatturazione
         };
     }
 
-    // La cartella dei file sta in PARAMETRI, come le altre cartelle dell'app.
-    // Sul server l'unica cartella scrivibile dall'app e' la temp (la usa gia' il
-    // proxy dei report), quindi il valore puo' contenere %TEMP%: i file sono
-    // comunque rifacibili in ogni momento dalla pagina.
+    // La cartella dei file sta in PARAMETRI (PercorsoFatturazione), come le altre
+    // cartelle dell'app; %TEMP% viene espanso.
     static async Task<string> Cartella(SqlConnection cn)
     {
         var v = await cn.ExecuteScalarAsync<string?>(
             "SELECT Valore FROM PARAMETRI WHERE Nome = 'PercorsoFatturazione'");
-        if (string.IsNullOrWhiteSpace(v)) return Path.Combine(Path.GetTempPath(), "speedyweb-fatturazione");
+        if (string.IsNullOrWhiteSpace(v)) return Ripiego;
         return Environment.ExpandEnvironmentVariables(v.Trim()
             .Replace("%TEMP%", Path.GetTempPath().TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase));
+    }
+
+    // Se la cartella configurata non e' scrivibile dall'utente con cui gira il
+    // sito (sul server e' l'identita' dell'app pool, che sulle cartelle di altri
+    // siti spesso non ha i permessi), si ripiega sulla temp del processo: i file
+    // sono rifacibili in ogni momento, meglio che bloccare la fatturazione. Il
+    // ripiego non e' silenzioso, torna un avviso che la pagina mostra.
+    static readonly string Ripiego = Path.Combine(Path.GetTempPath(), "speedyweb-fatturazione");
+
+    static async Task<(string Dove, string? Avviso)> CartellaScrivibile(SqlConnection cn)
+    {
+        var voluta = await Cartella(cn);
+        if (Scrivibile(voluta, out _)) return (voluta, null);
+        Scrivibile(voluta, out var perche);
+        Directory.CreateDirectory(Ripiego);
+        return (Ripiego, $"Non riesco a scrivere in {voluta} ({perche}): i file finiscono in {Ripiego}. "
+            + "Per usare la cartella voluta serve dare la scrittura all'identita' del sito.");
+    }
+
+    static bool Scrivibile(string dir, out string perche)
+    {
+        perche = "";
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var prova = Path.Combine(dir, $".prova_{Guid.NewGuid():N}");
+            File.WriteAllText(prova, "");
+            File.Delete(prova);
+            return true;
+        }
+        catch (Exception ex) { perche = ex.Message; return false; }
     }
 
     // FATT_Report -> un foglio Excel con intestazione (era EXPORTXLS con EsportaIntestazione=1)

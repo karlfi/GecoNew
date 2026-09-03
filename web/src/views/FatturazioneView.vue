@@ -193,6 +193,8 @@ function mettiMiaMail() { destinatarioProva.value = auth.utente?.email ?? auth.u
     </div>
 
     <Message v-if="errore" severity="error" :closable="false">{{ errore }}</Message>
+    <!-- es. la cartella configurata non e' scrivibile: i file finiscono altrove -->
+    <Message v-for="(a, i) in stato?.avvisi ?? []" :key="i" severity="warn" :closable="false">{{ a }}</Message>
     <div v-if="caricamento" class="centro"><ProgressSpinner /></div>
 
     <template v-if="stato && !caricamento">
