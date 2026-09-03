@@ -38,6 +38,43 @@ static class FatturazioneAnci
             });
         }).RequireAuthorization();
 
+        // previsione: quanto verrebbe fatturato oggi, cliente per cliente, senza
+        // fatturare. FATT_ANCI_Previsione esegue davvero FATT_Genera e annulla:
+        // pezzi, importo e voci sono quelli che uscirebbero, non una stima a parte.
+        app.MapGet("/api/fatturazione/anci/previsione", async (DateTime? dataFattura, int? idCliente) =>
+        {
+            var data = PrimoDelMese(dataFattura);
+            await using var cn = new SqlConnection(connString());
+            using var multi = await cn.QueryMultipleAsync("dbo.FATT_ANCI_Previsione",
+                new { DataFattura = data, IdCliente = idCliente },
+                commandType: CommandType.StoredProcedure, commandTimeout: 900);
+            var stime = (await multi.ReadAsync()).Cast<IDictionary<string, object>>().ToList();
+            var voci = (await multi.ReadAsync()).Cast<IDictionary<string, object>>().ToList();
+            var clienti = stime.Select(s => new
+            {
+                idCliente = Int(s["IdCliente"]),
+                ragioneSociale = s["RagioneSociale"]?.ToString(),
+                emailPrefattura = s["EmailPrefattura"]?.ToString(),
+                pezzi = Int(s["Pezzi"]),
+                importo = Convert.ToDecimal(s["Importo"] ?? 0m),
+                errore = s["Errore"]?.ToString(),
+                voci = voci.Where(v => Int(v["IdCliente"]) == Int(s["IdCliente"])).Select(v => new
+                {
+                    cig = v["CIG"]?.ToString(), descrizione = v["Descrizione"]?.ToString(),
+                    numPezzi = Int(v["NumPezzi"]),
+                    prezzoUnitario = Convert.ToDecimal(v["PrezzoUnitario"] ?? 0m),
+                    totale = Convert.ToDecimal(v["Totale"] ?? 0m)
+                }).ToList()
+            }).ToList();
+            return Results.Ok(new
+            {
+                dataFattura = data.ToString("yyyy-MM-dd"),
+                clienti,
+                totalePezzi = clienti.Sum(c => c.pezzi),
+                totaleImporto = clienti.Sum(c => c.importo)
+            });
+        }).RequireAuthorization();
+
         // esecuzione: fatture (se richiesto), report Excel, mail
         app.MapPost("/api/fatturazione/anci/esegui", async (FattAnciRequest req, ClaimsPrincipal user) =>
         {

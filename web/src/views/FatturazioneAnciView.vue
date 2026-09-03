@@ -53,6 +53,8 @@ async function aggiorna() {
     stato.value = data
     genera.value = data.daFatturare.length > 0
     selezionate.value = []
+    previsione.value = null        // vale per la data di prima: si ricalcola
+    espanse.value = []
   } catch (e) {
     errore.value = e.response?.data?.errore ?? 'Errore nel caricamento dello stato'
   } finally {
@@ -104,6 +106,51 @@ async function esegui() {
   }
 }
 
+// Previsione: quanto verrebbe fatturato oggi, senza fatturare. L'API esegue
+// davvero FATT_Genera e annulla, quindi pezzi, importo e voci sono quelli veri.
+const previsione = ref(null)
+const calcolando = ref(false)
+const espanse = ref([])
+async function calcolaPrevisione() {
+  calcolando.value = true
+  try {
+    const { data } = await api.get('/fatturazione/anci/previsione', { params: { dataFattura: iso(dataFattura.value) } })
+    previsione.value = data
+    espanse.value = data.clienti.filter(c => c.voci.length)
+  } catch (e) {
+    toast.add({ severity: 'error', summary: 'Previsione', detail: e.response?.data?.errore ?? 'Errore nel calcolo', life: 5000 })
+  } finally {
+    calcolando.value = false
+  }
+}
+const stimaDi = idCliente => previsione.value?.clienti.find(c => c.idCliente === idCliente)
+
+// una fattura gia' fatta: rifare i file, o rifarli e rimandare la mail
+async function rilancia(fattura, conMail) {
+  esecuzione.value = true
+  try {
+    const { data } = await api.post('/fatturazione/anci/esegui', {
+      dataFattura: iso(dataFattura.value), genera: false, inviaMail: conMail,
+      destinatarioProva: destinatarioProva.value.trim() || null,
+      idFatture: [fattura.idFattura]
+    })
+    esito.value = data
+    const x = data.esiti[0]
+    toast.add({
+      severity: x?.erroreFile || x?.mail?.errore ? 'warn' : 'success',
+      summary: `Fattura n.${fattura.numero}`,
+      detail: x?.erroreFile ? x.erroreFile : conMail ? (x?.mail?.inviata ? `mail inviata a ${x.mail.a}` : (x?.mail?.errore ?? 'mail non inviata')) : `${x?.file?.length ?? 0} file rifatti`,
+      life: 6000
+    })
+    const s = await api.get('/fatturazione/anci/stato', { params: { dataFattura: iso(dataFattura.value) } })
+    stato.value = s.data
+  } catch (e) {
+    toast.add({ severity: 'error', summary: 'Fattura', detail: e.response?.data?.errore ?? 'Errore', life: 5000 })
+  } finally {
+    esecuzione.value = false
+  }
+}
+
 // i file si scaricano passando dall'API (un link diretto non porterebbe il token)
 async function scarica(nome) {
   try {
@@ -142,15 +189,46 @@ function mettiMiaMail() { destinatarioProva.value = auth.utente?.email ?? auth.u
     <div v-if="caricamento" class="centro"><ProgressSpinner /></div>
 
     <template v-if="stato && !caricamento">
-      <!-- chi e' ancora da fatturare -->
+      <!-- chi e' ancora da fatturare, con la previsione di quanto verrebbe fatturato -->
       <section>
-        <h3>Da fatturare <Tag :value="String(stato.daFatturare.length)" :severity="stato.daFatturare.length ? 'warn' : 'success'" /></h3>
-        <DataTable v-if="stato.daFatturare.length" :value="stato.daFatturare" size="small" stripedRows>
+        <h3>
+          Da fatturare <Tag :value="String(stato.daFatturare.length)" :severity="stato.daFatturare.length ? 'warn' : 'success'" />
+          <Button v-if="stato.daFatturare.length" label="Calcola previsione" icon="pi pi-calculator" size="small" outlined
+            :loading="calcolando" @click="calcolaPrevisione" />
+          <span v-if="previsione" class="nota">
+            {{ previsione.totalePezzi }} pezzi, {{ euro(previsione.totaleImporto) }} in tutto
+          </span>
+        </h3>
+        <DataTable v-if="stato.daFatturare.length" :value="stato.daFatturare" size="small" stripedRows
+          v-model:expandedRows="espanse" dataKey="IdCliente">
+          <Column v-if="previsione" expander style="width: 3rem" />
           <Column field="IdCliente" header="Cliente" style="width: 6rem" />
           <Column field="RagioneSociale" header="Ragione sociale" />
+          <Column v-if="previsione" header="Pezzi previsti" style="width: 8rem">
+            <template #body="{ data }">{{ stimaDi(data.IdCliente)?.pezzi ?? '—' }}</template>
+          </Column>
+          <Column v-if="previsione" header="Importo previsto" style="width: 9rem">
+            <template #body="{ data }">
+              <span v-if="stimaDi(data.IdCliente)?.errore" class="errore">{{ stimaDi(data.IdCliente).errore }}</span>
+              <b v-else>{{ euro(stimaDi(data.IdCliente)?.importo) }}</b>
+            </template>
+          </Column>
           <Column field="EmailPrefattura" header="Prefattura a" />
+          <template #expansion="{ data }">
+            <!-- le voci della fattura che uscirebbe, come nel report VociFattura -->
+            <DataTable :value="stimaDi(data.IdCliente)?.voci ?? []" size="small" class="voci">
+              <Column field="descrizione" header="Voce" />
+              <Column field="numPezzi" header="Pezzi" style="width: 6rem" />
+              <Column header="Prezzo" style="width: 7rem"><template #body="{ data: v }">{{ euro(v.prezzoUnitario) }}</template></Column>
+              <Column header="Totale" style="width: 8rem"><template #body="{ data: v }">{{ euro(v.totale) }}</template></Column>
+            </DataTable>
+          </template>
         </DataTable>
         <p v-else class="vuoto">Nessun cliente ANCI da fatturare per questa data.</p>
+        <small v-if="previsione && previsione.totalePezzi === 0" class="nota">
+          Zero pezzi per tutti: i clienti ANCI si fatturano sugli esiti di rendicontazione non ancora fatturati,
+          e oggi non ce ne sono. Di solito vuol dire che i rendiconti del mese non sono ancora stati caricati.
+        </small>
       </section>
 
       <!-- le fatture gia' fatte -->
@@ -172,10 +250,17 @@ function mettiMiaMail() { destinatarioProva.value = auth.utente?.email ?? auth.u
               <span v-if="!data.file.length" class="vuoto">nessun file</span>
             </template>
           </Column>
+          <Column header="" style="width: 15rem">
+            <template #body="{ data }">
+              <!-- per una fattura gia' fatta: rifare i file, o rifarli e rimandare la mail -->
+              <Button label="Rifai i file" icon="pi pi-refresh" text size="small" :disabled="esecuzione" @click="rilancia(data, false)" />
+              <Button label="Reinvia mail" icon="pi pi-send" text size="small" :disabled="esecuzione" @click="rilancia(data, true)" />
+            </template>
+          </Column>
         </DataTable>
         <p v-else class="vuoto">Nessuna fattura ANCI per questa data.</p>
         <small v-if="stato.fatture.length" class="nota">
-          Seleziona le fatture esistenti per rifarne i file e rimandare la mail.
+          I file si scaricano cliccandoli. "Reinvia mail" rispetta la casella "manda tutto a": vuota = ai destinatari veri.
         </small>
       </section>
 
