@@ -24,6 +24,7 @@ import Message from 'primevue/message'
 import Button from 'primevue/button'
 import InputText from 'primevue/inputtext'
 import Select from 'primevue/select'
+import SchedaUtente from '../components/SchedaUtente.vue'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import ProgressSpinner from 'primevue/progressspinner'
@@ -224,6 +225,10 @@ function onRowContextMenu(ev) {
   if (colonneAzione.value.length) cm.value.show(ev.originalEvent)
 }
 
+// --- scheda del dipendente, aperta sopra l'elenco ---
+const schedaAperta = ref(false)
+const schedaUtente = ref(null)
+
 // --- visore in dialog per report (PDF) e pagine web ---
 const visore = ref({ visibile: false, titolo: '', src: '', urlEsterno: '', caricamento: false })
 let blobCorrente = null
@@ -283,7 +288,15 @@ function eseguiAzione(tipo, valore, etichetta) {
   if (tipo === 'pagina') {
     // valore cella: "Videata#Parametri" -> stesso routing delle voci di menu
     const [videata, ...resto] = valore.split('#')
-    nav.drill(navDaVideata(videata, resto.join('#')))
+    const dove = navDaVideata(videata, resto.join('#'))
+    // la scheda del dipendente si apre qui sopra: chiudendola si torna
+    // all'elenco com'era, senza passare dalla griglia di tutti gli utenti
+    if (dove.tipo === 'utenti' && dove.idUtente) {
+      schedaUtente.value = dove.idUtente
+      schedaAperta.value = true
+      return
+    }
+    nav.drill(dove)
     return
   }
 }
@@ -392,6 +405,12 @@ function eseguiAzione(tipo, valore, etichetta) {
     </DataTable>
 
     <ContextMenu ref="cm" :model="vociCm" />
+
+    <!-- scheda del dipendente: si apre sopra l'elenco, che resta com'era -->
+    <SchedaUtente
+      v-model:visible="schedaAperta" :id-utente="schedaUtente"
+      @salvato="carica"
+    />
 
     <!-- visore report PDF / pagina web -->
     <Dialog
