@@ -1,11 +1,14 @@
 <script setup>
-// Scheda di un utente: la stessa che si apre dalla pagina Utenti, ma vive per
-// conto suo, cosi' la si puo' aprire sopra un'altra griglia (dall'Elenco
-// Dipendenti, tasto destro -> Scheda Utente) senza cambiare pagina: chiudendola
-// si torna esattamente da dove si e' partiti.
+// Scheda del dipendente: si apre sopra l'Elenco Dipendenti (tasto destro ->
+// Scheda Utente) senza cambiare pagina, cosi' chiudendola si torna esattamente
+// da dove si e' partiti.
 //
-// Chi la usa passa l'utente da aprire e la visibilita'; il caricamento dei dati,
-// delle lookup e delle relazioni lo fa da se'.
+// E' cosa diversa dalla scheda dentro la pagina Utenti: li' si gestisce
+// l'utente dell'applicativo, che non e' detto sia un dipendente e seguira'
+// logiche sue. Oggi i campi coincidono, ma le due schede si toccano separate.
+//
+// Chi la usa passa il dipendente da aprire e la visibilita'; il caricamento dei
+// dati, delle lookup e delle relazioni lo fa da se'.
 import { ref, reactive, watch } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import api from '../api'
@@ -47,6 +50,9 @@ const SEZIONI = [
     { k: 'Nome', l: 'Cognome e nome', t: 'text' },
     { k: 'CodiceFiscale', l: 'Codice fiscale', t: 'text' },
     { k: 'DataNascita', l: 'Data di nascita', t: 'date' },
+    { k: 'LuogoNascita', l: 'Luogo di nascita', t: 'text' },
+    { k: 'Cittadinanza', l: 'Cittadinanza', t: 'text' },
+    { k: 'TitoloStudio', l: 'Titolo di studio', t: 'text' },
     { k: 'Telefono', l: 'Telefono', t: 'text' },
     { k: 'IndirizzoRes', l: 'Indirizzo residenza', t: 'text' },
     { k: 'CapRes', l: 'CAP', t: 'text' },
@@ -57,6 +63,10 @@ const SEZIONI = [
     { k: 'IdFiliale', l: 'Filiale', t: 'select', opt: 'filiali', ov: 'idFiliale', ol: 'filiale' },
     { k: 'idAziendaFatt', l: 'Azienda fatturazione', t: 'select', opt: 'aziende', ov: 'idAzienda', ol: 'azienda' },
     { k: 'Matricola', l: 'Matricola', t: 'text' },
+    { k: 'TipoContratto', l: 'Tipologia contrattuale', t: 'text' },
+    { k: 'DataFineContratto', l: 'Fine contratto', t: 'date' },
+    { k: 'CCNL', l: 'CCNL', t: 'text' },
+    { k: 'OreSettimanali', l: 'Ore settimanali', t: 'number', dec: true },
     { k: 'Livello', l: 'Livello', t: 'text' },
     { k: 'Mansione', l: 'Mansione', t: 'text' },
     { k: 'Partime', l: 'Percentuale part-time', t: 'number', dec: true },
@@ -72,10 +82,22 @@ const SEZIONI = [
     { k: 'CodADER', l: 'Cod ADER', t: 'text' },
     { k: 'Cod_iMile', l: 'Cod iMile', t: 'text' },
     { k: 'IdMezzo_Default', l: 'Mezzo predefinito (Id)', t: 'number' },
-    { k: 'Note', l: 'Note', t: 'text' }
+    { k: 'Note', l: 'Note', t: 'text' },
+    // le scrive la pagina "Carica UNILAV": dicono da quale comunicazione
+    // arrivano i dati del rapporto qui sopra
+    { k: 'UnilavCodice', l: 'Cod. ultima comunicazione UNILAV', t: 'text' },
+    { k: 'UnilavData', l: 'UNILAV trasmessa il', t: 'date' }
+  ] },
+  { nome: 'Permesso di soggiorno', campi: [
+    { k: 'SoggiornoTipo', l: 'Titolo di soggiorno', t: 'text' },
+    { k: 'SoggiornoNumero', l: 'Numero titolo', t: 'text' },
+    { k: 'SoggiornoMotivo', l: 'Motivo', t: 'text' },
+    { k: 'SoggiornoScadenza', l: 'Scadenza', t: 'date' },
+    { k: 'SoggiornoQuestura', l: 'Questura di rilascio', t: 'text' }
   ] },
   { nome: 'Certificato firma', campi: [
     { k: 'CERT_Alias', l: 'Alias certificato', t: 'text' },
+    { k: 'CERT_PIN', l: 'PIN', t: 'text' },
     { k: 'CERT_SerialNumber', l: 'Serial number', t: 'text' },
     { k: 'CERT_StatoNascita', l: 'Stato nascita', t: 'text' },
     { k: 'CERT_uniqueidentifier', l: 'Unique identifier', t: 'text' },
@@ -207,7 +229,7 @@ async function salva() {
     <Dialog
       :visible="visible" @update:visible="v => emit('update:visible', v)"
       modal maximizable :style="{ width: '860px' }"
-      :header="(nuovo ? 'Nuovo utente' : `Utente: ${edit.Utente ?? ''}`)"
+      :header="`Dipendente: ${edit.Nome ?? edit.Utente ?? ''}`"
     >
       <Tabs value="0">
         <TabList>

@@ -24,7 +24,7 @@ import Message from 'primevue/message'
 import Button from 'primevue/button'
 import InputText from 'primevue/inputtext'
 import Select from 'primevue/select'
-import SchedaUtente from '../components/SchedaUtente.vue'
+import SchedaDipendente from '../components/SchedaDipendente.vue'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import ProgressSpinner from 'primevue/progressspinner'
@@ -407,7 +407,7 @@ function eseguiAzione(tipo, valore, etichetta) {
     <ContextMenu ref="cm" :model="vociCm" />
 
     <!-- scheda del dipendente: si apre sopra l'elenco, che resta com'era -->
-    <SchedaUtente
+    <SchedaDipendente
       v-model:visible="schedaAperta" :id-utente="schedaUtente"
       @salvato="carica"
     />
