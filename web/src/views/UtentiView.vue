@@ -119,8 +119,17 @@ async function caricaLista() {
     caricamento.value = false
   }
 }
+// Si puo' arrivare qui chiedendo un utente preciso (dalla griglia dipendenti,
+// tasto destro -> Scheda Utente): in quel caso la sua scheda si apre subito,
+// con l'elenco filtrato dietro cosi' si vede da dove si e' arrivati.
+const props = defineProps({ idUtente: { type: Number, default: null } })
+
 onMounted(async () => {
   try { const { data } = await api.get('/utenti/lookups'); Object.assign(lookups, data) } catch {}
+  if (props.idUtente) {
+    await apriModifica({ IdUtente: props.idUtente })
+    lazy.value.q = edit.value?.Utente ?? ''      // fa da filtro all'elenco sotto
+  }
   caricaLista()
 })
 function onPage(e) { lazy.value.page = e.page; lazy.value.size = e.rows; caricaLista() }

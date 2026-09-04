@@ -199,7 +199,12 @@ export function navDaVideata(videata, parametri = '') {
   const cfg = configDaVideata(v)
   if (cfg) return { tipo: 'config', key: cfg.key, titolo: cfg.titolo }
   if (isVideataWorkflow(v)) return { tipo: 'workflow' }
-  if (isVideataUtenti(v)) return { tipo: 'utenti' }
+  if (isVideataUtenti(v)) {
+    // "Listautenti#IdUtente=4137": dalla griglia dipendenti si chiede la scheda
+    // di quel dipendente, non l'elenco di tutti
+    const m = (parametri ?? '').match(/IdUtente=(\d+)/i)
+    return { tipo: 'utenti', idUtente: m ? Number(m[1]) : null }
+  }
   if (isVideataAzioniOld(v)) return { tipo: 'azioni' }
   if (isVideataTracking(v)) return { tipo: 'tracking' }
   if (isVideataAttivitaFiliali(v)) return { tipo: 'attivita-filiali' }

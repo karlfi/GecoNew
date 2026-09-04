@@ -257,6 +257,7 @@ const chiavePagina = computed(() =>
         <UtentiView
           v-else-if="nav.corrente.tipo === 'utenti'"
           :key="chiavePagina"
+          :id-utente="nav.corrente.idUtente"
         />
         <AzioniView
           v-else-if="nav.corrente.tipo === 'azioni'"
