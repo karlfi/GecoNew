@@ -46,7 +46,7 @@ async function annulla() {
     toast.add({ severity: 'error', summary: 'Annullamento fallito', detail: messaggioErrore(e), life: 5000 })
   }
 }
-const classeLivello = r => ({ ERROR: 'liv-err', WARN: 'liv-warn' }[r.Livello] ?? '')
+const classeLivello = r => ({ ERRORE: 'liv-err', ERROR: 'liv-err', WARN: 'liv-warn' }[r.Livello] ?? '')
 </script>
 
 <template>
