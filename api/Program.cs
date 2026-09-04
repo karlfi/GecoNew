@@ -135,6 +135,24 @@ static string ProvinciaAttuale(string? p) => (p ?? "").Trim().ToUpperInvariant()
     var x => x
 };
 
+// Le date arrivano dal browser come "2026-06-16". La sessione SQL gira in
+// italiano (serve alle stored legacy, che le date se le costruiscono in quel
+// formato) e in quella lingua la forma corta su datetime/smalldatetime viene
+// letta come giorno-mese: o va in errore (giorno > 12) o scambia i due numeri
+// in silenzio. Sapendo dal catalogo che la colonna e' una data, qui la stringa
+// diventa una data vera, che ambigua non e'.
+static object? ValorePerColonna(object? v, string? tipoSql)
+{
+    if (v is not string s || s.Length == 0) return v;
+    if ((tipoSql ?? "").ToLowerInvariant() is not
+        ("date" or "datetime" or "datetime2" or "smalldatetime" or "datetimeoffset")) return v;
+    var it = System.Globalization.CultureInfo.GetCultureInfo("it-IT");
+    if (DateTime.TryParse(s, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None, out var d)
+        || DateTime.TryParse(s, it, System.Globalization.DateTimeStyles.None, out d)) return d;
+    return v;
+}
+
 app.MapGet("/api/ping", () => Results.Ok(new { ok = true, ora = DateTime.Now }));
 
 // Login: verifica via SP AI_AuthLogin, emette il JWT
@@ -778,7 +796,8 @@ app.MapPost("/api/config/{key}", async (string key, JsonElement body) =>
         if (validi.ContainsKey(prop.Name))
             // TrimEnd: alcune colonne legacy hanno spazi finali nel nome (es. MITTENTI."CODICE_FISCALE ");
             // un nome di parametro SQL non puo' contenere spazi, quindi lo si normalizza. No-op per tutte le altre.
-            par.Add(prop.Name.TrimEnd(), JsonToClr(prop.Value));
+            par.Add(prop.Name.TrimEnd(),
+                    ValorePerColonna(JsonToClr(prop.Value), validi[prop.Name].Tipo));
 
     try
     {
@@ -1046,13 +1065,17 @@ app.MapGet("/api/azioni/lookups", async () =>
 app.MapPost("/api/azioni/azione", async (JsonElement body) =>
 {
     await using var cn = new SqlConnection(ConnString());
-    var validi = (await LoadColonne(cn, "SPED_AZIONI")).Select(c => c.Col)
+    var colonne = await LoadColonne(cn, "SPED_AZIONI");
+    var tipi = colonne.ToDictionary(c => c.Col, c => c.Tipo, StringComparer.OrdinalIgnoreCase);
+    var validi = colonne.Select(c => c.Col)
         .Concat(new[] { "IdProcesso" })
         .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     var par = new DynamicParameters();
     foreach (var prop in body.EnumerateObject())
-        if (validi.Contains(prop.Name)) par.Add(prop.Name, JsonToClr(prop.Value));
+        if (validi.Contains(prop.Name))
+            par.Add(prop.Name, ValorePerColonna(JsonToClr(prop.Value),
+                                                tipi.TryGetValue(prop.Name, out var t) ? t : null));
 
     try
     {
@@ -2069,14 +2092,18 @@ app.MapDelete("/api/utenti/filiali/{relId:int}", (int relId) =>
 app.MapPost("/api/utenti", async (JsonElement body) =>
 {
     await using var cn = new SqlConnection(ConnString());
-    var validi = (await LoadColonne(cn, "UTENTI"))
+    var colonne = await LoadColonne(cn, "UTENTI");
+    var tipi = colonne.ToDictionary(c => c.Col, c => c.Tipo, StringComparer.OrdinalIgnoreCase);
+    var validi = colonne
         .Where(c => !c.Identita && c.Col != "Pass").Select(c => c.Col)
         .Concat(new[] { "IdUtente", "NuovaPassword" })
         .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     var par = new DynamicParameters();
     foreach (var prop in body.EnumerateObject())
-        if (validi.Contains(prop.Name)) par.Add(prop.Name, JsonToClr(prop.Value));
+        if (validi.Contains(prop.Name))
+            par.Add(prop.Name, ValorePerColonna(JsonToClr(prop.Value),
+                                                tipi.TryGetValue(prop.Name, out var t) ? t : null));
 
     try
     {
