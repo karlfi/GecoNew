@@ -139,9 +139,16 @@ async function salva() {
       if (c.data && v instanceof Date) v = toIsoDate(v)
       payload[c.nome] = v ?? null
     }
-    await api.post(`/config/${props.configKey}`, payload)
+    const { data } = await api.post(`/config/${props.configKey}`, payload)
     dialogVisibile.value = false
-    toast.add({ severity: 'success', summary: 'Salvato', life: 1800 })
+    // se una colonna e' stata aggiunta alla tabella ma non alla stored, il
+    // salvataggio va avanti lo stesso: qui si dice quale e' rimasta indietro
+    if (data?.ignorati?.length) {
+      toast.add({ severity: 'warn', summary: 'Salvato, ma non del tutto',
+        detail: `Campi non previsti dalla procedura di salvataggio: ${data.ignorati.join(', ')}`, life: 8000 })
+    } else {
+      toast.add({ severity: 'success', summary: 'Salvato', life: 1800 })
+    }
     await caricaDati()
   } catch (e) {
     toast.add({

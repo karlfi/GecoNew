@@ -9,9 +9,11 @@
 //
 // Chi la usa passa il dipendente da aprire e la visibilita'; il caricamento dei
 // dati, delle lookup e delle relazioni lo fa da se'.
-import { ref, reactive, watch } from 'vue'
+import { ref, reactive, watch, computed } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import api from '../api'
+import DataTable from 'primevue/datatable'
+import Column from 'primevue/column'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
 import InputText from 'primevue/inputtext'
@@ -191,6 +193,7 @@ watch(() => [props.visible, props.idUtente, props.nuovo], async ([vis]) => {
     for (const s of SEZIONI) for (const c of s.campi) r[c.k] = null
     r.IdUtente = null
     edit.value = r
+    await caricaModifiche(null)
     return
   }
   caricando.value = true
@@ -199,6 +202,7 @@ watch(() => [props.visible, props.idUtente, props.nuovo], async ([vis]) => {
     for (const k of CAMPI_DATA) if (data[k]) data[k] = toDate(data[k])
     edit.value = data
     await caricaRelazioni(props.idUtente)
+    await caricaModifiche(props.idUtente)
   } catch {
     toast.add({ severity: 'error', summary: 'Errore', detail: 'Impossibile aprire l\'utente', life: 4000 })
     emit('update:visible', false)
@@ -206,6 +210,28 @@ watch(() => [props.visible, props.idUtente, props.nuovo], async ([vis]) => {
     caricando.value = false
   }
 }, { immediate: true })
+
+// --- storico delle modifiche ---
+// Il trigger su UTENTI registra in LOGTabelle una fotografia della riga dopo
+// ogni cambiamento: l'API ne ricava, confronto dopo confronto, che cosa e'
+// cambiato in ogni modifica.
+const modifiche = ref([])
+const modificheCaricate = ref(false)
+async function caricaModifiche(id) {
+  modifiche.value = []
+  modificheCaricate.value = false
+  if (!id) { modificheCaricate.value = true; return }
+  try { const { data } = await api.get(`/utenti/${id}/modifiche`); modifiche.value = data }
+  catch { /* niente storico: la linguetta lo dice */ }
+  finally { modificheCaricate.value = true }
+}
+// una riga per campo cambiato, cosi' si legge e si cerca a colpo d'occhio
+const righeModifiche = computed(() => modifiche.value.flatMap(m =>
+  m.campi.length
+    ? m.campi.map(c => ({ data: m.data, operatore: m.operatore, ...c }))
+    : [{ data: m.data, operatore: m.operatore,
+         campo: m.prima ? '(nessun campo cambiato)' : '(prima registrazione)', prima: '', dopo: '' }]))
+const dataOra = v => v ? new Date(v).toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' }) : ''
 
 async function salva() {
   salvataggio.value = true
@@ -239,6 +265,7 @@ async function salva() {
           <Tab value="rel-p">Processi</Tab>
           <Tab value="rel-fi">Filiali abilitate</Tab>
           <Tab value="pwd">Password</Tab>
+          <Tab value="log">Modifiche</Tab>
         </TabList>
         <TabPanels>
           <TabPanel v-for="(s, i) in SEZIONI" :key="s.nome" :value="String(i)">
@@ -336,6 +363,19 @@ async function salva() {
               <Password v-model="nuovaPassword" toggleMask :feedback="false" />
             </div>
           </TabPanel>
+          <TabPanel value="log">
+            <div v-if="!modificheCaricate" class="rel-hint">Caricamento…</div>
+            <div v-else-if="!righeModifiche.length" class="rel-hint">Nessuna modifica registrata.</div>
+            <DataTable v-else :value="righeModifiche" size="small" stripedRows paginator :rows="15" class="log-modifiche">
+              <Column header="Quando" style="width: 11rem">
+                <template #body="{ data }">{{ dataOra(data.data) }}</template>
+              </Column>
+              <Column field="operatore" header="Operatore" style="width: 9rem" />
+              <Column field="campo" header="Campo" style="width: 13rem" />
+              <Column field="prima" header="Prima" />
+              <Column field="dopo" header="Dopo" />
+            </DataTable>
+          </TabPanel>
         </TabPanels>
       </Tabs>
 
@@ -354,6 +394,7 @@ async function salva() {
 .pwd-box { max-width: 360px; display: flex; flex-direction: column; gap: .4rem; }
 .pwd-box p { color: #666; font-size: .85rem; }
 .pwd-box :deep(.p-password), .pwd-box :deep(.p-password-input) { width: 100%; }
+.log-modifiche :deep(td), .log-modifiche :deep(th) { font-size: .82rem; padding: .3rem .5rem; }
 .rel-hint { color: #888; font-style: italic; padding: .5rem 0; }
 .rel-add { display: flex; gap: .5rem; margin-bottom: .75rem; }
 .rel-add :deep(.p-select) { flex: 1; }

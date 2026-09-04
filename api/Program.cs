@@ -791,19 +791,33 @@ app.MapPost("/api/config/{key}", async (string key, JsonElement body) =>
     var validi = cols.Where(c => !TipoBinario(c.Tipo))
         .ToDictionary(c => c.Col, StringComparer.OrdinalIgnoreCase);
 
+    // Si passano solo i parametri che la stored dichiara davvero. Quando alla
+    // tabella si aggiunge una colonna e la stored non viene rifatta, senza
+    // questo filtro il salvataggio muore con "troppi argomenti specificati"
+    // (e' successo su FILIALI): meglio salvare il resto e dire quale colonna
+    // e' rimasta fuori, che non salvare niente.
+    var sp = $"dbo.AI_{tabella}_Save";
+    var accettati = (await cn.QueryAsync<string>(
+        "SELECT REPLACE(name, '@', '') FROM sys.parameters WHERE object_id = OBJECT_ID(@sp)", new { sp }))
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
     var par = new DynamicParameters();
+    var ignorati = new List<string>();
     foreach (var prop in body.EnumerateObject())
         if (validi.ContainsKey(prop.Name))
+        {
             // TrimEnd: alcune colonne legacy hanno spazi finali nel nome (es. MITTENTI."CODICE_FISCALE ");
             // un nome di parametro SQL non puo' contenere spazi, quindi lo si normalizza. No-op per tutte le altre.
-            par.Add(prop.Name.TrimEnd(),
-                    ValorePerColonna(JsonToClr(prop.Value), validi[prop.Name].Tipo));
+            var nome = prop.Name.TrimEnd();
+            if (accettati.Count > 0 && !accettati.Contains(nome)) { ignorati.Add(nome); continue; }
+            par.Add(nome, ValorePerColonna(JsonToClr(prop.Value), validi[prop.Name].Tipo));
+        }
 
     try
     {
         var id = await cn.QueryFirstOrDefaultAsync<int?>(
-            $"dbo.AI_{tabella}_Save", par, commandType: CommandType.StoredProcedure);
-        return Results.Ok(new { id });
+            sp, par, commandType: CommandType.StoredProcedure);
+        return Results.Ok(new { id, ignorati });
     }
     catch (SqlException ex)
     {
@@ -2089,6 +2103,83 @@ app.MapDelete("/api/utenti/filiali/{relId:int}", (int relId) =>
     EseguiRelazione("dbo.AI_UTENTI_FILIALI_Del", new { IdUtenteFiliale = relId })).RequireAuthorization();
 
 // Salvataggio utente via SP (password solo se passata in NuovaPassword)
+// Storico delle modifiche a una scheda: il trigger su UTENTI scrive in
+// LOGTabelle una riga per ogni cambiamento, con dentro l'XML della riga COME E'
+// RIMASTA (non com'era prima). Quindi quello che e' cambiato in una modifica si
+// ricava dal confronto con la fotografia precedente; la prima riga di log non
+// ha un prima, ed esce senza dettaglio.
+//
+// La password non si mostra mai: si dice solo che e' cambiata.
+app.MapGet("/api/utenti/{id:int}/modifiche", async (int id) =>
+{
+    await using var cn = new SqlConnection(ConnString());
+    var righe = (await cn.QueryAsync<LogRiga>(@"
+        SELECT Id, Data, Operatore, TipoOperazione, CONVERT(varchar(max), Record) AS Xml
+        FROM LOGTabelle WHERE Tabella = 'UTENTI' AND IdTabella = @id ORDER BY Id", new { id })).ToList();
+
+    static Dictionary<string, string> Campi(string? xml)
+    {
+        var d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(xml)) return d;
+        try
+        {
+            foreach (var e in System.Xml.Linq.XElement.Parse(xml).Elements())
+                d[e.Name.LocalName] = e.Value;
+        }
+        catch { /* xml illeggibile: si tratta come vuoto */ }
+        return d;
+    }
+
+    // "2026-06-01T00:00:00" -> "01/06/2026"; "7.5e+001" -> "75"
+    static string Leggibile(string v)
+    {
+        if (string.IsNullOrEmpty(v)) return "";
+        if (DateTime.TryParse(v, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var d) && v.Contains('-'))
+            return d.TimeOfDay == TimeSpan.Zero ? d.ToString("dd/MM/yyyy") : d.ToString("dd/MM/yyyy HH:mm");
+        if (v.Contains('e', StringComparison.OrdinalIgnoreCase)
+            && decimal.TryParse(v, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var n))
+            return n.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+        return v;
+    }
+
+    var modifiche = new List<object>();
+    for (var i = 0; i < righe.Count; i++)
+    {
+        var dopo = Campi(righe[i].Xml);
+        var prima = i > 0 ? Campi(righe[i - 1].Xml) : null;
+        var campi = new List<object>();
+        if (prima is not null)
+        {
+            foreach (var k in prima.Keys.Union(dopo.Keys, StringComparer.OrdinalIgnoreCase)
+                                        .OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            {
+                var a = prima.TryGetValue(k, out var va) ? va : "";
+                var b = dopo.TryGetValue(k, out var vb) ? vb : "";
+                if (a == b) continue;
+                if (k.Equals("Pass", StringComparison.OrdinalIgnoreCase))
+                {
+                    campi.Add(new { campo = "Password", prima = "•••", dopo = "•••" });
+                    continue;
+                }
+                campi.Add(new { campo = k, prima = Leggibile(a), dopo = Leggibile(b) });
+            }
+        }
+        modifiche.Add(new
+        {
+            id = righe[i].Id,
+            data = righe[i].Data,
+            operatore = righe[i].Operatore,
+            tipoOperazione = righe[i].TipoOperazione,
+            prima = prima is not null,      // false = e' la prima fotografia, non c'e' un confronto
+            campi
+        });
+    }
+    modifiche.Reverse();                    // le piu' recenti in cima
+    return Results.Ok(modifiche);
+}).RequireAuthorization();
+
 app.MapPost("/api/utenti", async (JsonElement body) =>
 {
     await using var cn = new SqlConnection(ConnString());
@@ -4734,6 +4825,7 @@ record SpedNuovaRequest(
     decimal? PesoKg, string? Nota);
 record EseguiInterrogazioneRequest(int IdQuery, string? SWhere, Dictionary<string, string>? Valori);
 record UtenteStatoRequest(int IdUtente, string? Stato);
+record LogRiga(int Id, DateTime Data, string? Operatore, string? TipoOperazione, string? Xml);
 record LogVideataRequest(string? Videata, string? Parametri);
 record CambiaFilialeRequest(int IdFiliale);
 record ColMeta(string Col, string Tipo, int MaxLen, bool Nullable, bool Identita, bool Pk);
