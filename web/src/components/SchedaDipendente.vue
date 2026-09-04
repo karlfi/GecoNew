@@ -18,7 +18,6 @@ import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
 import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
-import Password from 'primevue/password'
 import DatePicker from 'primevue/datepicker'
 import Select from 'primevue/select'
 import Tabs from 'primevue/tabs'
@@ -97,25 +96,6 @@ const SEZIONI = [
     { k: 'SoggiornoScadenza', l: 'Scadenza', t: 'date' },
     { k: 'SoggiornoQuestura', l: 'Questura di rilascio', t: 'text' }
   ] },
-  { nome: 'Certificato firma', campi: [
-    { k: 'CERT_Alias', l: 'Alias certificato', t: 'text' },
-    { k: 'CERT_PIN', l: 'PIN', t: 'text' },
-    { k: 'CERT_SerialNumber', l: 'Serial number', t: 'text' },
-    { k: 'CERT_StatoNascita', l: 'Stato nascita', t: 'text' },
-    { k: 'CERT_uniqueidentifier', l: 'Unique identifier', t: 'text' },
-    { k: 'CERT_IdUtenteCertificatore', l: 'Id certificatore', t: 'number' },
-    { k: 'CERT_Tentativi', l: 'Tentativi PIN', t: 'number' },
-    { k: 'CERT_ProfiloCertificatore', l: 'Profilo certificatore', t: 'date' },
-    { k: 'CERT_CertificatoValido', l: 'Valido dal', t: 'date' },
-    { k: 'CERT_DataScadenza', l: 'Scadenza', t: 'date' },
-    { k: 'CERT_DataRevoca', l: 'Data revoca', t: 'date' },
-    { k: 'CERT_DataSospensione', l: 'Data sospensione', t: 'date' },
-    { k: 'CERT_TempSospeso', l: 'Sospeso temporaneo', t: 'date' },
-    { k: 'flagFirma', l: 'Flag firma', t: 'number' },
-    { k: 'FotoTessera', l: 'Foto tessera (path)', t: 'text' },
-    { k: 'FirmaEstesa', l: 'Firma estesa (path)', t: 'text' },
-    { k: 'FirmaSigla', l: 'Firma sigla (path)', t: 'text' }
-  ] },
   { nome: 'Sistema', campi: [
     { k: 'IdUtente', l: 'Id utente', t: 'number', ro: true },
     { k: 'LoginErrors', l: 'Tentativi login falliti', t: 'number', ro: true },
@@ -136,7 +116,6 @@ async function caricaLookups() {
 }
 
 const edit = ref({})
-const nuovaPassword = ref('')
 const salvataggio = ref(false)
 const caricando = ref(false)
 
@@ -185,7 +164,6 @@ function toIso(d) {
 // all'apertura si carica quello che serve: lookup, utente e sue relazioni
 watch(() => [props.visible, props.idUtente, props.nuovo], async ([vis]) => {
   if (!vis) return
-  nuovaPassword.value = ''
   resetRelazioni()
   await caricaLookups()
   if (props.nuovo || !props.idUtente) {
@@ -238,7 +216,6 @@ async function salva() {
   try {
     const payload = { ...edit.value }
     for (const k of CAMPI_DATA) if (payload[k] instanceof Date) payload[k] = toIso(payload[k])
-    if (nuovaPassword.value) payload.NuovaPassword = nuovaPassword.value
     const { data } = await api.post('/utenti', payload)
     emit('update:visible', false)
     emit('salvato', data?.id ?? edit.value.IdUtente)
@@ -260,12 +237,11 @@ async function salva() {
       <Tabs value="0">
         <TabList>
           <Tab v-for="(s, i) in SEZIONI" :key="s.nome" :value="String(i)">{{ s.nome }}</Tab>
+          <Tab value="log">Log</Tab>
           <Tab value="rel-g">Gruppi</Tab>
           <Tab value="rel-f">Famiglie</Tab>
           <Tab value="rel-p">Processi</Tab>
           <Tab value="rel-fi">Filiali abilitate</Tab>
-          <Tab value="pwd">Password</Tab>
-          <Tab value="log">Modifiche</Tab>
         </TabList>
         <TabPanels>
           <TabPanel v-for="(s, i) in SEZIONI" :key="s.nome" :value="String(i)">
@@ -353,16 +329,6 @@ async function salva() {
             </template>
           </TabPanel>
 
-          <TabPanel value="pwd">
-            <div class="pwd-box">
-              <p>
-                {{ nuovo ? 'Imposta la password di accesso web (lascia vuoto per utente solo-palmare).'
-                         : 'Compila solo per reimpostare la password. Vuoto = password invariata.' }}
-              </p>
-              <label>Nuova password</label>
-              <Password v-model="nuovaPassword" toggleMask :feedback="false" />
-            </div>
-          </TabPanel>
           <TabPanel value="log">
             <div v-if="!modificheCaricate" class="rel-hint">Caricamento…</div>
             <div v-else-if="!righeModifiche.length" class="rel-hint">Nessuna modifica registrata.</div>

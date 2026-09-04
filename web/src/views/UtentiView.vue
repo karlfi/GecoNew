@@ -331,7 +331,7 @@ function fmtData(v) {
           <Tab value="rel-p">Processi</Tab>
           <Tab value="rel-fi">Filiali abilitate</Tab>
           <Tab value="pwd">Password</Tab>
-          <Tab value="log">Modifiche</Tab>
+          <Tab value="log">Log</Tab>
         </TabList>
         <TabPanels>
           <TabPanel v-for="(s, i) in SEZIONI" :key="s.nome" :value="String(i)">
