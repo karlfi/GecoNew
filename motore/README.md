@@ -41,11 +41,16 @@ Serve solo il runtime .NET 6 (gia' presente dove gira l'API). Non serve IIS.
    `powershell -ExecutionPolicy Bypass -File installa-servizio.ps1 -Cartella C:\servizi\GecoMotore -Account DOMINIO\utente`
    Lo script chiede la password dell'account.
 
-L'**account del servizio** e' il punto delicato: deve vedere il DB e le share
-dove i workflow leggono e scrivono. Un servizio non vede le unita' mappate
-(`X:\`, `Z:\`): nei workflow quei percorsi vanno riscritti come UNC
-(`\\server\share\...`), oppure l'account deve essere lo stesso con cui si
-mappano e i percorsi restano validi solo se mappati per quell'account.
+**Condivisioni di rete.** Un servizio non vede le unita' mappate (`X:\`, `Z:\`)
+e non ha credenziali sue: nei workflow i percorsi vanno scritti come UNC
+(`\\192.168.0.252\share\...`) e le credenziali della condivisione stanno in
+`LISTA_VALORI`, `Lista = SMB_SERVER`, righe `SERVER`, `USER`, `PASS`
+(`Valore` = nome, `Codice` = valore, come `SMTP_SERVER`; si compilano dalla
+pagina Lista Valori). Il motore apre la sessione SMB all'avvio e la rinfresca
+a ogni giro di materializzazione; per altri server: `SMB_SERVER_2`, `SMB_SERVER_3`.
+Con le credenziali in tabella il servizio puo' girare come LocalSystem.
+Sul server `.176` sta in `C:\progetti\scheduler\motore`, gli script `.sql`
+in `C:\progetti\scheduler\script`.
 
 Log: `logs\motore-AAAAMMGG.log` accanto all'exe (o `Motore:CartellaLog`), piu'
 il registro eventi di Windows per avvio/arresto.

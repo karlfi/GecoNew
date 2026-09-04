@@ -32,6 +32,8 @@ public class Scheduler : BackgroundService
             if ((DateTime.UtcNow - ultimaMaterializzazione).TotalMinutes >= o.MaterializzaMinuti)
             {
                 ultimaMaterializzazione = DateTime.UtcNow;
+                // le sessioni SMB verso i server dei workflow (credenziali in LISTA_VALORI), rinfrescate a ogni giro
+                await Prova(() => Condivisioni.Apri(o, log), "apertura delle condivisioni di rete");
                 await Prova(Materializza, "materializzazione delle pianificazioni");
             }
             await Prova(PescaEdEsegui, "pesca delle esecuzioni");
