@@ -134,6 +134,37 @@ const eliminaWorkflow = () => chiedi(`Eliminare il workflow "${dettaglio.value.N
   } catch (e) { errore(e) }
 })
 
+// --- testata: nuovo workflow o modifica di quello scelto (stesso dialog) ---
+const dialogTestata = ref(false)
+const testata = ref({})
+function apriTestata(w) {
+  testata.value = w
+    ? { idWorkflow: w.IdWorkflow, nome: w.Nome, descrizione: w.Descrizione ?? '', directoryOutput: w.DirectoryOutput ?? '',
+        pausaTraStepMS: w.PausaTraStepMS ?? 0, variabili: Array.isArray(w.VariabiliGlobali) ? w.VariabiliGlobali.join(', ') : '',
+        loggaInizioOperazione: w.LoggaInizioOperazione !== false, attivo: w.Attivo !== false }
+    : { idWorkflow: null, nome: '', descrizione: '', directoryOutput: '', pausaTraStepMS: 0, variabili: '', loggaInizioOperazione: true, attivo: true }
+  dialogTestata.value = true
+}
+async function salvaTestata() {
+  const t = testata.value
+  if (!t.nome.trim()) { toast.add({ severity: 'warn', summary: 'Il nome è obbligatorio', life: 3000 }); return }
+  const corpo = {
+    nome: t.nome.trim(), descrizione: t.descrizione || null, directoryOutput: t.directoryOutput || null,
+    pausaTraStepMS: t.pausaTraStepMS ?? 0, loggaInizioOperazione: t.loggaInizioOperazione, attivo: t.attivo,
+    variabiliGlobali: t.variabili.split(',').map(v => v.trim()).filter(Boolean)
+  }
+  try {
+    let id = t.idWorkflow
+    if (id) await api.put(`/schedulatore/workflow/${id}`, corpo)
+    else id = (await api.post('/schedulatore/workflow', corpo)).data.idWorkflow
+    dialogTestata.value = false
+    toast.add({ severity: 'success', summary: t.idWorkflow ? 'Workflow aggiornato' : 'Workflow creato: ora aggiungi gli step', life: 3000 })
+    await caricaElenco(id)
+    if (!t.idWorkflow) scheda.value = 'step'
+    else if (dettaglio.value) await caricaDettaglio(id)
+  } catch (e) { errore(e) }
+}
+
 // --- import dei file .stp ---
 const inputFile = ref(null)
 const sovrascrivi = ref(true)
@@ -230,8 +261,9 @@ const nomeFile = p => (p ?? '').split(/[\\/]/).pop()
         <p class="sotto">I workflow dei file step: step, pianificazioni ed esecuzioni. Le esecuzioni in coda le fa partire il motore.</p>
       </div>
       <div class="barra">
+        <Button label="Nuovo workflow" icon="pi pi-plus" @click="apriTestata(null)" />
         <label><Checkbox v-model="sovrascrivi" binary /> sovrascrivi se esiste</label>
-        <Button label="Importa file .stp" icon="pi pi-upload" :loading="importazione" @click="inputFile.click()" />
+        <Button label="Importa file .stp" icon="pi pi-upload" outlined :loading="importazione" @click="inputFile.click()" />
         <input ref="inputFile" type="file" multiple accept=".stp,.txt,.ini" hidden @change="importa" />
         <Button icon="pi pi-refresh" text :loading="caricamento" title="Aggiorna" @click="caricaElenco()" />
       </div>
@@ -265,7 +297,12 @@ const nomeFile = p => (p ?? '').split(/[\\/]/).pop()
       <div v-if="dettaglio" class="dettaglio">
         <div class="testata">
           <div>
-            <h3 class="titolo">{{ dettaglio.Nome }}</h3>
+            <h3 class="titolo">
+              {{ dettaglio.Nome }}
+              <Tag v-if="dettaglio.Attivo === false" value="disattivo" severity="secondary" />
+              <Button icon="pi pi-pencil" text size="small" title="Modifica la testata" @click="apriTestata(dettaglio)" />
+            </h3>
+            <p v-if="dettaglio.Descrizione" class="sotto">{{ dettaglio.Descrizione }}</p>
             <div class="meta">
               <span v-if="dettaglio.DirectoryOutput"><b>Output</b> <code>{{ dettaglio.DirectoryOutput }}</code></span>
               <span v-if="Array.isArray(dettaglio.VariabiliGlobali) && dettaglio.VariabiliGlobali.length"><b>Variabili</b> {{ dettaglio.VariabiliGlobali.join(', ') }}</span>
@@ -411,6 +448,24 @@ const nomeFile = p => (p ?? '').split(/[\\/]/).pop()
       <template #footer><Button label="Chiudi" @click="dialogImport = false" /></template>
     </Dialog>
 
+    <!-- testata: nuovo workflow o modifica -->
+    <Dialog v-model:visible="dialogTestata" modal :header="testata.idWorkflow ? 'Modifica workflow' : 'Nuovo workflow'" :style="{ width: '36rem' }">
+      <div class="modulo">
+        <label>Nome <InputText v-model="testata.nome" autofocus placeholder="es. ANCI-05_RENDICONTI" /></label>
+        <label>Descrizione <InputText v-model="testata.descrizione" /></label>
+        <label>Cartella di output <InputText v-model="testata.directoryOutput" placeholder="\\server\share\cartella" /></label>
+        <label>Variabili globali <InputText v-model="testata.variabili" placeholder="nomi separati da virgola" /></label>
+        <label>Pausa tra gli step (ms) <InputNumber v-model="testata.pausaTraStepMS" :min="0" :max="600000" inputStyle="width: 8rem" /></label>
+        <label class="riga"><Checkbox v-model="testata.loggaInizioOperazione" binary /> Logga l'inizio di ogni operazione</label>
+        <label class="riga"><Checkbox v-model="testata.attivo" binary /> Attivo</label>
+        <small v-if="!testata.idWorkflow" class="nota">Dopo il salvataggio si aggiungono gli step nella linguetta "Step" e le ricorrenze in "Pianificazioni".</small>
+      </div>
+      <template #footer>
+        <Button label="Annulla" text @click="dialogTestata = false" />
+        <Button :label="testata.idWorkflow ? 'Salva' : 'Crea'" icon="pi pi-check" @click="salvaTestata" />
+      </template>
+    </Dialog>
+
     <!-- conferma -->
     <Dialog v-model:visible="conferma.visibile" modal header="Conferma" :style="{ width: '30rem' }">
       <p>{{ conferma.testo }}</p>
@@ -455,6 +510,9 @@ const nomeFile = p => (p ?? '').split(/[\\/]/).pop()
 .esec :deep(tr) { cursor: pointer; }
 .nota { color: var(--p-text-muted-color); }
 .errore { color: var(--p-red-600); }
+.modulo { display: flex; flex-direction: column; gap: .7rem; }
+.modulo label { display: flex; flex-direction: column; gap: .25rem; font-size: .9rem; color: var(--p-text-muted-color); }
+.modulo label.riga { flex-direction: row; align-items: center; gap: .5rem; }
 /* schermi stretti: elenco sopra il dettaglio, albero sopra l'editor */
 @media (max-width: 1100px) {
   .colonne, .split { grid-template-columns: 1fr; }

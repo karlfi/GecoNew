@@ -67,6 +67,20 @@ static class Schedulatore
             return Results.Ok(testa);
         }).RequireAuthorization();
 
+        // testata scritta dalla pagina: nuovo workflow (vuoto, gli step si aggiungono dopo) o modifica
+        app.MapPost("/api/schedulatore/workflow", (JsonElement b) => Prova(async () =>
+        {
+            await using var cn = new SqlConnection(connString());
+            return Results.Ok(new { idWorkflow = await SalvaWorkflow(cn, null, b) });
+        })).RequireAuthorization();
+
+        app.MapPut("/api/schedulatore/workflow/{id:int}", (int id, JsonElement b) => Prova(async () =>
+        {
+            await using var cn = new SqlConnection(connString());
+            await SalvaWorkflow(cn, id, b);
+            return Results.Ok(new { ok = true });
+        })).RequireAuthorization();
+
         app.MapDelete("/api/schedulatore/workflow/{id:int}", (int id) => Prova(async () =>
         {
             await using var cn = new SqlConnection(connString());
@@ -315,6 +329,22 @@ static class Schedulatore
 
     record RigaProssima(DateTime Quando, string Fonte, int IdWorkflow, string NomeWorkflow, int? IdPianificazione,
         string? Descrizione, bool Sospesa, string? GruppoConcorrenza, string? CronExpr, int? IdEsecuzione);
+
+    // ---- testata del workflow -----------------------------------------------------
+    static async Task<int> SalvaWorkflow(SqlConnection cn, int? id, JsonElement b)
+    {
+        var p = new DynamicParameters(new
+        {
+            Nome = Str(b, "nome"), Descrizione = Str(b, "descrizione"), DirectoryOutput = Str(b, "directoryOutput"),
+            NomeFileLog = Str(b, "nomeFileLog"), NomeFileLogResult = Str(b, "nomeFileLogResult"),
+            PausaTraStepMS = Int(b, "pausaTraStepMS"), ApriDirectoryFinale = Bool(b, "apriDirectoryFinale"),
+            LoggaInizioOperazione = Bool(b, "loggaInizioOperazione"), VariabiliGlobali = Json(b, "variabiliGlobali"),
+            Attivo = Bool(b, "attivo"),
+        });
+        p.Add("@IdWorkflow", id, DbType.Int32, ParameterDirection.InputOutput);
+        await cn.ExecuteAsync("dbo.WF_usp_Workflow_Salva", p, commandType: CommandType.StoredProcedure);
+        return p.Get<int>("@IdWorkflow");
+    }
 
     // ---- pianificazioni: salvataggi -----------------------------------------------
     static async Task<int> SalvaPianificazione(SqlConnection cn, int? id, int idWorkflow, JsonElement b)
