@@ -17,7 +17,7 @@ import Message from 'primevue/message'
 
 // Attivita Dipendenti: griglia excel-like dei driver della filiale corrente
 // per il giorno scelto (UTENTI_ATTIVITA). SOLO update, via SP
-// AI_AttivitaDipendenti_Save (che rifiuta le modifiche oltre 10 giorni).
+// AI_AttivitaDipendenti_Save (che rifiuta le modifiche oltre 15 giorni).
 // Login/Logout, targa, km e palmare arrivano dal palmare: non modificabili.
 
 const auth = useAuthStore()
@@ -139,7 +139,7 @@ async function onCellEditComplete(e) {
       <DatePicker v-model="giorno" dateFormat="dd/mm/yy" showIcon @update:modelValue="carica" />
       <Button label="Aggiorna" icon="pi pi-refresh" outlined size="small" @click="carica" />
       <Message v-if="!modificabile && righe.length" severity="warn" :closable="false" class="avviso">
-        Giorno più vecchio di 10 giorni: sola lettura
+        Giorno più vecchio di 15 giorni: sola lettura
       </Message>
     </div>
 

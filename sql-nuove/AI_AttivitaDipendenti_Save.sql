@@ -4,7 +4,7 @@
 -- inserimenti di utenti o date (le righe le crea il gestionale/palmare).
 --
 -- Regole:
---  - non si modificano attivita' piu' vecchie di 10 giorni (esito negativo);
+--  - non si modificano attivita' piu' vecchie di 15 giorni (esito negativo);
 --  - Login/Logout, mezzo (idMezzo/targa), KmPercorsi, Palmare e Partime NON
 --    si toccano: arrivano dal palmare/gestionale;
 --  - mappa contatori (da V_UtentiAttivita2024):
@@ -39,10 +39,10 @@ BEGIN
         RAISERROR('Attivita'' %I64d inesistente', 16, 1, @IdAttivita);
         RETURN;
     END
-    -- regola di chiusura: oltre 10 giorni non si modifica piu' nulla
-    IF DATEDIFF(DAY, @dataRiga, GETDATE()) > 10
+    -- regola di chiusura: oltre 15 giorni non si modifica piu' nulla
+    IF DATEDIFF(DAY, @dataRiga, GETDATE()) > 15
     BEGIN
-        RAISERROR('Modifica non consentita: attivita'' piu'' vecchia di 10 giorni', 16, 1);
+        RAISERROR('Modifica non consentita: attivita'' piu'' vecchia di 15 giorni', 16, 1);
         RETURN;
     END
     IF NOT EXISTS (SELECT 1 FROM [FILIALI] WHERE [IDFILIALE] = @IdFiliale)
@@ -76,5 +76,8 @@ BEGIN
 END
 GO
 
-GRANT EXECUTE ON dbo.AI_AttivitaDipendenti_Save TO claude;
+-- il grant serve solo dove esiste l'utente "claude" (vecchio server): su BLUE
+-- l'applicazione entra con twebaccount, che e' dbo e non ne ha bisogno
+IF EXISTS (SELECT 1 FROM sys.database_principals WHERE name = 'claude')
+    EXEC('GRANT EXECUTE ON dbo.AI_AttivitaDipendenti_Save TO claude');
 GO

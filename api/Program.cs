@@ -1272,8 +1272,8 @@ app.MapGet("/api/attivita-dipendenti", async (string? data, int? idFiliale, Clai
         SELECT codPresenza, presenza FROM UTENTI_TIPOPRESENZE
         WHERE ISNULL(annullato, 0) = 0 ORDER BY presenza");
 
-    // la pagina blocca le modifiche oltre 10 giorni (stessa regola della SP)
-    var modificabile = (DateTime.Today - giorno.Date).TotalDays <= 10;
+    // la pagina blocca le modifiche oltre 15 giorni (stessa regola della SP)
+    var modificabile = (DateTime.Today - giorno.Date).TotalDays <= 15;
 
     return Results.Ok(new { righe, presenze, modificabile });
 }).RequireAuthorization();
