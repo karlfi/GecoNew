@@ -19,6 +19,8 @@ import PlaceholderView from '../views/PlaceholderView.vue'
 import RisultatoInterrogazioni from '../views/RisultatoInterrogazioni.vue'
 import ElencoDipendentiView from '../views/ElencoDipendentiView.vue'
 import FatturazioneView from '../views/FatturazioneView.vue'
+import SchedulatoreView from '../views/SchedulatoreView.vue'
+import SchedulatoreStoricoView from '../views/SchedulatoreStoricoView.vue'
 import ConfigTable from '../views/ConfigTable.vue'
 import WorkflowView from '../views/WorkflowView.vue'
 import InterrogazioniEditor from '../views/InterrogazioniEditor.vue'
@@ -235,6 +237,15 @@ const chiavePagina = computed(() =>
           v-else-if="nav.corrente.tipo === 'fatturazione'"
           :key="chiavePagina"
           :profilo="nav.corrente.profilo"
+        />
+        <SchedulatoreView
+          v-else-if="nav.corrente.tipo === 'schedulatore'"
+          :key="chiavePagina"
+          :id-workflow="nav.corrente.idWorkflow ?? null"
+        />
+        <SchedulatoreStoricoView
+          v-else-if="nav.corrente.tipo === 'schedulatore-storico'"
+          :key="chiavePagina"
         />
         <ConfigTable
           v-else-if="nav.corrente.tipo === 'config'"

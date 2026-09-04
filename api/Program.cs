@@ -524,6 +524,7 @@ app.MapPost("/api/interrogazioni/esegui", async (EseguiInterrogazioneRequest req
 // Fatturazioni a consuntivo per tipo (ANCI, ALIA): report Excel e mail di
 // prefattura, vedi Fatturazione.cs
 Fatturazione.Map(app, ConnString);
+Schedulatore.Map(app, ConnString);
 
 // Stato di archiviazione del dipendente, modificabile dalla griglia "Elenco
 // Dipendenti" (interrogazione 1093). I valori ammessi li controlla la SP.

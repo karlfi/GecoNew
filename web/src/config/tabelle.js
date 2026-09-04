@@ -291,6 +291,9 @@ export function navDaLink(voce) {
   if (link === '/pickup') return { tipo: 'pickup' }
   if (link === '/clienti') return { tipo: 'clienti' }
   if (link === '/gruppi') return { tipo: 'gruppi' }
+  // schedulatore (gia' TNOT): workflow, pianificazioni, storico
+  if (link === '/schedulatore') return { tipo: 'schedulatore' }
+  if (link === '/schedulatore-storico') return { tipo: 'schedulatore-storico' }
   if (link === '/interrogazioni') {
     const { idQuery, sWhere } = parseParametriMenu(voce.Parametri)
     return { tipo: 'interrogazioni', idQuery, sWhere }
