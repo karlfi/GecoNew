@@ -22,6 +22,8 @@ import Tab from 'primevue/tab'
 import TabPanels from 'primevue/tabpanels'
 import TabPanel from 'primevue/tabpanel'
 import AutoComplete from 'primevue/autocomplete'
+import SelectButton from 'primevue/selectbutton'
+import { scaricaDaApi } from '../lib/esporta'
 import { fileBase64, messaggioErrore } from '../lib/schedulatore'
 
 const props = defineProps({ idPalmare: { type: Number, default: null } })
@@ -38,12 +40,36 @@ const abb = [{ label: 'abbinati all\'app', value: true }, { label: 'da abbinare'
 const caricamento = ref(false)
 let timer = null
 async function caricaLookup() { try { lookup.value = (await api.get('/palmari/lookup')).data } catch (e) { errore(e) } }
+const parametri = () => { const f = filtri.value; return { testo: f.testo || null, tag: f.tag, idFiliale: f.idFiliale, modello: f.modello, stato: f.stato, conSim: f.conSim, abbinato: f.abbinato } }
 async function carica() {
   caricamento.value = true
-  try {
-    const f = filtri.value
-    palmari.value = (await api.get('/palmari', { params: { testo: f.testo || null, tag: f.tag, idFiliale: f.idFiliale, modello: f.modello, stato: f.stato, conSim: f.conSim, abbinato: f.abbinato } })).data
-  } catch (e) { errore(e) } finally { caricamento.value = false }
+  try { palmari.value = (await api.get('/palmari', { params: parametri() })).data }
+  catch (e) { errore(e) } finally { caricamento.value = false }
+}
+
+// --- la pagina si apre per filiale: gruppi chiusi col conteggio, si aprono uno alla volta o tutti; "Elenco" e' la tabella piatta ---
+const modo = ref('filiali')
+const MODI = [{ label: 'Per filiale', value: 'filiali' }, { label: 'Elenco', value: 'elenco' }]
+const SENZA = 'Senza filiale'
+const raggruppati = computed(() => palmari.value.map(p => ({ ...p, Gruppo: p.Filiale || SENZA }))
+  .sort((a, b) => (a.Gruppo === SENZA) - (b.Gruppo === SENZA) || a.Gruppo.localeCompare(b.Gruppo) || (a.Seriale || '').localeCompare(b.Seriale || '')))
+const gruppi = computed(() => {
+  const m = new Map()
+  for (const p of raggruppati.value) {
+    const g = m.get(p.Gruppo) ?? { n: 0, inUso: 0, senzaSim: 0 }
+    g.n++; if (p.Stato === 'In uso') g.inUso++; if (!p.IdSim) g.senzaSim++
+    m.set(p.Gruppo, g)
+  }
+  return m
+})
+const gruppiAperti = ref([])
+const tuttiAperti = computed(() => gruppi.value.size > 0 && gruppiAperti.value.length >= gruppi.value.size)
+const apriChiudiTutto = () => { gruppiAperti.value = tuttiAperti.value ? [] : [...gruppi.value.keys()] }
+// Excel con gli stessi filtri dell'elenco (tutte le righe, non solo la pagina a video)
+const esportazione = ref(false)
+async function esporta() {
+  esportazione.value = true
+  try { await scaricaDaApi(api, '/palmari/export', parametri(), 'palmari.xlsx') } catch (e) { errore(e) } finally { esportazione.value = false }
 }
 watch(() => filtri.value.testo, () => { clearTimeout(timer); timer = setTimeout(carica, 350) })
 watch(() => [filtri.value.tag, filtri.value.idFiliale, filtri.value.modello, filtri.value.stato, filtri.value.conSim, filtri.value.abbinato], carica)
@@ -162,36 +188,43 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
       <div class="barra">
         <Button label="Nuovo palmare" icon="pi pi-plus" @click="apri(null)" />
         <Button label="Importa Device List Knox" icon="pi pi-upload" outlined :loading="importazione" @click="inputFile.click()" />
+        <Button label="Esporta Excel" icon="pi pi-file-excel" outlined :loading="esportazione" title="Tutti i palmari che passano i filtri, in Excel" @click="esporta" />
         <input ref="inputFile" type="file" multiple accept=".xlsx" hidden @change="importa" />
         <Button icon="pi pi-refresh" text :loading="caricamento" title="Aggiorna" @click="carica" />
       </div>
     </div>
 
     <div class="filtri">
-      <InputText v-model="filtri.testo" placeholder="seriale, IMEI, nome, numero, ICCID, driver…" class="cerca" />
+      <SelectButton v-model="modo" :options="MODI" optionLabel="label" optionValue="value" :allowEmpty="false" />
+      <InputText v-model="filtri.testo" placeholder="seriale, numero SIM, driver, IMEI, nome device…" class="cerca" />
       <Select v-model="filtri.tag" :options="lookup.tags" placeholder="tutti i tag" showClear />
       <Select v-model="filtri.idFiliale" :options="lookup.filiali" optionLabel="Filiale" optionValue="IdFiliale" placeholder="tutte le filiali" showClear filter />
       <Select v-model="filtri.modello" :options="lookup.modelli" placeholder="tutti i modelli" showClear />
       <Select v-model="filtri.stato" :options="lookup.stati" placeholder="tutti gli stati" showClear />
       <Select v-model="filtri.conSim" :options="siNo" optionLabel="label" optionValue="value" placeholder="SIM: tutti" showClear />
       <Select v-model="filtri.abbinato" :options="abb" optionLabel="label" optionValue="value" placeholder="app: tutti" showClear />
-      <span class="nota">{{ palmari.length }} palmari · senza SIM {{ riepilogo.senzaSim }} · da abbinare all'app {{ riepilogo.daAbbinare }} · senza filiale {{ riepilogo.senzaFiliale }}<template v-if="riepilogo.conProblemi"> · con segnalazioni Knox {{ riepilogo.conProblemi }}</template></span>
+      <Button v-if="modo === 'filiali'" :label="tuttiAperti ? 'Chiudi tutto' : 'Espandi tutto'" :icon="tuttiAperti ? 'pi pi-minus' : 'pi pi-plus'" text size="small" @click="apriChiudiTutto" />
+      <span class="nota">{{ palmari.length }} palmari<template v-if="modo === 'filiali'"> in {{ gruppi.size }} filiali</template> · senza SIM {{ riepilogo.senzaSim }} · da abbinare all'app {{ riepilogo.daAbbinare }} · senza filiale {{ riepilogo.senzaFiliale }}<template v-if="riepilogo.conProblemi"> · con segnalazioni Knox {{ riepilogo.conProblemi }}</template></span>
     </div>
 
-    <DataTable :value="palmari" size="small" stripedRows paginator :rows="25" :rowsPerPageOptions="[25, 50, 100, 500]"
-      selectionMode="single" dataKey="IdPalmare" @row-click="e => apri(e.data)" class="elenco" :loading="caricamento" removableSort>
-      <Column field="Seriale" header="Palmare" sortable><template #body="{ data }"><b class="seriale">{{ data.Seriale }}</b><br><small class="nota">{{ data.NomeDevice }}</small></template></Column>
-      <Column field="Tag" header="Tag Knox" sortable style="width: 7rem" />
-      <Column field="Filiale" header="Filiale" sortable />
-      <Column field="Modello" header="Modello" sortable style="width: 11rem"><template #body="{ data }">{{ (data.Modello || '').replace('Galaxy ', '') }}<br><small class="nota">Android {{ data.VersioneOS }}</small></template></Column>
-      <Column header="SIM" sortable sortField="SimNumero" style="width: 9rem">
+    <DataTable :key="modo" :value="modo === 'filiali' ? raggruppati : palmari" size="small" stripedRows :paginator="modo === 'elenco'" :rows="25" :rowsPerPageOptions="[25, 50, 100, 500]"
+      selectionMode="single" dataKey="IdPalmare" @row-click="e => apri(e.data)" class="elenco" :loading="caricamento" removableSort
+      :rowGroupMode="modo === 'filiali' ? 'subheader' : undefined" :groupRowsBy="modo === 'filiali' ? 'Gruppo' : undefined" :expandableRowGroups="modo === 'filiali'" v-model:expandedRowGroups="gruppiAperti">
+      <template #groupheader="{ data }">
+        <span class="gruppo"><b>{{ data.Gruppo }}</b> <Tag :value="gruppi.get(data.Gruppo)?.n ?? 0" severity="info" rounded /> <small class="nota">in uso {{ gruppi.get(data.Gruppo)?.inUso ?? 0 }} · senza SIM {{ gruppi.get(data.Gruppo)?.senzaSim ?? 0 }}</small></span>
+      </template>
+      <Column field="Seriale" header="Palmare" :sortable="modo === 'elenco'"><template #body="{ data }"><b class="seriale">{{ data.Seriale }}</b><br><small class="nota">{{ data.NomeDevice }}</small></template></Column>
+      <Column field="Tag" header="Tag Knox" :sortable="modo === 'elenco'" style="width: 7rem" />
+      <Column v-if="modo === 'elenco'" field="Filiale" header="Filiale" sortable />
+      <Column field="Modello" header="Modello" :sortable="modo === 'elenco'" style="width: 11rem"><template #body="{ data }">{{ (data.Modello || '').replace('Galaxy ', '') }}<br><small class="nota">Android {{ data.VersioneOS }}</small></template></Column>
+      <Column header="SIM" :sortable="modo === 'elenco'" sortField="SimNumero" style="width: 9rem">
         <template #body="{ data }">
           <template v-if="data.IdSim">{{ data.SimNumero }}<br><small class="nota">{{ data.SimPiano }}</small></template>
           <span v-else-if="data.ICCID" class="attenzione" title="ICCID presente ma nessuna SIM in anagrafica con quell'ICCID">ICCID sconosciuto</span>
           <span v-else class="nota">—</span>
         </template>
       </Column>
-      <Column header="Ultimo uso" sortable sortField="UltimoUso" style="width: 11rem">
+      <Column header="Ultimo uso" :sortable="modo === 'elenco'" sortField="UltimoUso" style="width: 11rem">
         <template #body="{ data }">
           <template v-if="data.AndroidId">
             <template v-if="data.UltimoUso">{{ dataIt(data.UltimoUso) }} <b>{{ data.UltimoDriver }}</b><br><small class="nota">{{ data.UltimaFiliale }} · {{ data.GiorniUso30 }} gg/30</small></template>
@@ -200,7 +233,7 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
           <Tag v-else value="da abbinare" severity="warn" />
         </template>
       </Column>
-      <Column header="Posizione" sortable sortField="PosizioneData" style="width: 9rem">
+      <Column header="Posizione" :sortable="modo === 'elenco'" sortField="PosizioneData" style="width: 9rem">
         <template #body="{ data }">
           <template v-if="data.PosizioneData">
             <a :href="mappa(data.PosizioneLat, data.PosizioneLng)" target="_blank" rel="noopener" @click.stop title="Apri la mappa (OpenStreetMap)"><i class="pi pi-map-marker"></i> {{ dataOra(data.PosizioneData) }}</a>
@@ -208,8 +241,8 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
           <span v-else class="nota">—</span>
         </template>
       </Column>
-      <Column field="UtenteMdm" header="Utente Knox" sortable style="width: 7rem" />
-      <Column field="Stato" header="Stato" sortable style="width: 6rem"><template #body="{ data }"><Tag :value="data.Stato" :severity="severitaStato(data.Stato)" /></template></Column>
+      <Column field="UtenteMdm" header="Utente Knox" :sortable="modo === 'elenco'" style="width: 7rem" />
+      <Column field="Stato" header="Stato" :sortable="modo === 'elenco'" style="width: 6rem"><template #body="{ data }"><Tag :value="data.Stato" :severity="severitaStato(data.Stato)" /></template></Column>
       <Column header="Knox" style="width: 8rem"><template #body="{ data }">{{ data.StatoMdm }} <small class="nota">{{ data.UltimoContatto }}</small><br><small v-if="data.Problema" class="attenzione">{{ data.Problema }}</small></template></Column>
       <template #empty><span class="nota">Nessun palmare: importa il Device List di Knox.</span></template>
     </DataTable>
@@ -340,7 +373,7 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
           <li>palmari nuovi: <b>{{ e.nuovi }}</b>, aggiornati: <b>{{ e.aggiornati }}</b>, invariati: {{ e.invariati }}</li>
           <li v-if="e.posizioni != null">posizioni nuove registrate: <b>{{ e.posizioni }}</b></li>
           <li v-if="e.iccidSenzaSim">con ICCID che non corrisponde a nessuna SIM in anagrafica: <b>{{ e.iccidSenzaSim }}</b> (importa l'elenco SIM aggiornato)</li>
-          <li v-if="e.tagSenzaFiliale.length">tag Knox non riconducibili a una filiale sola (da assegnare a mano): {{ e.tagSenzaFiliale.join(', ') }}</li>
+          <li v-if="e.tagSenzaFiliale.length">tag Knox non riconducibili a una filiale (aggiungili in Lista Valori, lista PALMARI_TAG_FILIALE, o assegna a mano): {{ e.tagSenzaFiliale.join(', ') }}</li>
           <li v-if="e.errori.length" class="attenzione">errori: {{ e.errori.length }}<ul><li v-for="(x, j) in e.errori.slice(0, 10)" :key="j">{{ x }}</li></ul></li>
         </ul>
       </div>
@@ -366,6 +399,8 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
 .filtri { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 .cerca { width: 22rem; }
 .elenco :deep(tr) { cursor: pointer; }
+.elenco :deep(.p-datatable-row-group-header) { background: var(--p-content-hover-background); }
+.gruppo { display: inline-flex; align-items: center; gap: .5rem; }
 .griglia { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem 1rem; }
 .griglia label { display: flex; flex-direction: column; gap: .2rem; font-size: .85rem; color: var(--p-text-muted-color); }
 .griglia label.larga { grid-column: 1 / -1; }

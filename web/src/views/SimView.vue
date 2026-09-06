@@ -20,6 +20,8 @@ import Tab from 'primevue/tab'
 import TabPanels from 'primevue/tabpanels'
 import TabPanel from 'primevue/tabpanel'
 import AutoComplete from 'primevue/autocomplete'
+import SelectButton from 'primevue/selectbutton'
+import { scaricaDaApi } from '../lib/esporta'
 import { fileBase64, messaggioErrore } from '../lib/schedulatore'
 import { useNavStore } from '../stores/nav'
 
@@ -37,12 +39,36 @@ let timer = null
 async function caricaLookup() {
   try { lookup.value = (await api.get('/sim/lookup')).data } catch (e) { errore(e) }
 }
+const parametri = () => { const f = filtri.value; return { testo: f.testo || null, stato: f.stato, idFiliale: f.idFiliale, piano: f.piano, assegnazione: f.assegnazione } }
 async function carica() {
   caricamento.value = true
-  try {
-    const { data } = await api.get('/sim', { params: { testo: filtri.value.testo || null, stato: filtri.value.stato, idFiliale: filtri.value.idFiliale, piano: filtri.value.piano, assegnazione: filtri.value.assegnazione } })
-    sim.value = data
-  } catch (e) { errore(e) } finally { caricamento.value = false }
+  try { sim.value = (await api.get('/sim', { params: parametri() })).data }
+  catch (e) { errore(e) } finally { caricamento.value = false }
+}
+
+// --- la pagina si apre per filiale (quella del palmare che porta la SIM, altrimenti quella della SIM): gruppi chiusi col conteggio; "Elenco" e' la tabella piatta ---
+const modo = ref('filiali')
+const MODI = [{ label: 'Per filiale', value: 'filiali' }, { label: 'Elenco', value: 'elenco' }]
+const SENZA = 'Senza filiale'
+const raggruppate = computed(() => sim.value.map(x => ({ ...x, Gruppo: x.FilialeEffettiva || SENZA }))
+  .sort((a, b) => (a.Gruppo === SENZA) - (b.Gruppo === SENZA) || a.Gruppo.localeCompare(b.Gruppo) || (a.Numero || '').localeCompare(b.Numero || '')))
+const gruppi = computed(() => {
+  const m = new Map()
+  for (const x of raggruppate.value) {
+    const g = m.get(x.Gruppo) ?? { n: 0, palmare: 0, persona: 0, libere: 0 }
+    g.n++; if (x.TipoAssegnazione === 'Palmare') g.palmare++; else if (x.TipoAssegnazione === 'Persona') g.persona++; else if (x.TipoAssegnazione === 'Libera') g.libere++
+    m.set(x.Gruppo, g)
+  }
+  return m
+})
+const gruppiAperti = ref([])
+const tuttiAperti = computed(() => gruppi.value.size > 0 && gruppiAperti.value.length >= gruppi.value.size)
+const apriChiudiTutto = () => { gruppiAperti.value = tuttiAperti.value ? [] : [...gruppi.value.keys()] }
+// Excel con gli stessi filtri dell'elenco (tutte le righe, non solo la pagina a video)
+const esportazione = ref(false)
+async function esporta() {
+  esportazione.value = true
+  try { await scaricaDaApi(api, '/sim/export', parametri(), 'sim.xlsx') } catch (e) { errore(e) } finally { esportazione.value = false }
 }
 watch(() => filtri.value.testo, () => { clearTimeout(timer); timer = setTimeout(carica, 350) })
 watch(() => [filtri.value.stato, filtri.value.idFiliale, filtri.value.piano, filtri.value.assegnazione], carica)
@@ -167,30 +193,37 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
       <div class="barra">
         <Button label="Nuova SIM" icon="pi pi-plus" @click="apri(null)" />
         <Button label="Importa Excel Wind" icon="pi pi-upload" outlined :loading="importazione" @click="inputFile.click()" />
+        <Button label="Esporta Excel" icon="pi pi-file-excel" outlined :loading="esportazione" title="Tutte le SIM che passano i filtri, in Excel" @click="esporta" />
         <input ref="inputFile" type="file" multiple accept=".xlsx" hidden @change="importa" />
         <Button icon="pi pi-refresh" text :loading="caricamento" title="Aggiorna" @click="carica" />
       </div>
     </div>
 
     <div class="filtri">
-      <InputText v-model="filtri.testo" placeholder="numero, ICCID, dipendente, palmare, note…" class="cerca" />
+      <SelectButton v-model="modo" :options="MODI" optionLabel="label" optionValue="value" :allowEmpty="false" />
+      <InputText v-model="filtri.testo" placeholder="numero, ICCID, assegnatario (dipendente o driver), seriale palmare…" class="cerca" />
       <Select v-model="filtri.stato" :options="lookup.statiPresenti" placeholder="tutti gli stati" showClear />
       <Select v-model="filtri.idFiliale" :options="lookup.filiali" optionLabel="Filiale" optionValue="IdFiliale" placeholder="tutte le filiali" showClear filter />
       <Select v-model="filtri.piano" :options="lookup.piani" placeholder="tutti i piani" showClear />
       <Select v-model="filtri.assegnazione" :options="lookup.assegnazioni" placeholder="tutte le assegnazioni" showClear />
-      <span class="nota">{{ sim.length }} SIM<template v-for="(n, t) in riepilogo" :key="t"> · {{ t === 'Libera' ? 'libere' : 'su ' + t.toLowerCase() }} {{ n }}</template></span>
+      <Button v-if="modo === 'filiali'" :label="tuttiAperti ? 'Chiudi tutto' : 'Espandi tutto'" :icon="tuttiAperti ? 'pi pi-minus' : 'pi pi-plus'" text size="small" @click="apriChiudiTutto" />
+      <span class="nota">{{ sim.length }} SIM<template v-if="modo === 'filiali'"> in {{ gruppi.size }} filiali</template><template v-for="(n, t) in riepilogo" :key="t"> · {{ t === 'Libera' ? 'libere' : 'su ' + t.toLowerCase() }} {{ n }}</template></span>
     </div>
 
-    <DataTable :value="sim" size="small" stripedRows paginator :rows="25" :rowsPerPageOptions="[25, 50, 100, 500]"
+    <DataTable :key="modo" :value="modo === 'filiali' ? raggruppate : sim" size="small" stripedRows :paginator="modo === 'elenco'" :rows="25" :rowsPerPageOptions="[25, 50, 100, 500]"
       selectionMode="single" dataKey="IdSim" @row-click="e => apri(e.data)" class="elenco" :loading="caricamento"
-      sortField="Numero" :sortOrder="1" removableSort>
-      <Column field="Numero" header="Numero" sortable style="width: 8rem"><template #body="{ data }"><b>{{ data.Numero }}</b></template></Column>
-      <Column field="Stato" header="Stato" sortable style="width: 6rem"><template #body="{ data }"><Tag :value="data.Stato" :severity="severitaStato(data.Stato)" /></template></Column>
-      <Column field="PianoTariffario" header="Piano" sortable />
-      <Column field="Prodotto" header="Prodotto" sortable style="width: 10rem" />
-      <Column field="DataAttivazione" header="Attivata" sortable style="width: 6.5rem"><template #body="{ data }">{{ dataIt(data.DataAttivazione) }}</template></Column>
-      <Column field="Filiale" header="Filiale" sortable />
-      <Column header="Assegnata a" sortable sortField="Assegnazione">
+      :sortField="modo === 'elenco' ? 'Numero' : undefined" :sortOrder="modo === 'elenco' ? 1 : undefined" removableSort
+      :rowGroupMode="modo === 'filiali' ? 'subheader' : undefined" :groupRowsBy="modo === 'filiali' ? 'Gruppo' : undefined" :expandableRowGroups="modo === 'filiali'" v-model:expandedRowGroups="gruppiAperti">
+      <template #groupheader="{ data }">
+        <span class="gruppo"><b>{{ data.Gruppo }}</b> <Tag :value="gruppi.get(data.Gruppo)?.n ?? 0" severity="info" rounded /> <small class="nota">su palmare {{ gruppi.get(data.Gruppo)?.palmare ?? 0 }} · a persone {{ gruppi.get(data.Gruppo)?.persona ?? 0 }} · libere {{ gruppi.get(data.Gruppo)?.libere ?? 0 }}</small></span>
+      </template>
+      <Column field="Numero" header="Numero" :sortable="modo === 'elenco'" style="width: 8rem"><template #body="{ data }"><b>{{ data.Numero }}</b></template></Column>
+      <Column field="Stato" header="Stato" :sortable="modo === 'elenco'" style="width: 6rem"><template #body="{ data }"><Tag :value="data.Stato" :severity="severitaStato(data.Stato)" /></template></Column>
+      <Column field="PianoTariffario" header="Piano" :sortable="modo === 'elenco'" />
+      <Column field="Prodotto" header="Prodotto" :sortable="modo === 'elenco'" style="width: 10rem" />
+      <Column field="DataAttivazione" header="Attivata" :sortable="modo === 'elenco'" style="width: 6.5rem"><template #body="{ data }">{{ dataIt(data.DataAttivazione) }}</template></Column>
+      <Column v-if="modo === 'elenco'" field="FilialeEffettiva" header="Filiale" sortable />
+      <Column header="Assegnata a" :sortable="modo === 'elenco'" sortField="Assegnazione">
         <template #body="{ data }">
           <Tag :value="data.TipoAssegnazione" :severity="severitaAssegnazione(data.TipoAssegnazione)" class="tag-ass" />
           <template v-if="data.TipoAssegnazione === 'Palmare'">{{ data.PalmareNome }}<br><small class="nota">{{ data.PalmareSeriale }}<template v-if="data.PalmareDriver"> · ultimo {{ data.PalmareDriver }}</template></small></template>
@@ -198,7 +231,7 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
           <span v-else class="nota">non assegnata</span>
         </template>
       </Column>
-      <Column header="GB residui" sortable sortField="PercResidua" style="width: 8rem">
+      <Column header="GB residui" :sortable="modo === 'elenco'" sortField="PercResidua" style="width: 8rem">
         <template #body="{ data }">
           <template v-if="data.UltimaRilevazione">
             <Tag :value="(data.PercResidua ?? 0) + '%'" :severity="severitaPerc(data.PercResidua)" />
@@ -206,8 +239,8 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
           </template>
         </template>
       </Column>
-      <Column header="Credito" sortable sortField="CreditoResiduo" style="width: 6rem"><template #body="{ data }">{{ euro(data.CreditoResiduo) }}</template></Column>
-      <Column header="Rilevata" sortable sortField="UltimaRilevazione" style="width: 6.5rem"><template #body="{ data }">{{ dataIt(data.UltimaRilevazione) }}</template></Column>
+      <Column header="Credito" :sortable="modo === 'elenco'" sortField="CreditoResiduo" style="width: 6rem"><template #body="{ data }">{{ euro(data.CreditoResiduo) }}</template></Column>
+      <Column header="Rilevata" :sortable="modo === 'elenco'" sortField="UltimaRilevazione" style="width: 6.5rem"><template #body="{ data }">{{ dataIt(data.UltimaRilevazione) }}</template></Column>
       <template #empty><span class="nota">Nessuna SIM: importa l'Excel di Wind o creane una.</span></template>
     </DataTable>
 
@@ -328,6 +361,8 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
 .filtri { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 .cerca { width: 22rem; }
 .elenco :deep(tr) { cursor: pointer; }
+.elenco :deep(.p-datatable-row-group-header) { background: var(--p-content-hover-background); }
+.gruppo { display: inline-flex; align-items: center; gap: .5rem; }
 .griglia { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem 1rem; }
 .griglia label { display: flex; flex-direction: column; gap: .2rem; font-size: .85rem; color: var(--p-text-muted-color); }
 .griglia label.larga { grid-column: 1 / -1; }

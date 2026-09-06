@@ -20,20 +20,19 @@ static class Palmari
         app.MapGet("/api/palmari", async (string? testo, string? tag, int? idFiliale, string? modello, string? stato, bool? conSim, bool? abbinato) =>
         {
             await using var cn = new SqlConnection(connString());
-            return Results.Ok(await cn.QueryAsync(@"
-                SELECT IdPalmare, Seriale, Imei, AndroidId, NomeDevice, Alias, Modello, VersioneOS, VersioneAgent, StatoMdm, UtenteMdm, Tag, Profilo,
-                       NumeroMobile, ICCID, IdSim, IdFiliale, Filiale, Problema, UltimoContatto, UltimoAggiornamentoMdm, Stato, Note,
-                       SimNumero, SimPiano, SimStato, SimPercResidua, UltimoUso, UltimoDriver, UltimaFiliale, GiorniUso30, UltimoEventoApp, VersioneApp,
-                       PosizioneData, PosizioneLat, PosizioneLng, AppLat, AppLng
-                FROM dbo.V_Palmari
-                WHERE (@tag IS NULL OR Tag = @tag) AND (@idFiliale IS NULL OR IdFiliale = @idFiliale)
-                  AND (@modello IS NULL OR Modello = @modello) AND (@stato IS NULL OR Stato = @stato)
-                  AND (@conSim IS NULL OR (@conSim = 1 AND IdSim IS NOT NULL) OR (@conSim = 0 AND IdSim IS NULL))
-                  AND (@abbinato IS NULL OR (@abbinato = 1 AND AndroidId IS NOT NULL) OR (@abbinato = 0 AND AndroidId IS NULL))
-                  AND (@testo IS NULL OR Seriale LIKE @like OR Imei LIKE @like OR AndroidId LIKE @like OR NomeDevice LIKE @like OR Alias LIKE @like
-                       OR NumeroMobile LIKE @like OR ICCID LIKE @like OR UtenteMdm LIKE @like OR UltimoDriver LIKE @like OR Note LIKE @like OR Mac LIKE @like)
-                ORDER BY Tag, NomeDevice",
-                new { testo = Vuoto(testo), tag = Vuoto(tag), idFiliale, modello = Vuoto(modello), stato = Vuoto(stato), conSim, abbinato, like = "%" + (testo ?? "").Trim() + "%" }));
+            return Results.Ok(await Elenco(cn, testo, tag, idFiliale, modello, stato, conSim, abbinato));
+        }).RequireAuthorization();
+
+        // lo stesso elenco, con gli stessi filtri, in Excel
+        app.MapGet("/api/palmari/export", async (string? testo, string? tag, int? idFiliale, string? modello, string? stato, bool? conSim, bool? abbinato) =>
+        {
+            await using var cn = new SqlConnection(connString());
+            var righe = await Elenco(cn, testo, tag, idFiliale, modello, stato, conSim, abbinato);
+            return Esporta.Xlsx(righe, "Palmari", "palmari", new[] {
+                ("Filiale", "Filiale"), ("Seriale", "Seriale"), ("Nome device", "NomeDevice"), ("Modello", "Modello"), ("Android", "VersioneOS"), ("Tag Knox", "Tag"), ("Stato", "Stato"),
+                ("SIM", "SimNumero"), ("Piano SIM", "SimPiano"), ("Stato SIM", "SimStato"), ("ICCID", "ICCID"), ("IMEI", "Imei"), ("Android ID", "AndroidId"),
+                ("Ultimo uso", "UltimoUso"), ("Ultimo driver", "UltimoDriver"), ("Filiale ultimo uso", "UltimaFiliale"), ("Giorni d'uso (30)", "GiorniUso30"),
+                ("Posizione (data)", "PosizioneData"), ("Utente Knox", "UtenteMdm"), ("Stato Knox", "StatoMdm"), ("Ultimo contatto Knox", "UltimoContatto"), ("Segnalazione Knox", "Problema"), ("Note", "Note") });
         }).RequireAuthorization();
 
         // tendine, riepilogo e gli Android ID visti dall'app ma non ancora abbinati a un palmare
@@ -125,6 +124,7 @@ static class Palmari
             await cn.OpenAsync();
             var filiali = (await cn.QueryAsync("SELECT IDFILIALE AS IdFiliale, FILIALE AS Filiale FROM dbo.FILIALI WHERE FILIALE IS NOT NULL"))
                 .Select(f => ((int)f.IdFiliale, (string)f.Filiale)).ToList();
+            var alias = await Alias(cn);
             int nuovi = 0, aggiornati = 0, invariati = 0, posizioni = 0; var errori = new List<string>(); var tagSenzaFiliale = new SortedSet<string>();
             var utente = user.Identity?.Name;
             foreach (var (r, i) in righe.Select((r, i) => (r, i)))
@@ -135,7 +135,7 @@ static class Palmari
                 {
                     var imei = (r.GetValueOrDefault("imei") ?? "").Split(',').Select(x => x.Trim()).Where(x => x != "").ToList();
                     var tag = Vuoto(r.GetValueOrDefault("tag"));
-                    var idFiliale = FilialeDalTag(tag, filiali);
+                    var idFiliale = FilialeDalTag(tag, filiali, alias);
                     if (tag is not null && idFiliale is null) tagSenzaFiliale.Add(tag);
                     var p = new DynamicParameters(new
                     {
@@ -175,19 +175,40 @@ static class Palmari
         })).RequireAuthorization();
     }
 
-    // il tag Knox e' il nome della filiale: vale se combacia con una filiale sola
-    // (per OLBIA: "SARD - OLBIA" e non "SARD - SDA OLBIA", a meno che il tag non dica SDA)
-    static int? FilialeDalTag(string? tag, List<(int id, string nome)> filiali)
+    // gli alias tag -> filiale scritti in LISTA_VALORI (PALMARI_TAG_FILIALE: Valore = tag, Codice = IDFILIALE)
+    static async Task<Dictionary<string, int>> Alias(SqlConnection cn)
+    {
+        var righe = await cn.QueryAsync("SELECT Valore, Codice FROM dbo.LISTA_VALORI WHERE Lista = 'PALMARI_TAG_FILIALE'");
+        var d = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var r in righe) if (int.TryParse(((string?)r.Codice ?? "").Trim(), out var id)) d[((string)r.Valore).Trim()] = id;
+        return d;
+    }
+
+    // Il tag Knox e' scritto come il nome della filiale, o quasi: prima gli alias,
+    // poi il confronto sui nomi per parole (via i prefissi TOSC/SARD/LINEA/EXT e i
+    // trattini): vale se una filiale sola contiene tutte le parole del tag.
+    // Con OLBIA vince "SARD - OLBIA" e non "SARD - SDA OLBIA", a meno che il tag non dica SDA.
+    static int? FilialeDalTag(string? tag, List<(int id, string nome)> filiali, Dictionary<string, int>? alias = null)
     {
         if (string.IsNullOrWhiteSpace(tag)) return null;
-        var t = tag.Trim().ToUpperInvariant();
-        var conSda = t.Contains("SDA");
-        var candidate = filiali.Where(f => f.nome.ToUpperInvariant().Contains(t)).ToList();
-        if (candidate.Count == 0) candidate = filiali.Where(f => t.Split(' ').All(parola => f.nome.ToUpperInvariant().Contains(parola))).ToList();
-        candidate = candidate.Where(f => f.nome.ToUpperInvariant().Contains("SDA") == conSda).ToList();
+        var t = tag.Trim();
+        if (alias is not null && alias.TryGetValue(t, out var daAlias)) return daAlias;
+        var parole = Parole(t);
+        if (parole.Count == 0) return null;
+        var conSda = parole.Contains("SDA");
+        var candidate = filiali.Where(f => { var pf = Parole(f.nome); return parole.All(p => pf.Contains(p)); }).ToList();
+        candidate = candidate.Where(f => Parole(f.nome).Contains("SDA") == conSda).ToList();
         if (candidate.Count > 1) candidate = candidate.Where(f => !Regex.IsMatch(f.nome, @"^(EXT|LINEA)\b", RegexOptions.IgnoreCase)).ToList();
+        if (candidate.Count > 1)   // piu' filiali: quella col nome piu' corto e' la piu' vicina al tag
+        {
+            var minimo = candidate.Min(f => Parole(f.nome).Count);
+            candidate = candidate.Where(f => Parole(f.nome).Count == minimo).ToList();
+        }
         return candidate.Count == 1 ? candidate[0].id : null;
     }
+    static readonly HashSet<string> Prefissi = new(StringComparer.OrdinalIgnoreCase) { "TOSC", "SARD", "LINEA", "EXT", "DI", "DEL", "DELLA" };
+    static HashSet<string> Parole(string s) =>
+        new(Regex.Split(s.ToUpperInvariant().Replace("/", " "), @"[^A-Z0-9]+").Where(p => p.Length > 0 && !Prefissi.Contains(p)));
 
     static readonly (string chiave, string[] nomi)[] Colonne =
     {
@@ -264,6 +285,23 @@ static class Palmari
         if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var n) && n > 20000 && n < 80000) return DateTime.FromOADate(n).Date;
         return null;
     }
+    // l'elenco della pagina (vista V_Palmari) coi filtri: lo usano l'API e l'export
+    static async Task<IEnumerable<dynamic>> Elenco(SqlConnection cn, string? testo, string? tag, int? idFiliale, string? modello, string? stato, bool? conSim, bool? abbinato) =>
+        await cn.QueryAsync(@"
+            SELECT IdPalmare, Seriale, Imei, AndroidId, NomeDevice, Alias, Modello, VersioneOS, VersioneAgent, StatoMdm, UtenteMdm, Tag, Profilo,
+                   NumeroMobile, ICCID, IdSim, IdFiliale, Filiale, Problema, UltimoContatto, UltimoAggiornamentoMdm, Stato, Note,
+                   SimNumero, SimPiano, SimStato, SimPercResidua, UltimoUso, UltimoDriver, UltimaFiliale, GiorniUso30, UltimoEventoApp, VersioneApp,
+                   PosizioneData, PosizioneLat, PosizioneLng, AppLat, AppLng
+            FROM dbo.V_Palmari
+            WHERE (@tag IS NULL OR Tag = @tag) AND (@idFiliale IS NULL OR IdFiliale = @idFiliale)
+              AND (@modello IS NULL OR Modello = @modello) AND (@stato IS NULL OR Stato = @stato)
+              AND (@conSim IS NULL OR (@conSim = 1 AND IdSim IS NOT NULL) OR (@conSim = 0 AND IdSim IS NULL))
+              AND (@abbinato IS NULL OR (@abbinato = 1 AND AndroidId IS NOT NULL) OR (@abbinato = 0 AND AndroidId IS NULL))
+              AND (@testo IS NULL OR Seriale LIKE @like OR Imei LIKE @like OR AndroidId LIKE @like OR NomeDevice LIKE @like OR Alias LIKE @like
+                   OR NumeroMobile LIKE @like OR SimNumero LIKE @like OR ICCID LIKE @like OR UtenteMdm LIKE @like OR UltimoDriver LIKE @like OR Note LIKE @like OR Mac LIKE @like)
+            ORDER BY Filiale, Seriale",
+            new { testo = Vuoto(testo), tag = Vuoto(tag), idFiliale, modello = Vuoto(modello), stato = Vuoto(stato), conSim, abbinato, like = "%" + (testo ?? "").Trim() + "%" });
+
     static string? Vuoto(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
     static string? Str(JsonElement b, string nome) =>
         b.ValueKind == JsonValueKind.Object && b.TryGetProperty(nome, out var v)

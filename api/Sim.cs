@@ -23,16 +23,19 @@ static class Sim
         app.MapGet("/api/sim", async (string? testo, string? stato, int? idFiliale, string? piano, string? assegnazione) =>
         {
             await using var cn = new SqlConnection(connString());
-            return Results.Ok(await cn.QueryAsync(@"
-                SELECT * FROM dbo.V_Sim
-                WHERE (@stato IS NULL OR Stato = @stato)
-                  AND (@idFiliale IS NULL OR IdFiliale = @idFiliale)
-                  AND (@piano IS NULL OR PianoTariffario = @piano)
-                  AND (@assegnazione IS NULL OR TipoAssegnazione = @assegnazione)
-                  AND (@testo IS NULL OR Numero LIKE @like OR ICCID LIKE @like OR Dipendente LIKE @like OR Assegnazione LIKE @like
-                       OR AssegnataA LIKE @like OR Palmare LIKE @like OR PalmareSeriale LIKE @like OR PalmareNome LIKE @like OR Note LIKE @like)
-                ORDER BY Numero",
-                new { testo = Vuoto(testo), stato = Vuoto(stato), idFiliale, piano = Vuoto(piano), assegnazione = Vuoto(assegnazione), like = "%" + (testo ?? "").Trim() + "%" }));
+            return Results.Ok(await Elenco(cn, testo, stato, idFiliale, piano, assegnazione));
+        }).RequireAuthorization();
+
+        // lo stesso elenco, con gli stessi filtri, in Excel
+        app.MapGet("/api/sim/export", async (string? testo, string? stato, int? idFiliale, string? piano, string? assegnazione) =>
+        {
+            await using var cn = new SqlConnection(connString());
+            var righe = await Elenco(cn, testo, stato, idFiliale, piano, assegnazione);
+            return Esporta.Xlsx(righe, "SIM", "sim", new[] {
+                ("Filiale", "FilialeEffettiva"), ("Numero", "Numero"), ("ICCID", "ICCID"), ("Stato", "Stato"), ("Piano", "PianoTariffario"), ("Prodotto", "Prodotto"), ("Operatore", "Operatore"),
+                ("Attivata", "DataAttivazione"), ("Cessata", "DataCessazione"), ("Assegnazione", "TipoAssegnazione"), ("Assegnata a", "Assegnazione"),
+                ("Dipendente", "Dipendente"), ("Matricola", "Matricola"), ("Palmare (seriale)", "PalmareSeriale"), ("Palmare (nome)", "PalmareNome"), ("Ultimo driver", "PalmareDriver"),
+                ("GB soglia", "GbSoglia"), ("GB consumati", "GbConsumati"), ("GB residui", "GbResidui"), ("% residua", "PercResidua"), ("Credito", "CreditoResiduo"), ("Rilevata il", "UltimaRilevazione"), ("Note", "Note") });
         }).RequireAuthorization();
 
         // tendine: stati e piani presenti, filiali, riepilogo
@@ -242,6 +245,20 @@ static class Sim
         else if (s.Contains(',') && s.Contains('.')) s = s.Replace(".", "").Replace(',', '.');
         return decimal.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) ? Math.Round(d, 3) : null;
     }
+    // l'elenco della pagina (vista V_Sim) coi filtri: lo usano l'API e l'export.
+    // La filiale "effettiva" e' quella del palmare che porta la SIM, altrimenti quella della SIM.
+    static async Task<IEnumerable<dynamic>> Elenco(SqlConnection cn, string? testo, string? stato, int? idFiliale, string? piano, string? assegnazione) =>
+        await cn.QueryAsync(@"
+            SELECT *, ISNULL(PalmareFiliale, Filiale) AS FilialeEffettiva FROM dbo.V_Sim
+            WHERE (@stato IS NULL OR Stato = @stato)
+              AND (@idFiliale IS NULL OR ISNULL(PalmareFiliale, Filiale) = (SELECT FILIALE FROM dbo.FILIALI WHERE IDFILIALE = @idFiliale))
+              AND (@piano IS NULL OR PianoTariffario = @piano)
+              AND (@assegnazione IS NULL OR TipoAssegnazione = @assegnazione)
+              AND (@testo IS NULL OR Numero LIKE @like OR ICCID LIKE @like OR Dipendente LIKE @like OR Matricola LIKE @like OR Assegnazione LIKE @like
+                   OR AssegnataA LIKE @like OR Palmare LIKE @like OR PalmareSeriale LIKE @like OR PalmareNome LIKE @like OR PalmareDriver LIKE @like OR Note LIKE @like)
+            ORDER BY ISNULL(PalmareFiliale, Filiale), Numero",
+            new { testo = Vuoto(testo), stato = Vuoto(stato), idFiliale, piano = Vuoto(piano), assegnazione = Vuoto(assegnazione), like = "%" + (testo ?? "").Trim() + "%" });
+
     static string? Vuoto(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
     static string? Str(JsonElement b, string nome) =>
         b.ValueKind == JsonValueKind.Object && b.TryGetProperty(nome, out var v)
