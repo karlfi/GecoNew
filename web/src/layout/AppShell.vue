@@ -257,6 +257,7 @@ const chiavePagina = computed(() =>
         <PalmariView
           v-else-if="nav.corrente.tipo === 'palmari'"
           :key="chiavePagina"
+          :id-palmare="nav.corrente.idPalmare ?? null"
         />
         <ConfigTable
           v-else-if="nav.corrente.tipo === 'config'"

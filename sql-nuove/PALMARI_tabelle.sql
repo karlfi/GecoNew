@@ -51,6 +51,9 @@ CREATE TABLE dbo.PALMARI (
     UtenteModifica   NVARCHAR(50)  NULL
 );
 GO
+IF COL_LENGTH('dbo.PALMARI', 'Email') IS NULL
+    ALTER TABLE dbo.PALMARI ADD Email NVARCHAR(100) NULL, Gruppi NVARCHAR(300) NULL, ProfiliAssegnati NVARCHAR(300) NULL;
+GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_PALMARI_AndroidId') CREATE INDEX IX_PALMARI_AndroidId ON dbo.PALMARI (AndroidId);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_PALMARI_IdSim') CREATE INDEX IX_PALMARI_IdSim ON dbo.PALMARI (IdSim);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_UTENTI_ATTIVITA_Palmare') CREATE INDEX IX_UTENTI_ATTIVITA_Palmare ON dbo.UTENTI_ATTIVITA (Palmare, data) INCLUDE (idUtente, idFiliale);
@@ -71,10 +74,49 @@ CREATE TABLE dbo.PALMARI_VARIAZIONI (
 );
 GO
 
--- l'elenco: palmare + SIM + filiale + ultimo uso registrato dall'app
+-- dove stava il palmare: la "Last Location" di ogni export Knox (una riga per istante),
+-- e in futuro altre fonti (Origine)
+IF OBJECT_ID('dbo.PALMARI_POSIZIONI', 'U') IS NULL
+CREATE TABLE dbo.PALMARI_POSIZIONI (
+    IdPosizione   INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_PALMARI_POSIZIONI PRIMARY KEY,
+    IdPalmare     INT           NOT NULL CONSTRAINT FK_PALMARI_POSIZIONI REFERENCES dbo.PALMARI (IdPalmare) ON DELETE CASCADE,
+    DataOra       DATETIME      NOT NULL,          -- ora locale, com'e' nel file
+    Latitudine    DECIMAL(9,6)  NOT NULL,
+    Longitudine   DECIMAL(9,6)  NOT NULL,
+    Origine       VARCHAR(20)   NOT NULL CONSTRAINT DF_PALMARI_POSIZIONI_Origine DEFAULT ('KNOX'),
+    FileOrigine   NVARCHAR(200) NULL,
+    DataImport    DATETIME      NOT NULL CONSTRAINT DF_PALMARI_POSIZIONI_Data DEFAULT (GETDATE()),
+    CONSTRAINT UQ_PALMARI_POSIZIONI UNIQUE (IdPalmare, Origine, DataOra)
+);
+GO
+
+-- una posizione: si aggiunge solo se per quell'istante non c'e' gia'
+CREATE OR ALTER PROCEDURE dbo.AI_PALMARI_POSIZIONE_Save
+    @IdPalmare   INT,
+    @DataOra     DATETIME,
+    @Latitudine  DECIMAL(9,6),
+    @Longitudine DECIMAL(9,6),
+    @Origine     VARCHAR(20)   = 'KNOX',
+    @FileOrigine NVARCHAR(200) = NULL,
+    @Nuova       BIT           = NULL OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET @Nuova = 0;
+    IF NOT EXISTS (SELECT 1 FROM dbo.PALMARI WHERE IdPalmare = @IdPalmare) BEGIN RAISERROR('AI_PALMARI_POSIZIONE_Save: palmare %d inesistente.', 16, 1, @IdPalmare); RETURN; END
+    IF EXISTS (SELECT 1 FROM dbo.PALMARI_POSIZIONI WHERE IdPalmare = @IdPalmare AND Origine = @Origine AND DataOra = @DataOra) RETURN;
+    INSERT INTO dbo.PALMARI_POSIZIONI (IdPalmare, DataOra, Latitudine, Longitudine, Origine, FileOrigine)
+    VALUES (@IdPalmare, @DataOra, @Latitudine, @Longitudine, @Origine, @FileOrigine);
+    SET @Nuova = 1;
+END
+GO
+
+-- l'elenco: palmare + SIM + filiale + ultimo uso registrato dall'app + ultima posizione
 CREATE OR ALTER VIEW dbo.V_Palmari AS
 SELECT p.*,
        f.FILIALE AS Filiale,
+       pos.DataOra AS PosizioneData, pos.Latitudine AS PosizioneLat, pos.Longitudine AS PosizioneLng,
+       pr.latitude AS AppLat, pr.longitude AS AppLng,
        s.Numero AS SimNumero, s.PianoTariffario AS SimPiano, s.Stato AS SimStato, s.PercResidua AS SimPercResidua, s.UltimaRilevazione AS SimRilevazione,
        u.data AS UltimoUso, u.idUtente AS UltimoIdUtente, ut.Nome AS UltimoDriver, fu.FILIALE AS UltimaFiliale,
        (SELECT COUNT(DISTINCT a.data) FROM dbo.UTENTI_ATTIVITA a WHERE a.Palmare = p.AndroidId AND a.data >= DATEADD(day, -30, CAST(GETDATE() AS DATE))) AS GiorniUso30,
@@ -85,7 +127,8 @@ LEFT JOIN dbo.V_Sim s ON s.IdSim = p.IdSim
 OUTER APPLY (SELECT TOP 1 a.data, a.idUtente, a.idFiliale FROM dbo.UTENTI_ATTIVITA a WHERE p.AndroidId IS NOT NULL AND a.Palmare = p.AndroidId ORDER BY a.data DESC, a.idAttivita DESC) u
 LEFT JOIN dbo.UTENTI ut ON ut.IdUtente = u.idUtente
 LEFT JOIN dbo.FILIALI fu ON fu.IDFILIALE = u.idFiliale
-OUTER APPLY (SELECT TOP 1 r.datainserimento, r.appVersion FROM dbo.PALM_RAW r WHERE p.AndroidId IS NOT NULL AND r.imei = p.AndroidId ORDER BY r.id DESC) pr;
+OUTER APPLY (SELECT TOP 1 r.datainserimento, r.appVersion, r.latitude, r.longitude FROM dbo.PALM_RAW r WHERE p.AndroidId IS NOT NULL AND r.imei = p.AndroidId ORDER BY r.id DESC) pr
+OUTER APPLY (SELECT TOP 1 x.DataOra, x.Latitudine, x.Longitudine FROM dbo.PALMARI_POSIZIONI x WHERE x.IdPalmare = p.IdPalmare ORDER BY x.DataOra DESC) pos;
 GO
 
 -- Salvataggio dalla pagina: tutti i campi. Le variazioni sui campi che contano restano in PALMARI_VARIAZIONI.
@@ -192,6 +235,9 @@ CREATE OR ALTER PROCEDURE dbo.AI_PALMARI_Import
     @CodiceKiosk    VARCHAR(20)   = NULL,
     @CodiceUnenroll VARCHAR(30)   = NULL,
     @CodiceSblocco  VARCHAR(20)   = NULL,
+    @Email          NVARCHAR(100) = NULL,
+    @Gruppi         NVARCHAR(300) = NULL,
+    @ProfiliAssegnati NVARCHAR(300) = NULL,
     @IdFiliale      INT           = NULL,
     @Utente         NVARCHAR(50)  = NULL,
     @IdPalmare      INT           = NULL OUTPUT,
@@ -211,11 +257,11 @@ BEGIN
         INSERT INTO dbo.PALMARI (Seriale, Imei, Imei2, Mac, NomeDevice, Alias, Modello, Produttore, Piattaforma, VersioneOS, VersioneAgent, Firmware,
                                  StatoMdm, TipoGestione, TipoEnrollment, Organizzazione, Profilo, UtenteMdm, Tag, NumeroMobile, ICCID, EID, IdSim, IdFiliale,
                                  Problema, UltimoComando, Roaming, UltimoContatto, UltimoAggiornamentoMdm, CodiceKiosk, CodiceUnenroll, CodiceSblocco,
-                                 DataImport, DataModifica, UtenteModifica)
+                                 Email, Gruppi, ProfiliAssegnati, DataImport, DataModifica, UtenteModifica)
         VALUES (@Seriale, @Imei, @Imei2, @Mac, @NomeDevice, @Alias, @Modello, @Produttore, @Piattaforma, @VersioneOS, @VersioneAgent, @Firmware,
                 @StatoMdm, @TipoGestione, @TipoEnrollment, @Organizzazione, @Profilo, @UtenteMdm, @Tag, @NumeroMobile, @ICCID, @EID, @IdSim, @IdFiliale,
                 @Problema, @UltimoComando, @Roaming, @UltimoContatto, @UltimoAggiornamentoMdm, @CodiceKiosk, @CodiceUnenroll, @CodiceSblocco,
-                GETDATE(), GETDATE(), @Utente);
+                @Email, @Gruppi, @ProfiliAssegnati, GETDATE(), GETDATE(), @Utente);
         SET @IdPalmare = SCOPE_IDENTITY();
         INSERT INTO dbo.PALMARI_VARIAZIONI (IdPalmare, Data, Campo, Prima, Dopo, Origine, Utente) VALUES (@IdPalmare, @Oggi, 'Creazione', NULL, @Seriale, 'INIZIALE', @Utente);
         SET @Esito = 'NUOVO';
@@ -224,7 +270,8 @@ BEGIN
 
     DECLARE @p TABLE (ICCID VARCHAR(32), IdSim INT, Tag NVARCHAR(50), StatoMdm VARCHAR(30), UtenteMdm NVARCHAR(50), Profilo NVARCHAR(120), NumeroMobile VARCHAR(20), IdFiliale INT);
     INSERT INTO @p SELECT ICCID, IdSim, Tag, StatoMdm, UtenteMdm, Profilo, NumeroMobile, IdFiliale FROM dbo.PALMARI WHERE IdPalmare = @IdPalmare;
-    DECLARE @IdFilialeNuova INT = (SELECT ISNULL(IdFiliale, @IdFiliale) FROM @p);
+    -- filiale: dal tag se il palmare non ne ha una, o se il tag e' cambiato e il nuovo tag ne indica una
+    DECLARE @IdFilialeNuova INT = (SELECT CASE WHEN @Tag IS NOT NULL AND ISNULL(Tag, '') <> @Tag AND @IdFiliale IS NOT NULL THEN @IdFiliale ELSE ISNULL(IdFiliale, @IdFiliale) END FROM @p);
     DECLARE @IdSimNuova INT = ISNULL(@IdSim, (SELECT IdSim FROM @p));   -- senza ICCID nel file la SIM resta quella che c'e'
     IF @ICCID IS NOT NULL AND @IdSim IS NULL SET @IdSimNuova = NULL;      -- ICCID nuovo ma sconosciuto: la SIM di prima non e' piu' quella
 
@@ -239,6 +286,7 @@ BEGIN
            Problema = @Problema, UltimoComando = ISNULL(@UltimoComando, UltimoComando), Roaming = ISNULL(@Roaming, Roaming),
            UltimoContatto = ISNULL(@UltimoContatto, UltimoContatto), UltimoAggiornamentoMdm = ISNULL(@UltimoAggiornamentoMdm, UltimoAggiornamentoMdm),
            CodiceKiosk = ISNULL(@CodiceKiosk, CodiceKiosk), CodiceUnenroll = ISNULL(@CodiceUnenroll, CodiceUnenroll), CodiceSblocco = ISNULL(@CodiceSblocco, CodiceSblocco),
+           Email = ISNULL(@Email, Email), Gruppi = ISNULL(@Gruppi, Gruppi), ProfiliAssegnati = ISNULL(@ProfiliAssegnati, ProfiliAssegnati),
            DataImport = GETDATE()
      WHERE IdPalmare = @IdPalmare;
 

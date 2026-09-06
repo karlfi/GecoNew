@@ -20,7 +20,7 @@ static class Sim
     public static void Map(WebApplication app, Func<string> connString)
     {
         // elenco (vista V_Sim), con i filtri della pagina
-        app.MapGet("/api/sim", async (string? testo, string? stato, int? idFiliale, string? piano) =>
+        app.MapGet("/api/sim", async (string? testo, string? stato, int? idFiliale, string? piano, string? assegnazione) =>
         {
             await using var cn = new SqlConnection(connString());
             return Results.Ok(await cn.QueryAsync(@"
@@ -28,10 +28,11 @@ static class Sim
                 WHERE (@stato IS NULL OR Stato = @stato)
                   AND (@idFiliale IS NULL OR IdFiliale = @idFiliale)
                   AND (@piano IS NULL OR PianoTariffario = @piano)
-                  AND (@testo IS NULL OR Numero LIKE @like OR ICCID LIKE @like OR Dipendente LIKE @like
-                       OR AssegnataA LIKE @like OR Palmare LIKE @like OR SerialePalmare LIKE @like OR Note LIKE @like)
+                  AND (@assegnazione IS NULL OR TipoAssegnazione = @assegnazione)
+                  AND (@testo IS NULL OR Numero LIKE @like OR ICCID LIKE @like OR Dipendente LIKE @like OR Assegnazione LIKE @like
+                       OR AssegnataA LIKE @like OR Palmare LIKE @like OR PalmareSeriale LIKE @like OR PalmareNome LIKE @like OR Note LIKE @like)
                 ORDER BY Numero",
-                new { testo = Vuoto(testo), stato = Vuoto(stato), idFiliale, piano = Vuoto(piano), like = "%" + (testo ?? "").Trim() + "%" }));
+                new { testo = Vuoto(testo), stato = Vuoto(stato), idFiliale, piano = Vuoto(piano), assegnazione = Vuoto(assegnazione), like = "%" + (testo ?? "").Trim() + "%" }));
         }).RequireAuthorization();
 
         // tendine: stati e piani presenti, filiali, riepilogo
@@ -41,6 +42,7 @@ static class Sim
             return Results.Ok(new
             {
                 stati = new[] { "Attiva", "Sospesa", "Cessata" },
+                assegnazioni = new[] { "Palmare", "Persona", "Altro", "Filiale", "Libera" },
                 statiPresenti = (await cn.QueryAsync<string>("SELECT DISTINCT Stato FROM dbo.SIM ORDER BY Stato")).ToList(),
                 piani = (await cn.QueryAsync<string>("SELECT DISTINCT PianoTariffario FROM dbo.SIM WHERE PianoTariffario IS NOT NULL ORDER BY PianoTariffario")).ToList(),
                 prodotti = (await cn.QueryAsync<string>("SELECT DISTINCT Prodotto FROM dbo.SIM WHERE Prodotto IS NOT NULL ORDER BY Prodotto")).ToList(),
@@ -55,8 +57,9 @@ static class Sim
         {
             await using var cn = new SqlConnection(connString());
             return Results.Ok(await cn.QueryAsync(@"
-                SELECT TOP 30 IdUtente, Nome, Matricola FROM dbo.UTENTI
-                WHERE Nome LIKE @like OR Matricola LIKE @like ORDER BY Nome", new { like = "%" + (testo ?? "").Trim() + "%" }));
+                SELECT TOP 30 u.IdUtente, u.Nome, u.Matricola, u.IdFiliale, f.FILIALE AS Filiale FROM dbo.UTENTI u
+                LEFT JOIN dbo.FILIALI f ON f.IDFILIALE = u.IdFiliale
+                WHERE u.Nome LIKE @like OR u.Matricola LIKE @like ORDER BY u.Nome", new { like = "%" + (testo ?? "").Trim() + "%" }));
         }).RequireAuthorization();
 
         // una SIM: anagrafica, variazioni e ultime rilevazioni

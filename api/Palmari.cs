@@ -23,7 +23,8 @@ static class Palmari
             return Results.Ok(await cn.QueryAsync(@"
                 SELECT IdPalmare, Seriale, Imei, AndroidId, NomeDevice, Alias, Modello, VersioneOS, VersioneAgent, StatoMdm, UtenteMdm, Tag, Profilo,
                        NumeroMobile, ICCID, IdSim, IdFiliale, Filiale, Problema, UltimoContatto, UltimoAggiornamentoMdm, Stato, Note,
-                       SimNumero, SimPiano, SimStato, SimPercResidua, UltimoUso, UltimoDriver, UltimaFiliale, GiorniUso30, UltimoEventoApp, VersioneApp
+                       SimNumero, SimPiano, SimStato, SimPercResidua, UltimoUso, UltimoDriver, UltimaFiliale, GiorniUso30, UltimoEventoApp, VersioneApp,
+                       PosizioneData, PosizioneLat, PosizioneLng, AppLat, AppLng
                 FROM dbo.V_Palmari
                 WHERE (@tag IS NULL OR Tag = @tag) AND (@idFiliale IS NULL OR IdFiliale = @idFiliale)
                   AND (@modello IS NULL OR Modello = @modello) AND (@stato IS NULL OR Stato = @stato)
@@ -75,6 +76,7 @@ static class Palmari
                 FROM dbo.UTENTI_ATTIVITA a LEFT JOIN dbo.UTENTI u ON u.IdUtente = a.idUtente LEFT JOIN dbo.FILIALI f ON f.IDFILIALE = a.idFiliale
                 WHERE a.Palmare = @aid AND a.data >= DATEADD(day, -90, GETDATE()) ORDER BY a.data DESC", new { aid })).ToList() : new List<dynamic>();
             p["Variazioni"] = (await cn.QueryAsync("SELECT * FROM dbo.PALMARI_VARIAZIONI WHERE IdPalmare = @id ORDER BY DataRegistrazione DESC", new { id })).ToList();
+            p["Posizioni"] = (await cn.QueryAsync("SELECT TOP 200 DataOra, Latitudine, Longitudine, Origine, FileOrigine FROM dbo.PALMARI_POSIZIONI WHERE IdPalmare = @id ORDER BY DataOra DESC", new { id })).ToList();
             return Results.Ok(p);
         }).RequireAuthorization();
 
@@ -123,7 +125,7 @@ static class Palmari
             await cn.OpenAsync();
             var filiali = (await cn.QueryAsync("SELECT IDFILIALE AS IdFiliale, FILIALE AS Filiale FROM dbo.FILIALI WHERE FILIALE IS NOT NULL"))
                 .Select(f => ((int)f.IdFiliale, (string)f.Filiale)).ToList();
-            int nuovi = 0, aggiornati = 0, invariati = 0; var errori = new List<string>(); var tagSenzaFiliale = new SortedSet<string>();
+            int nuovi = 0, aggiornati = 0, invariati = 0, posizioni = 0; var errori = new List<string>(); var tagSenzaFiliale = new SortedSet<string>();
             var utente = user.Identity?.Name;
             foreach (var (r, i) in righe.Select((r, i) => (r, i)))
             {
@@ -148,17 +150,27 @@ static class Palmari
                         Roaming = r.GetValueOrDefault("roaming") is string ro && ro != "" ? ro.Trim().ToUpperInvariant() is "Y" or "YES" or "SI" or "1" : (bool?)null,
                         UltimoContatto = Vuoto(r.GetValueOrDefault("ultimoContatto")), UltimoAggiornamentoMdm = DataCella(r.GetValueOrDefault("aggiornato")),
                         CodiceKiosk = Vuoto(r.GetValueOrDefault("kiosk")), CodiceUnenroll = Vuoto(r.GetValueOrDefault("unenroll")), CodiceSblocco = Vuoto(r.GetValueOrDefault("sblocco")),
+                        Email = Vuoto(r.GetValueOrDefault("email")), Gruppi = Vuoto(r.GetValueOrDefault("gruppi")), ProfiliAssegnati = Vuoto(r.GetValueOrDefault("profiliAssegnati")),
                         IdFiliale = idFiliale, Utente = utente,
                     });
                     p.Add("@IdPalmare", dbType: DbType.Int32, direction: ParameterDirection.Output);
                     p.Add("@Esito", dbType: DbType.String, size: 20, direction: ParameterDirection.Output);
                     await cn.ExecuteAsync("dbo.AI_PALMARI_Import", p, commandType: CommandType.StoredProcedure);
                     switch (p.Get<string>("@Esito")) { case "NUOVO": nuovi++; break; case "AGGIORNATO": aggiornati++; break; default: invariati++; break; }
+                    // "Last Location": 40.7292339, 8.5308784 (2026-09-06 21:52:51)
+                    var pos = Posizione(r.GetValueOrDefault("posizione"));
+                    if (pos is not null)
+                    {
+                        var q = new DynamicParameters(new { IdPalmare = p.Get<int>("@IdPalmare"), DataOra = pos.Value.quando, Latitudine = pos.Value.lat, Longitudine = pos.Value.lng, Origine = "KNOX", FileOrigine = nome });
+                        q.Add("@Nuova", dbType: DbType.Boolean, direction: ParameterDirection.Output);
+                        await cn.ExecuteAsync("dbo.AI_PALMARI_POSIZIONE_Save", q, commandType: CommandType.StoredProcedure);
+                        if (q.Get<bool>("@Nuova")) posizioni++;
+                    }
                 }
                 catch (Exception ex) { errori.Add($"riga {i + 2} ({seriale}): {ex.Message}"); }
             }
             var senzaSim = await cn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM dbo.PALMARI WHERE IdSim IS NULL AND ICCID IS NOT NULL");
-            return Results.Ok(new { file = nome, righe = righe.Count, colonne = colonne.Keys.OrderBy(k => k).ToList(), nuovi, aggiornati, invariati, errori,
+            return Results.Ok(new { file = nome, righe = righe.Count, colonne = colonne.Keys.OrderBy(k => k).ToList(), nuovi, aggiornati, invariati, posizioni, errori,
                                     tagSenzaFiliale = tagSenzaFiliale.ToList(), iccidSenzaSim = senzaSim });
         })).RequireAuthorization();
     }
@@ -188,7 +200,22 @@ static class Palmari
         ("roaming", new[] { "roaming" }), ("comando", new[] { "last device command" }), ("organizzazione", new[] { "organization name" }),
         ("profilo", new[] { "profile name & version", "profile" }), ("iccid", new[] { "iccid information", "iccid" }), ("eid", new[] { "eid" }),
         ("aggiornato", new[] { "last updated" }), ("kiosk", new[] { "exit kiosk code" }), ("unenroll", new[] { "unenrollment code" }), ("sblocco", new[] { "unlock code" }),
+        ("email", new[] { "email" }), ("gruppi", new[] { "assigned group" }), ("profiliAssegnati", new[] { "assigned profiles" }),
+        ("posizione", new[] { "last location", "location" }),   // "Last Location (UTC+02:00)": combacia anche con il fuso in coda
     };
+
+    static readonly Regex RePosizione = new(@"^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\((\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?)\)");
+    static (DateTime quando, decimal lat, decimal lng)? Posizione(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return null;
+        var m = RePosizione.Match(s);
+        if (!m.Success) return null;
+        if (!decimal.TryParse(m.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var lat)) return null;
+        if (!decimal.TryParse(m.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var lng)) return null;
+        if (!DateTime.TryParse(m.Groups[3].Value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var quando)) return null;
+        if (lat == 0 && lng == 0) return null;
+        return (quando, Math.Round(lat, 6), Math.Round(lng, 6));
+    }
 
     static (List<Dictionary<string, string>> righe, Dictionary<string, string> colonne) LeggiExcel(byte[] bytes)
     {
@@ -202,7 +229,7 @@ static class Palmari
         foreach (var (chiave, nomi) in Colonne)
             foreach (var n in nomi)
             {
-                var trovata = intestazioni.FirstOrDefault(kv => kv.Value.Equals(n, StringComparison.OrdinalIgnoreCase));
+                var trovata = intestazioni.FirstOrDefault(kv => kv.Value.Equals(n, StringComparison.OrdinalIgnoreCase) || kv.Value.StartsWith(n + " (", StringComparison.OrdinalIgnoreCase));
                 if (trovata.Value is not null && !colonne.ContainsKey(chiave) && !colonne.ContainsValue(trovata.Value)) { colonne[chiave] = trovata.Value; break; }
             }
         var indice = colonne.ToDictionary(kv => kv.Key, kv => intestazioni.First(x => x.Value == kv.Value).Key);

@@ -24,6 +24,7 @@ import TabPanel from 'primevue/tabpanel'
 import AutoComplete from 'primevue/autocomplete'
 import { fileBase64, messaggioErrore } from '../lib/schedulatore'
 
+const props = defineProps({ idPalmare: { type: Number, default: null } })
 const toast = useToast()
 const nav = useNavStore()
 const errore = e => toast.add({ severity: 'error', summary: 'Errore', detail: messaggioErrore(e), life: 6000 })
@@ -46,12 +47,14 @@ async function carica() {
 }
 watch(() => filtri.value.testo, () => { clearTimeout(timer); timer = setTimeout(carica, 350) })
 watch(() => [filtri.value.tag, filtri.value.idFiliale, filtri.value.modello, filtri.value.stato, filtri.value.conSim, filtri.value.abbinato], carica)
-onMounted(async () => { await caricaLookup(); await carica() })
+onMounted(async () => { await caricaLookup(); await carica(); if (props.idPalmare) await apri({ IdPalmare: props.idPalmare }) })
 
 const dataIt = v => v ? new Date(v).toLocaleDateString('it-IT') : ''
 const dataOra = v => v ? new Date(v).toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' }) : ''
 const severitaStato = s => ({ 'In uso': 'success', Scorta: 'info', Guasto: 'danger', Dismesso: 'secondary' }[s] ?? 'secondary')
 const severitaPerc = p => p == null ? 'secondary' : p <= 10 ? 'danger' : p <= 25 ? 'warn' : 'success'
+const mappa = (lat, lng) => `https://www.google.com/maps?q=${lat},${lng}`
+const coord = (lat, lng) => lat == null ? '' : `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}`
 const riepilogo = computed(() => ({
   senzaSim: palmari.value.filter(p => !p.IdSim).length,
   daAbbinare: palmari.value.filter(p => !p.AndroidId).length,
@@ -183,6 +186,14 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
           <Tag v-else value="da abbinare" severity="warn" />
         </template>
       </Column>
+      <Column header="Posizione" sortable sortField="PosizioneData" style="width: 9rem">
+        <template #body="{ data }">
+          <template v-if="data.PosizioneData">
+            <a :href="mappa(data.PosizioneLat, data.PosizioneLng)" target="_blank" rel="noopener" @click.stop title="Apri la mappa"><i class="pi pi-map-marker"></i> {{ dataOra(data.PosizioneData) }}</a>
+          </template>
+          <span v-else class="nota">—</span>
+        </template>
+      </Column>
       <Column field="UtenteMdm" header="Utente Knox" sortable style="width: 7rem" />
       <Column field="Stato" header="Stato" sortable style="width: 6rem"><template #body="{ data }"><Tag :value="data.Stato" :severity="severitaStato(data.Stato)" /></template></Column>
       <Column header="Knox" style="width: 8rem"><template #body="{ data }">{{ data.StatoMdm }} <small class="nota">{{ data.UltimoContatto }}</small><br><small v-if="data.Problema" class="attenzione">{{ data.Problema }}</small></template></Column>
@@ -196,6 +207,7 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
           <Tab value="disp">Dispositivo</Tab>
           <Tab value="sim" :disabled="!scheda">SIM</Tab>
           <Tab value="uso" :disabled="!scheda">Uso ({{ scheda?.Utilizzo?.length ?? 0 }})</Tab>
+          <Tab value="pos" :disabled="!scheda">Posizioni ({{ scheda?.Posizioni?.length ?? 0 }})</Tab>
           <Tab value="var" :disabled="!scheda">Variazioni ({{ scheda?.Variazioni?.length ?? 0 }})</Tab>
           <Tab value="knox" :disabled="!scheda">Knox</Tab>
         </TabList>
@@ -254,6 +266,16 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
               <template #empty><span class="nota">Nessun uso registrato negli ultimi 90 giorni.</span></template>
             </DataTable>
           </TabPanel>
+          <TabPanel value="pos">
+            <p v-if="scheda?.AppLat" class="nota">Ultima posizione vista dall'app Speedy: <a :href="mappa(scheda.AppLat, scheda.AppLng)" target="_blank" rel="noopener">{{ coord(scheda.AppLat, scheda.AppLng) }}</a> il {{ dataOra(scheda.UltimoEventoApp) }}.</p>
+            <DataTable :value="scheda?.Posizioni ?? []" size="small" stripedRows paginator :rows="20">
+              <Column header="Quando" style="width: 9rem"><template #body="{ data }">{{ dataOra(data.DataOra) }}</template></Column>
+              <Column header="Coordinate"><template #body="{ data }"><a :href="mappa(data.Latitudine, data.Longitudine)" target="_blank" rel="noopener"><i class="pi pi-map-marker"></i> {{ coord(data.Latitudine, data.Longitudine) }}</a></template></Column>
+              <Column field="Origine" header="Fonte" style="width: 6rem" />
+              <Column field="FileOrigine" header="File" />
+              <template #empty><span class="nota">Nessuna posizione: arriva con l'import del Device List di Knox (colonna Last Location).</span></template>
+            </DataTable>
+          </TabPanel>
           <TabPanel value="var">
             <DataTable :value="scheda?.Variazioni ?? []" size="small" stripedRows>
               <Column header="Quando" style="width: 9rem"><template #body="{ data }">{{ dataOra(data.DataRegistrazione) }}</template></Column>
@@ -269,7 +291,9 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
             <div v-if="scheda" class="knox">
               <div><b>Stato</b> {{ scheda.StatoMdm }} ({{ scheda.UltimoContatto }})</div>
               <div><b>Segnalazione</b> {{ scheda.Problema || '—' }}</div>
-              <div><b>Utente Knox</b> {{ scheda.UtenteMdm }}</div>
+              <div><b>Utente Knox</b> {{ scheda.UtenteMdm }}<template v-if="scheda.Email"> · {{ scheda.Email }}</template></div>
+              <div v-if="scheda.Gruppi"><b>Gruppi</b> {{ scheda.Gruppi }}</div>
+              <div v-if="scheda.ProfiliAssegnati"><b>Profili assegnati</b> {{ scheda.ProfiliAssegnati }}</div>
               <div><b>Organizzazione</b> {{ scheda.Organizzazione }}</div>
               <div><b>Profilo</b> {{ scheda.Profilo }}</div>
               <div><b>Gestione</b> {{ scheda.TipoGestione }} · {{ scheda.TipoEnrollment }}</div>
@@ -295,6 +319,7 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
         <b>{{ e.file }}</b> — {{ e.righe }} righe
         <ul>
           <li>palmari nuovi: <b>{{ e.nuovi }}</b>, aggiornati: <b>{{ e.aggiornati }}</b>, invariati: {{ e.invariati }}</li>
+          <li v-if="e.posizioni != null">posizioni nuove registrate: <b>{{ e.posizioni }}</b></li>
           <li v-if="e.iccidSenzaSim">con ICCID che non corrisponde a nessuna SIM in anagrafica: <b>{{ e.iccidSenzaSim }}</b> (importa l'elenco SIM aggiornato)</li>
           <li v-if="e.tagSenzaFiliale.length">tag Knox non riconducibili a una filiale sola (da assegnare a mano): {{ e.tagSenzaFiliale.join(', ') }}</li>
           <li v-if="e.errori.length" class="attenzione">errori: {{ e.errori.length }}<ul><li v-for="(x, j) in e.errori.slice(0, 10)" :key="j">{{ x }}</li></ul></li>

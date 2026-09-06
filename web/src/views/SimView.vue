@@ -21,15 +21,17 @@ import TabPanels from 'primevue/tabpanels'
 import TabPanel from 'primevue/tabpanel'
 import AutoComplete from 'primevue/autocomplete'
 import { fileBase64, messaggioErrore } from '../lib/schedulatore'
+import { useNavStore } from '../stores/nav'
 
 const props = defineProps({ idSim: { type: Number, default: null } })
 const toast = useToast()
+const nav = useNavStore()
 const errore = e => toast.add({ severity: 'error', summary: 'Errore', detail: messaggioErrore(e), life: 6000 })
 
 // --- elenco e filtri ---
 const sim = ref([])
-const lookup = ref({ stati: [], statiPresenti: [], piani: [], prodotti: [], filiali: [], totale: 0, ultimaRilevazione: null })
-const filtri = ref({ testo: '', stato: null, idFiliale: null, piano: null })
+const lookup = ref({ stati: [], assegnazioni: [], statiPresenti: [], piani: [], prodotti: [], filiali: [], totale: 0, ultimaRilevazione: null })
+const filtri = ref({ testo: '', stato: null, idFiliale: null, piano: null, assegnazione: null })
 const caricamento = ref(false)
 let timer = null
 async function caricaLookup() {
@@ -38,12 +40,12 @@ async function caricaLookup() {
 async function carica() {
   caricamento.value = true
   try {
-    const { data } = await api.get('/sim', { params: { testo: filtri.value.testo || null, stato: filtri.value.stato, idFiliale: filtri.value.idFiliale, piano: filtri.value.piano } })
+    const { data } = await api.get('/sim', { params: { testo: filtri.value.testo || null, stato: filtri.value.stato, idFiliale: filtri.value.idFiliale, piano: filtri.value.piano, assegnazione: filtri.value.assegnazione } })
     sim.value = data
   } catch (e) { errore(e) } finally { caricamento.value = false }
 }
 watch(() => filtri.value.testo, () => { clearTimeout(timer); timer = setTimeout(carica, 350) })
-watch(() => [filtri.value.stato, filtri.value.idFiliale, filtri.value.piano], carica)
+watch(() => [filtri.value.stato, filtri.value.idFiliale, filtri.value.piano, filtri.value.assegnazione], carica)
 onMounted(async () => { await caricaLookup(); await carica(); if (props.idSim) await apri({ IdSim: props.idSim }) })
 
 const dataIt = v => v ? new Date(v).toLocaleDateString('it-IT') : ''
@@ -53,10 +55,11 @@ const gb = v => v == null ? '' : Number(v).toLocaleString('it-IT', { maximumFrac
 const severitaStato = s => ({ Attiva: 'success', Sospesa: 'warn', Cessata: 'danger' }[s] ?? 'secondary')
 const severitaPerc = p => p == null ? 'secondary' : p <= 10 ? 'danger' : p <= 25 ? 'warn' : 'success'
 const riepilogo = computed(() => {
-  const perStato = {}
-  for (const s of sim.value) perStato[s.Stato] = (perStato[s.Stato] ?? 0) + 1
-  return perStato
+  const per = {}
+  for (const s of sim.value) per[s.TipoAssegnazione] = (per[s.TipoAssegnazione] ?? 0) + 1
+  return per
 })
+const severitaAssegnazione = t => ({ Palmare: 'info', Persona: 'success', Altro: 'contrast', Filiale: 'secondary', Libera: 'warn' }[t] ?? 'secondary')
 
 // --- scheda ---
 const dialog = ref(false)
@@ -66,6 +69,13 @@ const linguetta = ref('anag')
 const salvataggio = ref(false)
 const dipendenteScelto = ref(null)
 const suggerimenti = ref([])
+// nella scheda: a chi va la SIM quando non e' su un palmare
+const TIPI_ASSEGNAZIONE = ['Persona', 'Altro', 'Filiale', 'Nessuna']
+const tipoAssegnazione = ref('Nessuna')
+const tipoDaScheda = d => !d ? 'Nessuna' : d.IdUtente ? 'Persona' : d.AssegnataA ? 'Altro' : d.IdFiliale ? 'Filiale' : 'Nessuna'
+// la filiale della SIM segue quella del dipendente, se non ce n'e' gia' una
+watch(dipendenteScelto, d => { if (d?.IdFiliale && !edit.value.IdFiliale) edit.value.IdFiliale = d.IdFiliale })
+const apriPalmare = () => { if (scheda.value?.IdPalmare) nav.drill({ tipo: 'palmari', idPalmare: scheda.value.IdPalmare }) }
 function vuota() {
   return { IdSim: null, Numero: '', ICCID: '', Operatore: 'WINDTRE', Prodotto: '', Stato: 'Attiva', DataAttivazione: null, DataCessazione: null,
            PianoTariffario: '', IdFiliale: null, IdUtente: null, AssegnataA: '', Palmare: '', SerialePalmare: '', Note: '', NotaVariazione: '' }
@@ -73,7 +83,7 @@ function vuota() {
 async function apri(riga) {
   linguetta.value = 'anag'
   if (!riga) {
-    scheda.value = null; edit.value = vuota(); dipendenteScelto.value = null; dialog.value = true; return
+    scheda.value = null; edit.value = vuota(); dipendenteScelto.value = null; tipoAssegnazione.value = 'Nessuna'; dialog.value = true; return
   }
   try {
     const { data } = await api.get(`/sim/${riga.IdSim}`)
@@ -82,6 +92,7 @@ async function apri(riga) {
                    DataAttivazione: data.DataAttivazione ? new Date(data.DataAttivazione) : null,
                    DataCessazione: data.DataCessazione ? new Date(data.DataCessazione) : null, NotaVariazione: '' }
     dipendenteScelto.value = data.IdUtente ? { IdUtente: data.IdUtente, Nome: data.Dipendente, Matricola: data.Matricola } : null
+    tipoAssegnazione.value = tipoDaScheda(data)
     dialog.value = true
   } catch (e) { errore(e) }
 }
@@ -91,9 +102,18 @@ async function cercaDipendenti(ev) {
 const iso = d => d instanceof Date ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` : (d || null)
 async function salva() {
   if (!edit.value.Numero?.trim()) { toast.add({ severity: 'warn', summary: 'Il numero è obbligatorio', life: 3000 }); return }
+  const t = scheda.value?.IdPalmare ? 'Palmare' : tipoAssegnazione.value
+  const avviso = m => toast.add({ severity: 'warn', summary: m, life: 3000 })
+  if (t === 'Persona' && !dipendenteScelto.value?.IdUtente) return avviso('Scegli il dipendente')
+  if (t === 'Altro' && !edit.value.AssegnataA?.trim()) return avviso('Scrivi a chi o a cosa va la SIM')
+  if (t === 'Filiale' && !edit.value.IdFiliale) return avviso('Scegli la filiale')
   salvataggio.value = true
   try {
-    const corpo = { ...edit.value, IdUtente: dipendenteScelto.value?.IdUtente ?? null,
+    // i campi che non c'entrano col tipo scelto si azzerano, cosi' l'elenco dice il vero
+    const corpo = { ...edit.value,
+                    IdUtente: t === 'Persona' || t === 'Palmare' ? (dipendenteScelto.value?.IdUtente ?? null) : null,
+                    AssegnataA: t === 'Altro' ? edit.value.AssegnataA : null,
+                    IdFiliale: t === 'Nessuna' ? null : edit.value.IdFiliale,
                     DataAttivazione: iso(edit.value.DataAttivazione), DataCessazione: iso(edit.value.DataCessazione) }
     const { data } = await api.post('/sim', corpo)
     toast.add({ severity: 'success', summary: edit.value.IdSim ? 'SIM salvata' : 'SIM creata', life: 2500 })
@@ -157,7 +177,8 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
       <Select v-model="filtri.stato" :options="lookup.statiPresenti" placeholder="tutti gli stati" showClear />
       <Select v-model="filtri.idFiliale" :options="lookup.filiali" optionLabel="Filiale" optionValue="IdFiliale" placeholder="tutte le filiali" showClear filter />
       <Select v-model="filtri.piano" :options="lookup.piani" placeholder="tutti i piani" showClear />
-      <span class="nota">{{ sim.length }} SIM<template v-for="(n, s) in riepilogo" :key="s"> · {{ s }} {{ n }}</template></span>
+      <Select v-model="filtri.assegnazione" :options="lookup.assegnazioni" placeholder="tutte le assegnazioni" showClear />
+      <span class="nota">{{ sim.length }} SIM<template v-for="(n, t) in riepilogo" :key="t"> · {{ t === 'Libera' ? 'libere' : 'su ' + t.toLowerCase() }} {{ n }}</template></span>
     </div>
 
     <DataTable :value="sim" size="small" stripedRows paginator :rows="25" :rowsPerPageOptions="[25, 50, 100, 500]"
@@ -169,8 +190,14 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
       <Column field="Prodotto" header="Prodotto" sortable style="width: 10rem" />
       <Column field="DataAttivazione" header="Attivata" sortable style="width: 6.5rem"><template #body="{ data }">{{ dataIt(data.DataAttivazione) }}</template></Column>
       <Column field="Filiale" header="Filiale" sortable />
-      <Column header="Assegnata a" sortable sortField="Dipendente"><template #body="{ data }">{{ data.Dipendente || data.AssegnataA || '' }}</template></Column>
-      <Column header="Palmare" sortable sortField="PalmareNome" style="width: 9rem"><template #body="{ data }">{{ data.PalmareNome || data.Palmare || '' }}<br v-if="data.PalmareSeriale"><small class="nota">{{ data.PalmareSeriale }}</small></template></Column>
+      <Column header="Assegnata a" sortable sortField="Assegnazione">
+        <template #body="{ data }">
+          <Tag :value="data.TipoAssegnazione" :severity="severitaAssegnazione(data.TipoAssegnazione)" class="tag-ass" />
+          <template v-if="data.TipoAssegnazione === 'Palmare'">{{ data.PalmareNome }}<br><small class="nota">{{ data.PalmareSeriale }}<template v-if="data.PalmareDriver"> · ultimo {{ data.PalmareDriver }}</template></small></template>
+          <template v-else-if="data.Assegnazione">{{ data.Assegnazione }}</template>
+          <span v-else class="nota">non assegnata</span>
+        </template>
+      </Column>
       <Column header="GB residui" sortable sortField="PercResidua" style="width: 8rem">
         <template #body="{ data }">
           <template v-if="data.UltimaRilevazione">
@@ -203,16 +230,30 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
               <label>Piano tariffario <Select v-model="edit.PianoTariffario" :options="lookup.piani" editable placeholder="piano" /></label>
               <label>Data attivazione <DatePicker v-model="edit.DataAttivazione" dateFormat="dd/mm/yy" showIcon /></label>
               <label>Data cessazione <DatePicker v-model="edit.DataCessazione" dateFormat="dd/mm/yy" showIcon /></label>
-              <label>Filiale <Select v-model="edit.IdFiliale" :options="lookup.filiali" optionLabel="Filiale" optionValue="IdFiliale" showClear filter placeholder="nessuna" /></label>
-              <label>Dipendente
+              <label class="larga">Note <Textarea v-model="edit.Note" rows="2" autoResize /></label>
+            </div>
+
+            <!-- a chi e' assegnata: sul palmare lo dice la tabella dei palmari; altrimenti si sceglie qui -->
+            <h4 class="sez">Assegnazione</h4>
+            <div v-if="scheda?.IdPalmare" class="riquadro">
+              <Tag value="Palmare" severity="info" />
+              <b>{{ scheda.PalmareNome }}</b> <small class="nota">{{ scheda.PalmareSeriale }}</small>
+              <span v-if="scheda.PalmareFiliale || scheda.PalmareTag" class="nota">· {{ scheda.PalmareFiliale || scheda.PalmareTag }}</span>
+              <span v-if="scheda.PalmareDriver" class="nota">· ultimo driver {{ scheda.PalmareDriver }}</span>
+              <Button label="Apri il palmare" icon="pi pi-external-link" link size="small" @click="apriPalmare" />
+              <small class="nota larga-riga">La SIM la porta il palmare: si cambia dalla scheda del palmare. Qui sotto, se serve, un riferimento in più.</small>
+            </div>
+            <div class="griglia">
+              <label v-if="!scheda?.IdPalmare">Tipo
+                <Select v-model="tipoAssegnazione" :options="TIPI_ASSEGNAZIONE" />
+              </label>
+              <label v-if="tipoAssegnazione === 'Persona' || scheda?.IdPalmare">Dipendente
                 <AutoComplete v-model="dipendenteScelto" :suggestions="suggerimenti" optionLabel="Nome" @complete="cercaDipendenti" dropdown forceSelection placeholder="cerca per nome o matricola">
-                  <template #option="{ option }">{{ option.Nome }} <small class="nota">{{ option.Matricola }}</small></template>
+                  <template #option="{ option }">{{ option.Nome }} <small class="nota">{{ option.Matricola }} · {{ option.Filiale }}</small></template>
                 </AutoComplete>
               </label>
-              <label>Assegnata a (testo) <InputText v-model="edit.AssegnataA" placeholder="modem, sede, magazzino…" /></label>
-              <label>Palmare <InputText v-model="edit.Palmare" /></label>
-              <label>Seriale palmare <InputText v-model="edit.SerialePalmare" /></label>
-              <label class="larga">Note <Textarea v-model="edit.Note" rows="2" autoResize /></label>
+              <label v-if="tipoAssegnazione === 'Altro'">Assegnata a <InputText v-model="edit.AssegnataA" placeholder="modem 5G, sede, magazzino…" /></label>
+              <label v-if="tipoAssegnazione !== 'Nessuna' || scheda?.IdPalmare">Filiale <Select v-model="edit.IdFiliale" :options="lookup.filiali" optionLabel="Filiale" optionValue="IdFiliale" showClear filter placeholder="nessuna" /></label>
               <label v-if="edit.IdSim" class="larga">Nota per la variazione (se cambi piano o stato) <InputText v-model="edit.NotaVariazione" /></label>
             </div>
             <p v-if="scheda" class="nota piccola">
@@ -222,9 +263,9 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
           <TabPanel value="var">
             <DataTable :value="scheda?.Variazioni ?? []" size="small" stripedRows>
               <Column header="Data" style="width: 6.5rem"><template #body="{ data }">{{ dataIt(data.Data) }}</template></Column>
-              <Column field="PianoTariffario" header="Piano" />
-              <Column field="Stato" header="Stato" style="width: 6rem" />
-              <Column header="Prima"><template #body="{ data }">{{ [data.PianoPrecedente, data.StatoPrecedente].filter(Boolean).join(' · ') }}</template></Column>
+              <Column header="Cosa" style="width: 8rem"><template #body="{ data }">{{ data.Campo || 'Piano / stato' }}</template></Column>
+              <Column header="Prima"><template #body="{ data }">{{ data.Campo ? (data.Prima || '—') : [data.PianoPrecedente, data.StatoPrecedente].filter(Boolean).join(' · ') }}</template></Column>
+              <Column header="Dopo"><template #body="{ data }">{{ data.Campo ? (data.Dopo || '—') : [data.PianoTariffario, data.Stato].filter(Boolean).join(' · ') }}</template></Column>
               <Column field="Origine" header="Origine" style="width: 6rem" />
               <Column field="Note" header="Note" />
               <Column field="Utente" header="Chi" style="width: 6rem" />
@@ -290,6 +331,10 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
 .griglia { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem 1rem; }
 .griglia label { display: flex; flex-direction: column; gap: .2rem; font-size: .85rem; color: var(--p-text-muted-color); }
 .griglia label.larga { grid-column: 1 / -1; }
+.sez { margin: 1rem 0 .5rem; }
+.riquadro { margin-bottom: .6rem; padding: .6rem .8rem; border: 1px solid var(--p-content-border-color); border-radius: 8px; display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+.larga-riga { flex-basis: 100%; }
+.tag-ass { margin-right: .4rem; }
 .nota { color: var(--p-text-muted-color); }
 .piccola { font-size: .8rem; margin: .75rem 0 0; }
 .errore { color: var(--p-red-600); }
