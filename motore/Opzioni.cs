@@ -20,6 +20,8 @@ public class Opzioni
     public string FastReportUrl { get; set; } = "http://cruscotto.speedyworld.it:8097/result";
     /// <summary>timeout delle query degli step (i flussi legacy possono essere lunghi)</summary>
     public int TimeoutQuerySecondi { get; set; } = 3600;
+    /// <summary>interprete per gli step ESEGUIPYTHON (percorso di python.exe, o "python" se e' nel PATH)</summary>
+    public string Python { get; set; } = "python";
     /// <summary>cartella dei file di log (default: logs accanto all'exe)</summary>
     public string? CartellaLog { get; set; }
     /// <summary>allo stop, quanto aspettare le esecuzioni in corso prima di lasciarle</summary>

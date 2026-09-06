@@ -291,6 +291,7 @@ public static class Esecutore
             case "COPYFILE": await Mattoncini.CopyFile(ctx, step); break;
             case "COMPRIMIFILE": await Mattoncini.ComprimiFile(ctx, step); break;
             case "ESEGUISHELL": await Mattoncini.EseguiShell(ctx, step); break;
+            case "ESEGUIPYTHON": await Mattoncini.EseguiPython(ctx, step); break;
             case "GENERAREPORT": await Mattoncini.GeneraReport(ctx, step); break;
             case "APRIMAIL": await Mattoncini.ApriMail(ctx, step); break;
             case "IMPORTTXT": await Mattoncini.ImportTxt(ctx, step); break;

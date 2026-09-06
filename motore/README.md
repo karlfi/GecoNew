@@ -19,8 +19,16 @@ Cosa fa, in ciclo:
   l'esecuzione e' stata annullata dalla pagina.
 
 Mattoncini: ESEGUIQUERY, EXPORTTXT, EXPORTXLS, COPYFILE, COMPRIMIFILE,
-ESEGUISHELL, GENERAREPORT (server FastReport), APRIMAIL (SMTP), IMPORTTXT.
-Gli altri tipi vengono saltati con un avviso nel log.
+ESEGUISHELL, ESEGUIPYTHON, GENERAREPORT (server FastReport), APRIMAIL (SMTP),
+IMPORTTXT. Gli altri tipi vengono saltati con un avviso nel log.
+
+ESEGUIPYTHON: `Script` (relativo a `CartellaScript` o assoluto), `Argomenti`
+(con le sostituzioni `+[campo]`, virgolette per gli spazi), `directory`
+(default: quella dello script), `TimeoutSecondi`, `Python` (interprete, default
+`Motore:Python` di appsettings). Lo script trova nell'ambiente `WF_ID_ESECUZIONE`,
+`WF_ID_WORKFLOW`, `WF_ID_STEP`, `WF_PARAMETRI` (JSON), `WF_OUTPUT` e, dentro un
+sottopasso, `WF_RECORD` (JSON del record corrente). Quello che stampa va nel log
+riga per riga; exit code diverso da zero = step in errore.
 
 ## Installazione sul server
 

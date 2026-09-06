@@ -54,6 +54,26 @@ watch(() => props.step, s => {
 const opzioniTipo = () => props.tipi.some(t => t.Codice === tipo.value) ? props.tipi : [{ Codice: tipo.value, Descrizione: '' }, ...props.tipi]
 const descrizioneTipo = () => props.tipi.find(t => t.Codice === tipo.value)?.Descrizione
 
+// i parametri che ogni tipo di step si aspetta (quelli dei file step legacy):
+// un clic li mette in griglia vuoti, senza doverli ricordare a memoria
+const PARAMETRI_TIPICI = {
+  ESEGUIQUERY: ['QuerySQL', 'Parametri', 'EsciSuRecordCountMaggiore', 'NoRecordset'],
+  EXPORTTXT: ['QuerySQL', 'NomeFileDest', 'Modalita', 'Delimitatore', 'EsportaIntestazione', 'EsportaSeVuoto', 'ApriEAggiungiAEsitente', 'Parametri'],
+  EXPORTXLS: ['QuerySQL', 'NomeFileDest', 'NomeFoglio', 'EsportaIntestazione', 'nongeneraresevuoto', 'Parametri'],
+  COPYFILE: ['FileSorgente', 'FileDestinazione', 'SostituisciFile', 'EliminaFileSorgente'],
+  COMPRIMIFILE: ['FileZip', 'ListaFile', 'ComprimiSubDir', 'EliminaSrc', 'Decomprimi', 'DirectoryOut'],
+  ESEGUISHELL: ['Programma', 'directory', 'EseguiEAspetta'],
+  ESEGUIPYTHON: ['Script', 'Argomenti', 'directory', 'TimeoutSecondi'],
+  GENERAREPORT: ['NomeReport', 'NomeFileDest', 'Parametri', 'Formato'],
+  APRIMAIL: ['Destintatario', 'DestinatarioCC', 'TestoEMail', 'CorpoMessaggio', 'Allegati', 'InviaDirettamente', 'MittenteSMTP', 'ServerSMTP'],
+  IMPORTTXT: ['NomeFileInput', 'TabellaDestinazione', 'Modalita', 'Separatore', 'NomeCampi', 'NomeCampoFile', 'NomeCampoAutoIncrementale', 'SvuotaTabella', 'RicreaTabella', 'InterrompiSuErrore', 'AlTermineSpostaFileIn']
+}
+const tipici = () => PARAMETRI_TIPICI[tipo.value] ?? []
+function aggiungiTipici() {
+  const presenti = new Set(semplici.value.map(r => r.chiave.toLowerCase()))
+  for (const k of tipici()) if (!presenti.has(k.toLowerCase())) semplici.value.push({ chiave: k, valore: '' })
+}
+
 async function salva() {
   if (!props.step) return
   salvataggio.value = true
@@ -102,7 +122,10 @@ async function salva() {
       <InputText v-model="r.valore" class="valore" placeholder="valore" size="small" />
       <Button icon="pi pi-times" text size="small" severity="secondary" @click="semplici.splice(i, 1)" />
     </div>
-    <div><Button label="Parametro" icon="pi pi-plus" text size="small" @click="semplici.push({ chiave: '', valore: '' })" /></div>
+    <div>
+      <Button label="Parametro" icon="pi pi-plus" text size="small" @click="semplici.push({ chiave: '', valore: '' })" />
+      <Button v-if="tipici().length" label="Parametri tipici del tipo" icon="pi pi-list" text size="small" title="Aggiunge, vuoti, i parametri che questo tipo di step si aspetta" @click="aggiungiTipici" />
+    </div>
 
     <template v-for="g in griglie" :key="'g' + g.chiave">
       <h4>{{ g.chiave }} <small>({{ g.righe.length }})</small></h4>

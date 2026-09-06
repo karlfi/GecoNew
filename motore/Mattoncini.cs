@@ -251,6 +251,76 @@ public static class Mattoncini
         await ctx.Scrivi("INFO", $"ESEGUISHELL \"{programma}\" completato" + (uscita.Length > 0 ? ": " + Taglia(uscita, 500) : ""), step.IdStep);
     }
 
+    // ---- ESEGUIPYTHON: uno script Python. Script relativo alla cartella script o
+    // assoluto, Argomenti con le sostituzioni, directory di lavoro, TimeoutSecondi.
+    // Lo script trova nell'ambiente WF_ID_ESECUZIONE, WF_ID_WORKFLOW, WF_PARAMETRI
+    // (JSON) e, nei sottopassi, WF_RECORD (JSON del record corrente); quello che
+    // stampa finisce nel log, exit code diverso da zero = errore. ----
+    public static async Task EseguiPython(Contesto ctx, Step step)
+    {
+        var script = ctx.S(step.P("Script") ?? step.P("File") ?? step.P("Programma"));
+        if (script == "") throw new Exception("ESEGUIPYTHON: Script mancante");
+        var rel = System.Text.RegularExpressions.Regex.Replace(script, @"^\.[\\/]", "");
+        var pieno = Path.IsPathRooted(script) ? script : Path.Combine(ctx.O.CartellaScript ?? AppContext.BaseDirectory, rel);
+        if (!File.Exists(pieno)) throw new FileNotFoundException($"ESEGUIPYTHON: script non trovato: {pieno}");
+        var argomenti = ctx.S(step.P("Argomenti"));
+        var cartella = ctx.S(step.P("directory"));
+        if (cartella == "") cartella = Path.GetDirectoryName(pieno)!;
+        var timeout = int.TryParse(step.P("TimeoutSecondi"), out var t) && t > 0 ? t : ctx.O.TimeoutQuerySecondi;
+        var interprete = ctx.S(step.P("Python"));
+        if (interprete == "") interprete = ctx.O.Python;
+
+        var psi = new ProcessStartInfo(interprete)
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
+            WorkingDirectory = cartella, StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
+        };
+        psi.ArgumentList.Add("-X"); psi.ArgumentList.Add("utf8");
+        psi.ArgumentList.Add(pieno);
+        foreach (var a in SpezzaArgomenti(argomenti)) psi.ArgumentList.Add(a);
+        psi.Environment["PYTHONIOENCODING"] = "utf-8";
+        psi.Environment["PYTHONUNBUFFERED"] = "1";
+        psi.Environment["WF_ID_ESECUZIONE"] = ctx.IdEsecuzione.ToString();
+        psi.Environment["WF_ID_WORKFLOW"] = ctx.IdWorkflow.ToString();
+        psi.Environment["WF_ID_STEP"] = step.IdStep.ToString();
+        psi.Environment["WF_PARAMETRI"] = System.Text.Json.JsonSerializer.Serialize(ctx.Parametri);
+        if (ctx.Record is not null)
+            psi.Environment["WF_RECORD"] = System.Text.Json.JsonSerializer.Serialize(ctx.Record.ToDictionary(k => k.Key, k => (object?)Sostituzioni.Segnaposto(k.Value)));
+        if (ctx.CartellaOutput is not null) psi.Environment["WF_OUTPUT"] = ctx.CartellaOutput;
+
+        using var p = Process.Start(psi) ?? throw new Exception("ESEGUIPYTHON: avvio fallito");
+        var so = p.StandardOutput.ReadToEndAsync();
+        var se = p.StandardError.ReadToEndAsync();
+        var finito = await Task.WhenAny(p.WaitForExitAsync(), Task.Delay(TimeSpan.FromSeconds(timeout)));
+        if (!p.HasExited)
+        {
+            try { p.Kill(true); } catch { }
+            throw new Exception($"ESEGUIPYTHON: {Path.GetFileName(pieno)} interrotto dopo {timeout} s");
+        }
+        var uscita = (await so).Trim();
+        var errore = (await se).Trim();
+        foreach (var riga in uscita.Split('\n').Select(r => r.TrimEnd('\r')).Where(r => r != "").Take(200))
+            await ctx.Scrivi("INFO", $"  py> {Taglia(riga, 1000)}", step.IdStep);
+        if (p.ExitCode != 0)
+            throw new Exception($"ESEGUIPYTHON: {Path.GetFileName(pieno)} exit {p.ExitCode}" + (errore != "" ? ": " + Taglia(errore, 1500) : ""));
+        if (errore != "") await ctx.Scrivi("WARN", $"ESEGUIPYTHON stderr: {Taglia(errore, 1000)}", step.IdStep);
+        await ctx.Scrivi("INFO", $"ESEGUIPYTHON: {Path.GetFileName(pieno)} {argomenti} completato", step.IdStep);
+    }
+
+    // argomenti separati da spazio, con le virgolette per quelli che contengono spazi
+    static List<string> SpezzaArgomenti(string s)
+    {
+        var fuori = new List<string>(); var sb = new StringBuilder(); var inVirgolette = false;
+        foreach (var c in s)
+        {
+            if (c == '"') { inVirgolette = !inVirgolette; continue; }
+            if (char.IsWhiteSpace(c) && !inVirgolette) { if (sb.Length > 0) { fuori.Add(sb.ToString()); sb.Clear(); } continue; }
+            sb.Append(c);
+        }
+        if (sb.Length > 0) fuori.Add(sb.ToString());
+        return fuori;
+    }
+
     // ---- GENERAREPORT: il server FastReport genera il PDF, qui si salva su file ----
     public static async Task GeneraReport(Contesto ctx, Step step)
     {
