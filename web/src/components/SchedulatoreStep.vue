@@ -69,6 +69,7 @@ const PARAMETRI_TIPICI = {
   IMPORTTXT: ['NomeFileInput', 'TabellaDestinazione', 'Modalita', 'Separatore', 'NomeCampi', 'NomeCampoFile', 'NomeCampoAutoIncrementale', 'SvuotaTabella', 'RicreaTabella', 'InterrompiSuErrore', 'AlTermineSpostaFileIn']
 }
 const tipici = () => PARAMETRI_TIPICI[tipo.value] ?? []
+const eQuery = chiave => /^querysql$/i.test((chiave ?? '').trim())
 function aggiungiTipici() {
   const presenti = new Set(semplici.value.map(r => r.chiave.toLowerCase()))
   for (const k of tipici()) if (!presenti.has(k.toLowerCase())) semplici.value.push({ chiave: k, valore: '' })
@@ -117,9 +118,14 @@ async function salva() {
     <p v-if="descrizioneTipo()" class="descr">{{ descrizioneTipo() }}</p>
 
     <h4>Parametri</h4>
-    <div v-for="(r, i) in semplici" :key="'s' + i" class="riga">
+    <div v-for="(r, i) in semplici" :key="'s' + i" class="riga" :class="{ query: eQuery(r.chiave) }">
       <InputText v-model="r.chiave" class="chiave" placeholder="nome" size="small" />
-      <InputText v-model="r.valore" class="valore" placeholder="valore" size="small" />
+      <!-- QuerySQL: un file .sql oppure la query scritta qui, su piu' righe -->
+      <div v-if="eQuery(r.chiave)" class="valore">
+        <Textarea v-model="r.valore" autoResize rows="3" class="testo-query" placeholder="file .sql (es. .\ANCI\elenco.sql) oppure la query scritta qui" />
+        <small class="nota">Un percorso (<code>.\cartella\nome.sql</code>, <code>\\server\...</code>, o che finisce in <code>.sql</code>) viene letto da file; tutto il resto è eseguito com'è. Sostituzioni: <code>+[campo]</code>, <code>+[parametro]</code>, <code>&amp;[now(yyyymmdd)]</code>.</small>
+      </div>
+      <InputText v-else v-model="r.valore" class="valore" placeholder="valore" size="small" />
       <Button icon="pi pi-times" text size="small" severity="secondary" @click="semplici.splice(i, 1)" />
     </div>
     <div>
@@ -167,8 +173,11 @@ async function salva() {
 h4 { margin: .6rem 0 .2rem; }
 h4 small { color: var(--p-text-muted-color); font-weight: normal; }
 .riga { display: flex; gap: .4rem; align-items: center; }
+.riga.query { align-items: flex-start; }
 .chiave { width: 14rem; font-family: monospace; }
 .valore { flex: 1; font-family: monospace; }
+.testo-query { width: 100%; font-family: monospace; font-size: .85rem; }
+.nota { color: var(--p-text-muted-color); font-family: sans-serif; }
 .scorri { overflow-x: auto; }
 .griglia { border-collapse: collapse; font-size: .82rem; }
 .griglia th { text-align: left; padding: .2rem .4rem; color: var(--p-text-muted-color); font-weight: 600; white-space: nowrap; }

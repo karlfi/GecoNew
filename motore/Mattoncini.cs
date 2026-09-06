@@ -26,7 +26,7 @@ public static class Mattoncini
         var spec = ctx.S(step.P("QuerySQL"), extra);
         var sql = ctx.S(Query.Carica(spec, ctx.O.CartellaScript), extra);
         var (righe, interessate, conRecordset) = await Query.Esegui(ctx, sql);
-        await ctx.Scrivi("INFO", $"ESEGUIQUERY {spec}", step.IdStep, conRecordset ? righe.Count : interessate);
+        await ctx.Scrivi("INFO", $"ESEGUIQUERY {Riassunto(spec)}", step.IdStep, conRecordset ? righe.Count : interessate);
 
         var limite = int.TryParse(step.P("EsciSuRecordCountMaggiore"), out var l) ? l : -1;
         if (limite > -1 && righe.Count > limite) throw new Exception($"ESEGUIQUERY: {righe.Count} record, piu' del limite {limite}");
@@ -524,4 +524,12 @@ public static class Mattoncini
     }
 
     static string Taglia(string s, int n) => s.Length <= n ? s : s[..n] + "…";
+
+    // per il log: un percorso resta com'e', una query scritta nello step si riduce alla prima riga utile
+    static string Riassunto(string spec)
+    {
+        if (!spec.Contains('\n')) return Taglia(spec, 200);
+        var prima = spec.Split('\n').Select(r => r.Trim()).FirstOrDefault(r => r != "" && !r.StartsWith("--")) ?? spec.Split('\n')[0];
+        return Taglia(prima, 120) + " …";
+    }
 }

@@ -158,15 +158,17 @@ public static class Query
 {
     static Query() => Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
     public static readonly Encoding Ansi = Encoding.GetEncoding(1252);
-    static readonly Regex Inline = new(@"^\s*(select|with|exec|execute|update|insert|delete|declare|merge|set|if|begin|truncate)\b", RegexOptions.IgnoreCase);
+    // un percorso si riconosce dalla forma: .\ o ..\ , X:\ , \\server , oppure finisce in .sql
+    static readonly Regex SembraPercorso = new(@"^(\.{1,2}[\\/]|[A-Za-z]:[\\/]|\\\\)", RegexOptions.IgnoreCase);
     static readonly Regex Go = new(@"^\s*GO\s*$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
 
-    /// <summary>QuerySQL: ".\x.sql" relativo alla cartella script, assoluto com'e'; se e' SQL scritto direttamente, quello</summary>
+    /// <summary>QuerySQL: un file (".\x.sql" relativo alla cartella script, o assoluto) oppure la query scritta direttamente nello step</summary>
     public static string Carica(string spec, string? cartellaScript)
     {
         spec = (spec ?? "").Trim();
         if (spec == "") throw new Exception("QuerySQL mancante");
-        if (Inline.IsMatch(spec)) return spec;
+        var eFile = !spec.Contains('\n') && (SembraPercorso.IsMatch(spec) || spec.EndsWith(".sql", StringComparison.OrdinalIgnoreCase));
+        if (!eFile) return spec;
         var rel = Regex.Replace(spec, @"^\.[\\/]", "");
         var pieno = Path.IsPathRooted(spec) ? spec : Path.Combine(cartellaScript ?? AppContext.BaseDirectory, rel);
         if (!File.Exists(pieno)) throw new FileNotFoundException($"QuerySQL non trovata: {pieno}");
