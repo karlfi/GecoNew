@@ -12,6 +12,8 @@ public class Opzioni
     public int MaterializzaMinuti { get; set; } = 5;
     /// <summary>quante esecuzioni insieme al massimo</summary>
     public int MaxParallelo { get; set; } = 5;
+    /// <summary>una ONESHOT scaduta da meno di questi minuti viene eseguita lo stesso</summary>
+    public int TolleranzaOneshotMinuti { get; set; } = 15;
     /// <summary>cartella base delle QuerySQL relative degli step (es. .\ADEX\x.sql)</summary>
     public string? CartellaScript { get; set; }
     /// <summary>nome registrato in WF_Esecuzione.MachineName (default: nome macchina)</summary>

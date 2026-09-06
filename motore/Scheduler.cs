@@ -29,7 +29,8 @@ public class Scheduler : BackgroundService
 
         while (!ct.IsCancellationRequested)
         {
-            if ((DateTime.UtcNow - ultimaMaterializzazione).TotalMinutes >= o.MaterializzaMinuti)
+            // ogni MaterializzaMinuti, oppure subito se dalla pagina e' cambiato qualcosa nelle pianificazioni
+            if ((DateTime.UtcNow - ultimaMaterializzazione).TotalMinutes >= o.MaterializzaMinuti || await PianificazioniCambiate())
             {
                 ultimaMaterializzazione = DateTime.UtcNow;
                 // le sessioni SMB verso i server dei workflow (credenziali in LISTA_VALORI), rinfrescate a ogni giro
@@ -78,9 +79,35 @@ public class Scheduler : BackgroundService
         }
     }
 
+    // Un'impronta delle pianificazioni: se cambia (nuova ricorrenza, sospensione,
+    // cancellazione...) si materializza subito invece di aspettare il giro.
+    string? impronta;
+    async Task<bool> PianificazioniCambiate()
+    {
+        try
+        {
+            await using var cn = Connessione();
+            var nuova = await cn.ExecuteScalarAsync<string>(@"
+                SELECT CONCAT(COUNT(*), ':', ISNULL(CHECKSUM_AGG(CHECKSUM(d.IdDettaglio, d.TipoRicorrenza, d.CronExpr, d.DataOraSingola, d.Attiva,
+                                                                   m.Attiva, m.Sospesa, m.DataCancellazione, m.OrizzonteGiorni, m.DataOraFinale, m.Parametri)), 0))
+                FROM dbo.WF_PianificazioneDettaglio d JOIN dbo.WF_PianificazioneMaster m ON m.IdPianificazione = d.IdPianificazione");
+            var cambiata = impronta is not null && nuova != impronta;
+            impronta = nuova;
+            if (cambiata) log.LogInformation("Pianificazioni cambiate: materializzo subito");
+            return cambiata;
+        }
+        catch (Exception ex)
+        {
+            log.LogError(ex, "Errore nel controllo delle pianificazioni");
+            return false;
+        }
+    }
+
     // Ogni ricorrenza attiva genera le occorrenze future entro il suo orizzonte
     // (la stored salta quelle gia' presenti). Una pianificazione sospesa viene
     // materializzata lo stesso: e' il Claim a non pescarla finche' e' sospesa.
+    // Una ONESHOT scaduta da poco (entro la tolleranza) parte comunque: chi la
+    // imposta "tra due minuti" non deve restare a mani vuote.
     async Task Materializza()
     {
         await using var cn = Connessione();
@@ -100,7 +127,7 @@ public class Scheduler : BackgroundService
             var occorrenze = new List<DateTime>();
             if ((string)r.TipoRicorrenza == "ONESHOT")
             {
-                if (r.DataOraSingola is DateTime s && Utc(s) > adesso && Utc(s) <= limite) occorrenze.Add(Utc(s));
+                if (r.DataOraSingola is DateTime s && Utc(s) > adesso.AddMinutes(-o.TolleranzaOneshotMinuti) && Utc(s) <= limite) occorrenze.Add(Utc(s));
             }
             else if (!string.IsNullOrWhiteSpace((string?)r.CronExpr))
             {

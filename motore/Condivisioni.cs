@@ -21,26 +21,32 @@ public static class Condivisioni
         foreach (var g in righe.GroupBy(r => (string)r.Lista))
         {
             var v = g.ToDictionary(r => ((string)r.Valore).Trim(), r => ((string?)r.Codice)?.Trim() ?? "", StringComparer.OrdinalIgnoreCase);
-            var server = v.GetValueOrDefault("SERVER");
-            if (string.IsNullOrWhiteSpace(server)) continue;
+            // SERVER puo' essere solo l'host (192.168.0.252) o un percorso UNC
+            // (\\192.168.0.252\Flussi\...): la sessione si apre sull'host, o
+            // sulla share se e' indicata
+            var pezzi = (v.GetValueOrDefault("SERVER") ?? "").Trim().Trim('\\', '/').Split(new[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries);
+            if (pezzi.Length == 0) continue;
+            var risorsa = pezzi.Length >= 2 ? $"\\\\{pezzi[0]}\\{pezzi[1]}" : $"\\\\{pezzi[0]}\\IPC$";
             var utente = v.GetValueOrDefault("USER");
-            if (!string.IsNullOrEmpty(v.GetValueOrDefault("DOMAIN")) && !string.IsNullOrEmpty(utente) && !utente.Contains('\\'))
+            if (string.IsNullOrWhiteSpace(utente)) utente = null;
+            if (!string.IsNullOrEmpty(v.GetValueOrDefault("DOMAIN")) && utente is not null && !utente.Contains('\\'))
                 utente = v["DOMAIN"] + "\\" + utente;
-            var esito = Connetti(server.TrimStart('\\'), utente, v.GetValueOrDefault("PASS"));
+            var esito = Connetti(risorsa, utente, v.GetValueOrDefault("PASS"));
             lock (stato)
             {
-                if (stato.TryGetValue(server, out var prima) && prima == esito) continue;
-                stato[server] = esito;
+                if (stato.TryGetValue(risorsa, out var prima) && prima == esito) continue;
+                stato[risorsa] = esito;
             }
-            if (esito == "ok") log.LogInformation("Condivisione \\\\{s}: sessione aperta come {u} ({l})", server, utente, g.Key);
-            else log.LogWarning("Condivisione \\\\{s} ({l}): {e}", server, g.Key, esito);
+            if (esito == "ok") log.LogInformation("Condivisione {r}: sessione aperta come {u} ({l})", risorsa, utente ?? "(senza credenziali)", g.Key);
+            else log.LogWarning("Condivisione {r} ({l}): {e}", risorsa, g.Key, esito);
         }
     }
 
-    // sessione verso \\server\IPC$: da quel momento ogni \\server\share e' raggiungibile con quelle credenziali
-    static string Connetti(string server, string? utente, string? password)
+    // sessione verso \\server\IPC$ (o \\server\share): da quel momento i percorsi
+    // su quel server sono raggiungibili con quelle credenziali
+    static string Connetti(string risorsa, string? utente, string? password)
     {
-        var ris = new NETRESOURCE { dwType = 1 /* disk */, lpRemoteName = $"\\\\{server}\\IPC$" };
+        var ris = new NETRESOURCE { dwType = 1 /* disk */, lpRemoteName = risorsa };
         var codice = WNetAddConnection2(ref ris, password, utente, 0);
         return codice switch
         {
@@ -48,7 +54,9 @@ public static class Condivisioni
             85 => "ok",      // ERROR_ALREADY_ASSIGNED
             1219 => "ok",    // ERROR_SESSION_CREDENTIAL_CONFLICT: c'e' gia' una sessione con altre credenziali, si usa quella
             1326 => "utente o password errati (1326)",
+            5 => "accesso negato (5): utente valido ma senza permessi sulla share",
             53 => "server non trovato (53)",
+            67 => "share inesistente (67)",
             _ => $"errore {codice}: {new System.ComponentModel.Win32Exception(codice).Message}",
         };
     }
