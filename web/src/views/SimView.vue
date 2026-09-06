@@ -22,6 +22,7 @@ import TabPanel from 'primevue/tabpanel'
 import AutoComplete from 'primevue/autocomplete'
 import { fileBase64, messaggioErrore } from '../lib/schedulatore'
 
+const props = defineProps({ idSim: { type: Number, default: null } })
 const toast = useToast()
 const errore = e => toast.add({ severity: 'error', summary: 'Errore', detail: messaggioErrore(e), life: 6000 })
 
@@ -43,7 +44,7 @@ async function carica() {
 }
 watch(() => filtri.value.testo, () => { clearTimeout(timer); timer = setTimeout(carica, 350) })
 watch(() => [filtri.value.stato, filtri.value.idFiliale, filtri.value.piano], carica)
-onMounted(async () => { await caricaLookup(); await carica() })
+onMounted(async () => { await caricaLookup(); await carica(); if (props.idSim) await apri({ IdSim: props.idSim }) })
 
 const dataIt = v => v ? new Date(v).toLocaleDateString('it-IT') : ''
 const dataOra = v => v ? new Date(v).toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' }) : ''
@@ -169,7 +170,7 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
       <Column field="DataAttivazione" header="Attivata" sortable style="width: 6.5rem"><template #body="{ data }">{{ dataIt(data.DataAttivazione) }}</template></Column>
       <Column field="Filiale" header="Filiale" sortable />
       <Column header="Assegnata a" sortable sortField="Dipendente"><template #body="{ data }">{{ data.Dipendente || data.AssegnataA || '' }}</template></Column>
-      <Column field="Palmare" header="Palmare" sortable style="width: 8rem" />
+      <Column header="Palmare" sortable sortField="PalmareNome" style="width: 9rem"><template #body="{ data }">{{ data.PalmareNome || data.Palmare || '' }}<br v-if="data.PalmareSeriale"><small class="nota">{{ data.PalmareSeriale }}</small></template></Column>
       <Column header="GB residui" sortable sortField="PercResidua" style="width: 8rem">
         <template #body="{ data }">
           <template v-if="data.UltimaRilevazione">

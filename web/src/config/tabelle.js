@@ -295,6 +295,7 @@ export function navDaLink(voce) {
   if (link === '/schedulatore') return { tipo: 'schedulatore' }
   if (link === '/schedulatore-storico') return { tipo: 'schedulatore-storico' }
   if (link === '/sim') return { tipo: 'sim' }
+  if (link === '/palmari') return { tipo: 'palmari' }
   if (link === '/interrogazioni') {
     const { idQuery, sWhere } = parseParametriMenu(voce.Parametri)
     return { tipo: 'interrogazioni', idQuery, sWhere }
