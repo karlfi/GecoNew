@@ -59,16 +59,6 @@ const mappaEmbed = (lat, lng) => {
   const d = 0.006
   return `https://www.openstreetmap.org/export/embed.html?bbox=${(+lng - d).toFixed(5)},${(+lat - d).toFixed(5)},${(+lng + d).toFixed(5)},${(+lat + d).toFixed(5)}&layer=mapnik&marker=${lat},${lng}`
 }
-// le posizioni della scheda: quelle di Knox piu' l'ultima vista dall'app, la piu' recente in testa
-const posizioni = computed(() => {
-  const s = scheda.value
-  if (!s) return []
-  const righe = (s.Posizioni ?? []).map(p => ({ ...p, Fonte: p.Origine === 'KNOX' ? 'Knox' : p.Origine }))
-  if (s.AppLat) righe.push({ DataOra: s.UltimoEventoApp, Latitudine: s.AppLat, Longitudine: s.AppLng, Fonte: 'App Speedy', FileOrigine: 'ultimo evento dell\'app' })
-  return righe.sort((a, b) => new Date(b.DataOra) - new Date(a.DataOra))
-})
-const posizioneScelta = ref(null)
-watch(posizioni, p => { posizioneScelta.value = p[0] ?? null })
 const riepilogo = computed(() => ({
   senzaSim: palmari.value.filter(p => !p.IdSim).length,
   daAbbinare: palmari.value.filter(p => !p.AndroidId).length,
@@ -85,6 +75,16 @@ const salvataggio = ref(false)
 const simScelta = ref(null)
 const simSuggerite = ref([])
 const androidScelto = ref(null)
+// le posizioni della scheda: quelle di Knox piu' l'ultima vista dall'app, la piu' recente in testa
+const posizioni = computed(() => {
+  const s = scheda.value
+  if (!s) return []
+  const righe = (s.Posizioni ?? []).map(p => ({ ...p, Fonte: p.Origine === 'KNOX' ? 'Knox' : p.Origine }))
+  if (s.AppLat) righe.push({ DataOra: s.UltimoEventoApp, Latitudine: s.AppLat, Longitudine: s.AppLng, Fonte: 'App Speedy', FileOrigine: 'ultimo evento dell\'app' })
+  return righe.sort((a, b) => new Date(b.DataOra) - new Date(a.DataOra))
+})
+const posizioneScelta = ref(null)
+watch(posizioni, p => { posizioneScelta.value = p[0] ?? null })
 function vuoto() {
   return { IdPalmare: null, Seriale: '', Imei: '', Imei2: '', Mac: '', AndroidId: '', NomeDevice: '', Alias: '', Modello: '', Produttore: 'samsung',
            Tag: '', NumeroMobile: '', ICCID: '', IdSim: null, IdFiliale: null, Stato: 'In uso', Note: '' }
