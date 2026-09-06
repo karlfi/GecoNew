@@ -111,13 +111,32 @@ static class Mezzi
             await using var cn = new SqlConnection(connString());
             return Results.Ok(await cn.QueryAsync($@"
                 SELECT TOP {Math.Clamp(top ?? 2000, 1, 20000)} k.IdMezziKM, k.data AS Data, k.km AS Km, ISNULL(u.Nome, k.utente) AS Driver, f.FILIALE AS Filiale,
-                       k.foto AS Foto, k.latitude AS Latitude, k.longitude AS Longitude, k.idpalmraw AS IdPalmRaw
+                       k.foto AS Foto, k.latitude AS Latitude, k.longitude AS Longitude, k.idpalmraw AS IdPalmRaw,
+                       c.KmPrima AS KmOriginale, c.Data AS DataCorrezione, c.Utente AS CorrettoDa, c.Note AS NotaCorrezione
                 FROM dbo.MEZZI m
                 JOIN dbo.MEZZI_KM k ON k.targa = m.targa
                 LEFT JOIN dbo.UTENTI u ON u.IdUtente = k.IdUtente
                 LEFT JOIN dbo.FILIALI f ON f.IDFILIALE = k.idfiliale
+                OUTER APPLY (SELECT TOP 1 x.KmPrima, x.Data, x.Utente, x.Note FROM dbo.MEZZI_KM_CORREZIONI x WHERE x.IdMezziKM = k.IdMezziKM ORDER BY x.Data, x.IdCorrezione) c
                 WHERE m.idMezzo = @id AND (@anno IS NULL OR YEAR(k.data) = @anno)
                 ORDER BY k.data DESC, k.IdMezziKM DESC", new { id, anno }));
+        }).RequireAuthorization();
+
+        // correzione di una rilevazione km sbagliata (il valore di prima resta in MEZZI_KM_CORREZIONI)
+        app.MapPut("/api/mezzi/km/{idKm:int}", (int idKm, JsonElement b, System.Security.Claims.ClaimsPrincipal user) => Prova(async () =>
+        {
+            var km = Num(b, "km");
+            if (km is null || km < 0) return Results.BadRequest(new { errore = "Km non validi" });
+            await using var cn = new SqlConnection(connString());
+            await cn.ExecuteAsync("dbo.AI_MEZZI_KM_Correggi", new { IdMezziKM = idKm, Km = km, Utente = user.Identity?.Name, Note = Str(b, "note") }, commandType: CommandType.StoredProcedure);
+            return Results.Ok(new { idMezziKM = idKm, km });
+        })).RequireAuthorization();
+
+        // log delle modifiche alla riga di MEZZI (trigger TR_INSUP_MEZZI -> LOGTabelle)
+        app.MapGet("/api/mezzi/{id:int}/modifiche", async (int id) =>
+        {
+            await using var cn = new SqlConnection(connString());
+            return Results.Ok(await LogTabelle.Modifiche(cn, "MEZZI", id));
         }).RequireAuthorization();
 
         // gli anni in cui ci sono km, per il filtro

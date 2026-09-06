@@ -107,7 +107,7 @@ function nuovoMezzo() {
   edit.value = vuoto()
   assegnatario.value = null
   linguetta.value = 'info'
-  km.value = []; foto.value = []; costi.value = null; altri.value = null; sinistri.value = []; note.value = []
+  km.value = []; foto.value = []; costi.value = null; altri.value = null; sinistri.value = []; note.value = []; modifiche.value = []
 }
 async function cercaDipendenti(ev) { try { suggerimenti.value = (await api.get('/mezzi/dipendenti', { params: { testo: ev.query } })).data } catch { suggerimenti.value = [] } }
 async function salva() {
@@ -128,6 +128,19 @@ const titolo = computed(() => nuovoInCorso.value ? 'Nuovo mezzo' : scheda.value 
 // --- linguette: si caricano quando servono ---
 const km = ref([]); const anniKm = ref([]); const annoKm = ref(null); const kmScelto = ref(null)
 const foto = ref([]); const costi = ref(null); const annoCosti = ref(null); const altri = ref(null); const sinistri = ref([]); const note = ref([])
+// log delle modifiche alla scheda: una riga per campo cambiato, come nella scheda utente
+const modifiche = ref([])
+const ETICHETTE = { targa: 'Targa', codTipoMezzo: 'Tipo mezzo', modello: 'Modello', marca: 'Marca', telaio: 'Telaio', dataImmatricolazione: 'Data immatricolazione',
+  dataAcquisto: 'Data acquisto', dataDismissione: 'Data dismissione', DataRevisione: 'Data revisione', idFiliale: 'Filiale (id)', IdUtente: 'Assegnatario (id utente)',
+  Telepass: 'Telepass', TesseraCarb: 'Tessera carburante', 'Proprietà': 'Proprietà (0 propria, 1 noleggio, 2 leasing)', ImportoRata: 'Importo rata', Noleggiatore: 'Noleggiatore',
+  DataContrattoNoleggio: 'Data contratto noleggio', Contratto: 'Contratto', DataScadenzaNoleggio: 'Scadenza noleggio', ImportoRiscatto: 'Importo riscatto', Rottamato: 'Rottamato',
+  Scorta: 'Scorta', DataBollo: 'Data bollo', IdAzienda: 'Azienda (id)', DataScadenzaZTL: 'Data scadenza ZTL', ComuneZTL: 'Comune ZTL', DataFermo: 'Data fermo',
+  DKVIdVeicolo: 'DKV id veicolo', DKVTrasponder: 'DKV trasponder' }
+const etichetta = c => ETICHETTE[c] ?? c
+const righeModifiche = computed(() => modifiche.value.flatMap(m =>
+  m.campi.length
+    ? m.campi.map(c => ({ data: m.data, operatore: m.operatore, operazione: m.tipoOperazione, ...c, campo: etichetta(c.campo) }))
+    : [{ data: m.data, operatore: m.operatore, operazione: m.tipoOperazione, campo: m.prima ? '(nessun campo cambiato)' : '(prima registrazione)', prima: '', dopo: '' }]))
 const caricate = ref({})
 watch(linguetta, l => caricaLinguetta(l))
 async function caricaLinguetta(l, forza = false) {
@@ -146,6 +159,7 @@ async function caricaLinguetta(l, forza = false) {
     else if (l === 'altri') altri.value = (await api.get(`/mezzi/${id}/altri-costi`)).data
     else if (l === 'sinistri') sinistri.value = (await api.get(`/mezzi/${id}/sinistri`)).data
     else if (l === 'note') note.value = (await api.get(`/mezzi/${id}/note`)).data
+    else if (l === 'log') modifiche.value = (await api.get(`/mezzi/${id}/modifiche`)).data
     caricate.value[l] = true
   } catch (e) { errore(e) }
 }
@@ -162,22 +176,86 @@ async function caricaCosti() {
   if (!id) return
   try { costi.value = (await api.get(`/mezzi/${id}/costi`, { params: { anno: annoCosti.value } })).data } catch (e) { errore(e) }
 }
-// il grafico dei km: la serie dell'anno scelto, in ordine di data
+// il grafico dei km: la serie dell'anno scelto in ordine di data, con le rilevazioni sospette in arancione
+const serieKm = computed(() => [...km.value].filter(r => r.Km != null).sort((a, b) => new Date(a.Data) - new Date(b.Data) || a.IdMezziKM - b.IdMezziKM))
 const opzioniGrafico = computed(() => {
-  const punti = [...km.value].filter(r => r.Km != null).sort((a, b) => new Date(a.Data) - new Date(b.Data)).map(r => [r.Data, Number(r.Km)])
+  const punti = serieKm.value.map(r => [r.Data, Number(r.Km)])
+  const sospette = serieKm.value.filter(r => anomalie.value.get(r.IdMezziKM)).map(r => [r.Data, Number(r.Km)])
   return {
     tooltip: { trigger: 'axis', valueFormatter: v => num(v) + ' km' },
     grid: { left: 60, right: 16, top: 24, bottom: 36 },
     xAxis: { type: 'time' },
     yAxis: { type: 'value', name: 'km', scale: true, axisLabel: { formatter: v => num(v) } },
-    series: [{ type: 'line', data: punti, showSymbol: punti.length < 200, smooth: false, lineStyle: { width: 2 } }]
+    series: [
+      { name: 'km', type: 'line', data: punti, showSymbol: punti.length < 200, smooth: false, lineStyle: { width: 2 } },
+      { name: 'sospette', type: 'scatter', data: sospette, symbolSize: 10, itemStyle: { color: '#f97316' }, z: 3 }
+    ]
   }
 })
+// doppio clic sul grafico: la rilevazione piu' vicina nel tempo si seleziona nella griglia e si apre la correzione
+const tabKm = ref(null)
+function puntoGrafico({ x, dentro }) {
+  if (!dentro || !serieKm.value.length || x == null) return
+  let vicina = null, distanza = Infinity
+  for (const r of serieKm.value) { const d = Math.abs(new Date(r.Data) - x); if (d < distanza) { distanza = d; vicina = r } }
+  if (!vicina) return
+  kmScelto.value = vicina
+  const i = km.value.indexOf(vicina)
+  tabKm.value?.$el?.querySelectorAll('tbody tr')[i]?.scrollIntoView({ block: 'center' })
+  apriCorrezione(vicina)
+}
 // km giornalieri: differenza fra rilevazioni consecutive dell'anno
 const kmPercorsi = computed(() => {
   const ord = [...km.value].filter(r => r.Km != null).sort((a, b) => new Date(a.Data) - new Date(b.Data))
   return ord.length > 1 ? Number(ord[ord.length - 1].Km) - Number(ord[0].Km) : null
 })
+// rilevazioni sospette: un picco (sale tanto e poi torna giu'), un buco (scende e poi
+// risale), o comunque un valore sotto quello precedente o un salto troppo grande
+const SALTO_KM = 1000
+const anomalie = computed(() => {
+  const ord = [...km.value].filter(r => r.Km != null).sort((a, b) => new Date(a.Data) - new Date(b.Data) || a.IdMezziKM - b.IdMezziKM)
+  const m = new Map()
+  let prima = null   // l'ultima rilevazione buona: dopo un picco o un buco resta quella
+  for (let i = 0; i < ord.length; i++) {
+    const v = Number(ord[i].Km), dopo = i < ord.length - 1 ? Number(ord[i + 1].Km) : null
+    const su = prima == null ? 0 : v - prima, giu = dopo == null ? 0 : dopo - v
+    let motivo = null, buona = true
+    if (prima != null && dopo != null && su > SALTO_KM && giu < 0) { motivo = `picco: +${num(su)} km e poi torna a ${num(dopo)}`; buona = false }
+    else if (prima != null && dopo != null && su < 0 && giu > SALTO_KM) { motivo = `buco: ${num(su)} km e poi risale a ${num(dopo)}`; buona = false }
+    else if (prima != null && su < 0) motivo = `meno della rilevazione precedente (${num(prima)})`
+    else if (prima != null && su > SALTO_KM) motivo = `salto di ${num(su)} km dalla rilevazione precedente`
+    if (motivo) m.set(ord[i].IdMezziKM, motivo)
+    if (buona) prima = v
+  }
+  return m
+})
+const classeRigaKm = r => anomalie.value.get(r.IdMezziKM) ? 'riga-anomala' : (r.KmOriginale != null ? 'riga-corretta' : '')
+
+// --- correzione di una rilevazione: il valore di prima resta in traccia ---
+const dialogKm = ref(false)
+const correzione = ref({ IdMezziKM: null, Km: null, Note: '', riga: null })
+const salvandoKm = ref(false)
+function apriCorrezione(r) {
+  if (!r) return
+  correzione.value = { IdMezziKM: r.IdMezziKM, Km: r.Km == null ? null : Math.round(Number(r.Km)), Note: '', riga: r }
+  dialogKm.value = true
+}
+async function salvaCorrezione() {
+  const c = correzione.value
+  if (c.Km == null || c.Km < 0) { toast.add({ severity: 'warn', summary: 'Scrivi i km giusti', life: 3000 }); return }
+  salvandoKm.value = true
+  try {
+    await api.put(`/mezzi/km/${c.IdMezziKM}`, { km: c.Km, note: c.Note })
+    toast.add({ severity: 'success', summary: 'Km corretti', life: 2500 })
+    dialogKm.value = false
+    const idScelto = c.IdMezziKM
+    await caricaKm()
+    kmScelto.value = km.value.find(r => r.IdMezziKM === idScelto) ?? kmScelto.value
+    // la testata (ultimi km) si riallinea senza ricaricare tutta la scheda
+    const { data } = await api.get(`/mezzi/${scheda.value.idMezzo}`)
+    scheda.value = { ...scheda.value, UltimiKm: data.UltimiKm, DataUltimiKm: data.DataUltimiKm, DriverAttuale: data.DriverAttuale }
+  } catch (e) { errore(e) } finally { salvandoKm.value = false }
+}
 
 // --- foto: si chiede con il token e si mostra come blob ---
 const urlFoto = ref({})
@@ -308,6 +386,7 @@ onMounted(async () => {
           <Tab value="altri" :disabled="nuovoInCorso">Altri costi</Tab>
           <Tab value="sinistri" :disabled="nuovoInCorso">Sinistri<template v-if="scheda?.NumSinistri"> ({{ scheda.NumSinistri }})</template></Tab>
           <Tab value="note" :disabled="nuovoInCorso">Manutenzioni e note<template v-if="scheda?.NumNote"> ({{ scheda.NumNote }})</template></Tab>
+          <Tab value="log" :disabled="nuovoInCorso">Log</Tab>
         </TabList>
         <TabPanels>
           <TabPanel value="info">
@@ -331,11 +410,18 @@ onMounted(async () => {
                 <template #option="{ option }">{{ option.Anno }} <small class="nota">· {{ option.Righe }} rilevazioni · {{ num(option.KmMin) }}–{{ num(option.KmMax) }} km</small></template>
               </Select></label>
               <span v-if="kmPercorsi != null" class="nota">{{ num(kmPercorsi) }} km percorsi nel periodo, {{ km.length }} rilevazioni</span>
+              <span v-if="anomalie.size" class="attenzione"><i class="pi pi-exclamation-triangle"></i> {{ anomalie.size }} rilevazioni sospette: scegline una e usa "Correggi km"</span>
             </div>
             <div class="split-km">
-              <DataTable :value="km" v-model:selection="kmScelto" selectionMode="single" dataKey="IdMezziKM" size="small" stripedRows scrollable scrollHeight="30rem" class="tab-km">
+              <DataTable ref="tabKm" :value="km" v-model:selection="kmScelto" selectionMode="single" dataKey="IdMezziKM" size="small" stripedRows scrollable scrollHeight="30rem" class="tab-km" :rowClass="classeRigaKm">
                 <Column header="Data" style="width: 8rem"><template #body="{ data }">{{ dataOra(data.Data) }}</template></Column>
-                <Column header="Km" style="width: 6rem"><template #body="{ data }"><b>{{ num(data.Km) }}</b></template></Column>
+                <Column header="Km" style="width: 7.5rem">
+                  <template #body="{ data }">
+                    <b>{{ num(data.Km) }}</b>
+                    <i v-if="anomalie.get(data.IdMezziKM)" class="pi pi-exclamation-triangle attenzione icona" :title="anomalie.get(data.IdMezziKM)"></i>
+                    <i v-else-if="data.KmOriginale != null" class="pi pi-pencil nota icona" :title="`corretto da ${num(data.KmOriginale)} il ${dataOra(data.DataCorrezione)} (${data.CorrettoDa})`"></i>
+                  </template>
+                </Column>
                 <Column field="Driver" header="Driver" />
                 <Column field="Filiale" header="Filiale" />
                 <Column header="Foto" style="width: 3rem"><template #body="{ data }"><i v-if="data.Foto" class="pi pi-camera nota"></i></template></Column>
@@ -344,7 +430,12 @@ onMounted(async () => {
               </DataTable>
               <div class="dettaglio-km">
                 <template v-if="kmScelto">
-                  <h4>{{ dataOra(kmScelto.Data) }} · {{ num(kmScelto.Km) }} km · {{ kmScelto.Driver }}</h4>
+                  <h4 class="titolo-km">
+                    <span>{{ dataOra(kmScelto.Data) }} · {{ num(kmScelto.Km) }} km · {{ kmScelto.Driver }}</span>
+                    <Button label="Correggi km" icon="pi pi-pencil" size="small" outlined @click="apriCorrezione(kmScelto)" />
+                  </h4>
+                  <p v-if="anomalie.get(kmScelto.IdMezziKM)" class="attenzione avviso-km"><i class="pi pi-exclamation-triangle"></i> Rilevazione sospetta: {{ anomalie.get(kmScelto.IdMezziKM) }}.</p>
+                  <p v-if="kmScelto.KmOriginale != null" class="nota avviso-km">Corretto il {{ dataOra(kmScelto.DataCorrezione) }} da {{ kmScelto.CorrettoDa }}: prima {{ num(kmScelto.KmOriginale) }} km<template v-if="kmScelto.NotaCorrezione"> · {{ kmScelto.NotaCorrezione }}</template>.</p>
                   <div class="foto-posizione">
                     <div class="foto-box">
                       <img v-if="kmScelto.Foto && urlFoto[kmScelto.Foto]" :src="urlFoto[kmScelto.Foto]" class="foto" @click="fotoGrande = urlFoto[kmScelto.Foto]" title="Ingrandisci" />
@@ -360,7 +451,8 @@ onMounted(async () => {
                   </div>
                 </template>
                 <span v-else class="nota">Scegli una rilevazione nella griglia.</span>
-                <div v-if="km.length > 1" class="grafico"><EChart :option="opzioniGrafico" /></div>
+                <div v-if="km.length > 1" class="grafico"><EChart :option="opzioniGrafico" @dblclick="puntoGrafico" /></div>
+                <small v-if="km.length > 1" class="nota">Doppio clic su un punto del grafico: si seleziona la rilevazione e si apre la correzione. I punti arancioni sono le rilevazioni sospette.</small>
               </div>
             </div>
           </TabPanel>
@@ -453,6 +545,19 @@ onMounted(async () => {
               <template #empty><span class="nota">Nessuna nota.</span></template>
             </DataTable>
           </TabPanel>
+          <!-- log: ogni modifica alla riga di MEZZI, campo per campo -->
+          <TabPanel value="log">
+            <p class="nota piccola-nota">Ogni salvataggio della scheda (da qui o dal legacy) lascia una fotografia in LOGTabelle; qui il confronto fra una fotografia e la precedente. L'operatore è l'account con cui l'applicazione scrive sul database.</p>
+            <DataTable :value="righeModifiche" size="small" stripedRows paginator :rows="20" class="log-modifiche">
+              <Column header="Quando" style="width: 9.5rem"><template #body="{ data }">{{ dataOra(data.data) }}</template></Column>
+              <Column field="operazione" header="Operazione" style="width: 6.5rem" />
+              <Column field="operatore" header="Operatore" style="width: 9rem" />
+              <Column field="campo" header="Campo" style="width: 16rem" />
+              <Column field="prima" header="Prima" />
+              <Column field="dopo" header="Dopo" />
+              <template #empty><span class="nota">Nessuna modifica registrata per questo mezzo.</span></template>
+            </DataTable>
+          </TabPanel>
         </TabPanels>
       </Tabs>
     </template>
@@ -474,6 +579,20 @@ onMounted(async () => {
 
     <Dialog :visible="fotoGrande !== null" modal :style="{ width: '90vw' }" @update:visible="v => { if (!v) fotoGrande = null }">
       <img v-if="fotoGrande" :src="fotoGrande" class="foto-intera" />
+    </Dialog>
+
+    <!-- correzione km -->
+    <Dialog v-model:visible="dialogKm" modal header="Correggi i km della rilevazione" :style="{ width: '32rem' }">
+      <p v-if="correzione.riga" class="nota">{{ dataOra(correzione.riga.Data) }} · {{ correzione.riga.Driver }} · adesso <b>{{ num(correzione.riga.Km) }}</b> km<template v-if="anomalie.get(correzione.IdMezziKM)"><br><span class="attenzione">{{ anomalie.get(correzione.IdMezziKM) }}</span></template></p>
+      <div class="griglia-km">
+        <label>Km giusti <InputNumber v-model="correzione.Km" :min="0" :maxFractionDigits="0" locale="it-IT" inputClass="km-input" autofocus /></label>
+        <label>Nota <InputText v-model="correzione.Note" placeholder="perché si corregge (facoltativo)" /></label>
+      </div>
+      <small class="nota">Il valore di prima resta in traccia con chi e quando ha corretto.</small>
+      <template #footer>
+        <Button label="Annulla" text @click="dialogKm = false" />
+        <Button label="Salva" icon="pi pi-check" :loading="salvandoKm" @click="salvaCorrezione" />
+      </template>
     </Dialog>
 
     <Dialog v-model:visible="dialogNota" modal :header="nota.IdMezzoNota ? 'Nota / manutenzione' : 'Nuova nota / manutenzione'" :style="{ width: '40rem' }">
@@ -515,6 +634,14 @@ onMounted(async () => {
 .barra-km label { display: flex; align-items: center; gap: .4rem; }
 .split-km { display: grid; grid-template-columns: minmax(28rem, 1fr) minmax(24rem, 1fr); gap: 1rem; align-items: start; }
 .tab-km :deep(tr) { cursor: pointer; }
+.tab-km :deep(tr.riga-anomala) { background: color-mix(in srgb, var(--p-orange-500) 14%, transparent); }
+.tab-km :deep(tr.riga-corretta) { background: color-mix(in srgb, var(--p-primary-color) 8%, transparent); }
+.icona { margin-left: .35rem; font-size: .8rem; }
+.attenzione { color: var(--p-orange-600); }
+.titolo-km { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.avviso-km { margin: 0 0 .5rem; font-size: .9rem; }
+.griglia-km { display: grid; gap: .6rem; margin: .5rem 0; }
+.griglia-km label { display: grid; grid-template-columns: 7rem 1fr; align-items: center; gap: .5rem; font-size: .9rem; color: var(--p-text-muted-color); }
 .dettaglio-km h4 { margin: 0 0 .5rem; }
 .foto-posizione { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
 .foto-box, .mappa-box { min-height: 16rem; border: 1px solid var(--p-content-border-color); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--p-content-hover-background); }
@@ -530,6 +657,8 @@ onMounted(async () => {
 .didascalia { padding: .4rem .6rem; font-size: .85rem; }
 .foto-intera { width: 100%; max-height: 85vh; object-fit: contain; }
 .cliccabile :deep(tr) { cursor: pointer; }
+.log-modifiche :deep(td), .log-modifiche :deep(th) { font-size: .82rem; padding: .3rem .5rem; }
+.piccola-nota { margin: 0 0 .5rem; font-size: .85rem; }
 .nota { color: var(--p-text-muted-color); }
 h4 { margin: .75rem 0 .4rem; }
 @media (max-width: 1200px) { .split-km, .foto-posizione { grid-template-columns: 1fr; } }
