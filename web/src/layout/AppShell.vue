@@ -23,6 +23,7 @@ import SchedulatoreView from '../views/SchedulatoreView.vue'
 import SchedulatoreStoricoView from '../views/SchedulatoreStoricoView.vue'
 import SimView from '../views/SimView.vue'
 import PalmariView from '../views/PalmariView.vue'
+import MezziView from '../views/MezziView.vue'
 import ConfigTable from '../views/ConfigTable.vue'
 import WorkflowView from '../views/WorkflowView.vue'
 import InterrogazioniEditor from '../views/InterrogazioniEditor.vue'
@@ -258,6 +259,13 @@ const chiavePagina = computed(() =>
           v-else-if="nav.corrente.tipo === 'palmari'"
           :key="chiavePagina"
           :id-palmare="nav.corrente.idPalmare ?? null"
+        />
+        <MezziView
+          v-else-if="nav.corrente.tipo === 'mezzi'"
+          :key="chiavePagina"
+          :targa="nav.corrente.targa ?? null"
+          :id-mezzo="nav.corrente.idMezzo ?? null"
+          :nuovo="nav.corrente.nuovo ?? false"
         />
         <ConfigTable
           v-else-if="nav.corrente.tipo === 'config'"

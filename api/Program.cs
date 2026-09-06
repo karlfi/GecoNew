@@ -527,6 +527,7 @@ Fatturazione.Map(app, ConnString);
 Schedulatore.Map(app, ConnString);
 Sim.Map(app, ConnString);
 Palmari.Map(app, ConnString);
+Mezzi.Map(app, ConnString);
 
 // Stato di archiviazione del dipendente, modificabile dalla griglia "Elenco
 // Dipendenti" (interrogazione 1093). I valori ammessi li controlla la SP.

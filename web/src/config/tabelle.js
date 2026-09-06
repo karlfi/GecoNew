@@ -244,6 +244,14 @@ export function navDaVideata(videata, parametri = '') {
   if (isVideataPickup(v)) return { tipo: 'pickup' }
   if (isVideataClienti(v)) return { tipo: 'clienti' }
   if (isVideataGruppi(v)) return { tipo: 'gruppi' }
+  // scheda mezzo: dalle griglie legacy "MEZZI#targa=XX000XX|Modale=0" e
+  // "Mezzi24#targa=..."; "targa=InserimentoMezzo" e' il mezzo nuovo
+  if (v.toLowerCase() === 'mezzi' || v.toLowerCase() === 'mezzi24') {
+    const m = (parametri ?? '').match(/targa=([^|#&]+)/i)
+    const targa = m ? m[1].trim() : ''
+    if (!targa || targa.toLowerCase() === 'inserimentomezzo') return { tipo: 'mezzi', nuovo: true }
+    return { tipo: 'mezzi', targa }
+  }
   // videata non ancora migrata: placeholder
   return { tipo: 'videata', videata: v, parametri: parametri ?? '' }
 }
@@ -296,6 +304,7 @@ export function navDaLink(voce) {
   if (link === '/schedulatore-storico') return { tipo: 'schedulatore-storico' }
   if (link === '/sim') return { tipo: 'sim' }
   if (link === '/palmari') return { tipo: 'palmari' }
+  if (link === '/mezzi') return { tipo: 'mezzi' }
   if (link === '/interrogazioni') {
     const { idQuery, sWhere } = parseParametriMenu(voce.Parametri)
     return { tipo: 'interrogazioni', idQuery, sWhere }

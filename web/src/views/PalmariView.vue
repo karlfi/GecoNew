@@ -53,8 +53,22 @@ const dataIt = v => v ? new Date(v).toLocaleDateString('it-IT') : ''
 const dataOra = v => v ? new Date(v).toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' }) : ''
 const severitaStato = s => ({ 'In uso': 'success', Scorta: 'info', Guasto: 'danger', Dismesso: 'secondary' }[s] ?? 'secondary')
 const severitaPerc = p => p == null ? 'secondary' : p <= 10 ? 'danger' : p <= 25 ? 'warn' : 'success'
-const mappa = (lat, lng) => `https://www.google.com/maps?q=${lat},${lng}`
-const coord = (lat, lng) => lat == null ? '' : `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}`
+const mappa = (lat, lng) => `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=16/${lat}/${lng}`
+// la mappa incorporata di OpenStreetMap: un riquadro di ~1 km attorno al punto, col segnaposto
+const mappaEmbed = (lat, lng) => {
+  const d = 0.006
+  return `https://www.openstreetmap.org/export/embed.html?bbox=${(+lng - d).toFixed(5)},${(+lat - d).toFixed(5)},${(+lng + d).toFixed(5)},${(+lat + d).toFixed(5)}&layer=mapnik&marker=${lat},${lng}`
+}
+// le posizioni della scheda: quelle di Knox piu' l'ultima vista dall'app, la piu' recente in testa
+const posizioni = computed(() => {
+  const s = scheda.value
+  if (!s) return []
+  const righe = (s.Posizioni ?? []).map(p => ({ ...p, Fonte: p.Origine === 'KNOX' ? 'Knox' : p.Origine }))
+  if (s.AppLat) righe.push({ DataOra: s.UltimoEventoApp, Latitudine: s.AppLat, Longitudine: s.AppLng, Fonte: 'App Speedy', FileOrigine: 'ultimo evento dell\'app' })
+  return righe.sort((a, b) => new Date(b.DataOra) - new Date(a.DataOra))
+})
+const posizioneScelta = ref(null)
+watch(posizioni, p => { posizioneScelta.value = p[0] ?? null })
 const riepilogo = computed(() => ({
   senzaSim: palmari.value.filter(p => !p.IdSim).length,
   daAbbinare: palmari.value.filter(p => !p.AndroidId).length,
@@ -166,7 +180,7 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
 
     <DataTable :value="palmari" size="small" stripedRows paginator :rows="25" :rowsPerPageOptions="[25, 50, 100, 500]"
       selectionMode="single" dataKey="IdPalmare" @row-click="e => apri(e.data)" class="elenco" :loading="caricamento" removableSort>
-      <Column field="NomeDevice" header="Device" sortable><template #body="{ data }"><b>{{ data.NomeDevice }}</b><br><small class="nota">{{ data.Seriale }}</small></template></Column>
+      <Column field="Seriale" header="Palmare" sortable><template #body="{ data }"><b class="seriale">{{ data.Seriale }}</b><br><small class="nota">{{ data.NomeDevice }}</small></template></Column>
       <Column field="Tag" header="Tag Knox" sortable style="width: 7rem" />
       <Column field="Filiale" header="Filiale" sortable />
       <Column field="Modello" header="Modello" sortable style="width: 11rem"><template #body="{ data }">{{ (data.Modello || '').replace('Galaxy ', '') }}<br><small class="nota">Android {{ data.VersioneOS }}</small></template></Column>
@@ -189,7 +203,7 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
       <Column header="Posizione" sortable sortField="PosizioneData" style="width: 9rem">
         <template #body="{ data }">
           <template v-if="data.PosizioneData">
-            <a :href="mappa(data.PosizioneLat, data.PosizioneLng)" target="_blank" rel="noopener" @click.stop title="Apri la mappa"><i class="pi pi-map-marker"></i> {{ dataOra(data.PosizioneData) }}</a>
+            <a :href="mappa(data.PosizioneLat, data.PosizioneLng)" target="_blank" rel="noopener" @click.stop title="Apri la mappa (OpenStreetMap)"><i class="pi pi-map-marker"></i> {{ dataOra(data.PosizioneData) }}</a>
           </template>
           <span v-else class="nota">—</span>
         </template>
@@ -201,7 +215,7 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
     </DataTable>
 
     <!-- scheda -->
-    <Dialog v-model:visible="dialog" modal :header="edit.IdPalmare ? `Palmare ${edit.NomeDevice || edit.Seriale}` : 'Nuovo palmare'" :style="{ width: '60rem' }">
+    <Dialog v-model:visible="dialog" modal :header="edit.IdPalmare ? `Palmare ${edit.Seriale}${edit.NomeDevice ? ' · ' + edit.NomeDevice : ''}` : 'Nuovo palmare'" :style="{ width: '64rem' }">
       <Tabs v-model:value="linguetta">
         <TabList>
           <Tab value="disp">Dispositivo</Tab>
@@ -267,14 +281,19 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
             </DataTable>
           </TabPanel>
           <TabPanel value="pos">
-            <p v-if="scheda?.AppLat" class="nota">Ultima posizione vista dall'app Speedy: <a :href="mappa(scheda.AppLat, scheda.AppLng)" target="_blank" rel="noopener">{{ coord(scheda.AppLat, scheda.AppLng) }}</a> il {{ dataOra(scheda.UltimoEventoApp) }}.</p>
-            <DataTable :value="scheda?.Posizioni ?? []" size="small" stripedRows paginator :rows="20">
-              <Column header="Quando" style="width: 9rem"><template #body="{ data }">{{ dataOra(data.DataOra) }}</template></Column>
-              <Column header="Coordinate"><template #body="{ data }"><a :href="mappa(data.Latitudine, data.Longitudine)" target="_blank" rel="noopener"><i class="pi pi-map-marker"></i> {{ coord(data.Latitudine, data.Longitudine) }}</a></template></Column>
-              <Column field="Origine" header="Fonte" style="width: 6rem" />
-              <Column field="FileOrigine" header="File" />
-              <template #empty><span class="nota">Nessuna posizione: arriva con l'import del Device List di Knox (colonna Last Location).</span></template>
-            </DataTable>
+            <div class="posizioni">
+              <DataTable :value="posizioni" v-model:selection="posizioneScelta" selectionMode="single" dataKey="DataOra" size="small" stripedRows scrollable scrollHeight="24rem" class="cliccabile">
+                <Column header="Aggiornamento" style="width: 9.5rem"><template #body="{ data }">{{ dataOra(data.DataOra) }}</template></Column>
+                <Column field="Fonte" header="Fonte" style="width: 7rem" />
+                <Column field="FileOrigine" header="Da" />
+                <template #empty><span class="nota">Nessuna posizione: arriva con l'import del Device List di Knox (colonna Last Location) e dagli eventi dell'app.</span></template>
+              </DataTable>
+              <div class="mappa">
+                <iframe v-if="posizioneScelta" :src="mappaEmbed(posizioneScelta.Latitudine, posizioneScelta.Longitudine)" loading="lazy"></iframe>
+                <div v-else class="nota vuota">Scegli un aggiornamento per vederlo sulla mappa.</div>
+                <a v-if="posizioneScelta" :href="mappa(posizioneScelta.Latitudine, posizioneScelta.Longitudine)" target="_blank" rel="noopener" class="link-mappa"><i class="pi pi-external-link"></i> apri in OpenStreetMap · {{ dataOra(posizioneScelta.DataOra) }} · {{ posizioneScelta.Fonte }}</a>
+              </div>
+            </div>
           </TabPanel>
           <TabPanel value="var">
             <DataTable :value="scheda?.Variazioni ?? []" size="small" stripedRows>
@@ -354,6 +373,14 @@ const dialogImport = computed({ get: () => !!esitoImport.value, set: v => { if (
 .knox { display: flex; flex-direction: column; gap: .4rem; }
 .codici code { margin: 0 .3rem; }
 .nota { color: var(--p-text-muted-color); }
+.seriale { letter-spacing: .03em; }
+.cliccabile :deep(tr) { cursor: pointer; }
+.posizioni { display: grid; grid-template-columns: minmax(20rem, 1fr) minmax(22rem, 1fr); gap: .75rem; align-items: start; }
+.mappa { border: 1px solid var(--p-content-border-color); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; }
+.mappa iframe { width: 100%; height: 24rem; border: 0; }
+.mappa .vuota { padding: 2rem; text-align: center; }
+.link-mappa { font-size: .8rem; padding: .3rem .5rem; }
+@media (max-width: 1000px) { .posizioni { grid-template-columns: 1fr; } }
 .piccola { font-size: .8rem; margin: .75rem 0 0; }
 .attenzione { color: var(--p-orange-600); }
 .esito { margin-bottom: .75rem; }
