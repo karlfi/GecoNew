@@ -21,6 +21,7 @@ import ElencoDipendentiView from '../views/ElencoDipendentiView.vue'
 import FatturazioneView from '../views/FatturazioneView.vue'
 import SchedulatoreView from '../views/SchedulatoreView.vue'
 import SchedulatoreStoricoView from '../views/SchedulatoreStoricoView.vue'
+import SimView from '../views/SimView.vue'
 import ConfigTable from '../views/ConfigTable.vue'
 import WorkflowView from '../views/WorkflowView.vue'
 import InterrogazioniEditor from '../views/InterrogazioniEditor.vue'
@@ -245,6 +246,10 @@ const chiavePagina = computed(() =>
         />
         <SchedulatoreStoricoView
           v-else-if="nav.corrente.tipo === 'schedulatore-storico'"
+          :key="chiavePagina"
+        />
+        <SimView
+          v-else-if="nav.corrente.tipo === 'sim'"
           :key="chiavePagina"
         />
         <ConfigTable
