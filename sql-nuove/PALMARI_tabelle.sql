@@ -316,20 +316,7 @@ BEGIN
 END
 GO
 
--- la SIM mostra il palmare che la monta (dalla tabella PALMARI, non piu' solo dal testo)
-CREATE OR ALTER VIEW dbo.V_Sim AS
-SELECT s.IdSim, s.Numero, s.ICCID, s.Operatore, s.Prodotto, s.Stato, s.DataAttivazione, s.DataCessazione,
-       s.PianoTariffario, s.IdFiliale, f.FILIALE AS Filiale, s.IdUtente, u.Nome AS Dipendente, u.Matricola,
-       s.AssegnataA, s.Palmare, s.SerialePalmare, s.Note, s.DataCreazione, s.DataModifica, s.UtenteModifica,
-       r.DataRilevazione AS UltimaRilevazione, r.CreditoResiduo, r.GbSoglia, r.GbConsumati, r.GbResidui, r.PercResidua, r.PeriodoSoglia,
-       (SELECT COUNT(*) FROM dbo.SIM_VARIAZIONI v WHERE v.IdSim = s.IdSim) AS NumVariazioni,
-       pm.IdPalmare, pm.Seriale AS PalmareSeriale, pm.NomeDevice AS PalmareNome, pm.Tag AS PalmareTag
-FROM dbo.SIM s
-LEFT JOIN dbo.FILIALI f ON f.IDFILIALE = s.IdFiliale
-LEFT JOIN dbo.UTENTI u ON u.IdUtente = s.IdUtente
-OUTER APPLY (SELECT TOP 1 * FROM dbo.SIM_RILEVAZIONI x WHERE x.IdSim = s.IdSim ORDER BY x.DataRilevazione DESC) r
-OUTER APPLY (SELECT TOP 1 IdPalmare, Seriale, NomeDevice, Tag FROM dbo.PALMARI p WHERE p.IdSim = s.IdSim ORDER BY p.DataModifica DESC) pm;
-GO
+-- V_Sim (col palmare che monta la SIM e l'assegnazione) sta in SIM_assegnazioni.sql
 
 IF NOT EXISTS (SELECT 1 FROM dbo.MENU_ELEMENTI WHERE Link = '/palmari')
     EXEC dbo.AI_MENU_ELEMENTI_Save @ParentID = 1229, @Text = 'Palmari',
