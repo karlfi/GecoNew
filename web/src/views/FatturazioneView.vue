@@ -21,6 +21,7 @@ import InputText from 'primevue/inputtext'
 import DatePicker from 'primevue/datepicker'
 import Dialog from 'primevue/dialog'
 import Message from 'primevue/message'
+import { dataOra } from '../lib/schedulatore'
 import Tag from 'primevue/tag'
 import ProgressSpinner from 'primevue/progressspinner'
 
@@ -255,7 +256,8 @@ function mettiMiaMail() { destinatarioProva.value = auth.utente?.email ?? auth.u
           <Column header="File">
             <template #body="{ data }">
               <Button v-for="n in data.file" :key="n" :label="n.replace(data.file[0].split('_').slice(0, 4).join('_') + '_', '')"
-                icon="pi pi-file-excel" text size="small" @click="scarica(n)" />
+                icon="pi pi-file-excel" text size="small" :title="`scarica il file com'è (fatto il ${dataOra(data.fileData)}); per aggiornarlo usa Rifai i file`" @click="scarica(n)" />
+              <small v-if="data.file.length" class="vuoto">del {{ dataOra(data.fileData) }}</small>
               <span v-if="!data.file.length" class="vuoto">nessun file</span>
             </template>
           </Column>

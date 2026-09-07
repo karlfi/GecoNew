@@ -230,8 +230,10 @@ static class Fatturazione
             numero = f["Numero"]?.ToString(), pezzi = Int(f["Pezzi"]),
             importo = Convert.ToDecimal(f["Importo"] ?? 0m),
             emailPrefattura = f["EmailPrefattura"]?.ToString(),
-            // i file gia' prodotti in una esecuzione precedente
-            file = nomi.Where(n => File.Exists(Path.Combine(cartella, n))).ToList()
+            // i file gia' prodotti in una esecuzione precedente, e di quando sono
+            file = nomi.Where(n => File.Exists(Path.Combine(cartella, n))).ToList(),
+            fileData = nomi.Select(n => Path.Combine(cartella, n)).Where(File.Exists)
+                           .Select(x => (DateTime?)File.GetLastWriteTime(x)).DefaultIfEmpty(null).Max()
         };
     }
 
