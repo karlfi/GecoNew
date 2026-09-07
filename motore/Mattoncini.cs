@@ -365,18 +365,21 @@ public static class Mattoncini
 
         var msg = new MimeMessage();
         var mittente = ctx.S(step.P("MittenteSMTP"));
+        // l'SMTP scritto nello step vale se c'e' il server; altrimenti quello centrale di Lista Valori (SMTP_SERVER)
         string server = ctx.S(step.P("ServerSMTP")); int porta = int.TryParse(step.P("PortaSMTP"), out var pp) ? pp : 25;
         string? utente = step.P("UserSMTP"), password = step.P("PasswordSMTP");
-        if (ctx.O.SmtpDaListaValori)
+        var origine = "dello step";
+        if (server == "" && ctx.O.SmtpDaListaValori)
         {
             var lv = (await ctx.Cn.QueryAsync("SELECT Valore, Codice FROM dbo.LISTA_VALORI WHERE Lista = 'SMTP_SERVER'"))
                 .ToDictionary(r => (string)r.Valore, r => (string?)r.Codice, StringComparer.OrdinalIgnoreCase);
-            server = lv.GetValueOrDefault("SERVER") ?? server;
+            server = (lv.GetValueOrDefault("SERVER") ?? "").Trim();
             porta = int.TryParse(lv.GetValueOrDefault("PORT"), out var lp) ? lp : porta;
             utente = lv.GetValueOrDefault("USER"); password = lv.GetValueOrDefault("PASS");
             if (mittente == "") mittente = utente ?? "";
+            origine = "da Lista Valori";
         }
-        if (server == "") throw new Exception("APRIMAIL: ServerSMTP mancante");
+        if (server == "") throw new Exception("APRIMAIL: ServerSMTP mancante nello step" + (ctx.O.SmtpDaListaValori ? " e SMTP_SERVER vuoto in Lista Valori" : " (SmtpDaListaValori e' spento)"));
         msg.From.Add(MailboxAddress.Parse(mittente != "" ? mittente : "noreply@speedyworld.it"));
 
         var prova = ctx.O.MailSoloA;
@@ -406,7 +409,7 @@ public static class Mattoncini
         if (!string.IsNullOrEmpty(utente)) await smtp.AuthenticateAsync(utente, password ?? "");
         await smtp.SendAsync(msg);
         await smtp.DisconnectAsync(true);
-        await ctx.Scrivi("INFO", $"APRIMAIL: spedita a {string.Join(", ", msg.To.Mailboxes.Select(m => m.Address))} via {server}: \"{Taglia(oggetto, 80)}\"", step.IdStep);
+        await ctx.Scrivi("INFO", $"APRIMAIL: spedita a {string.Join(", ", msg.To.Mailboxes.Select(m => m.Address))} via {server} ({origine}): \"{Taglia(oggetto, 80)}\"", step.IdStep);
     }
 
     static List<string> Indirizzi(string s) =>

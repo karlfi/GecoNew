@@ -28,8 +28,8 @@ public class Opzioni
     public string? CartellaLog { get; set; }
     /// <summary>allo stop, quanto aspettare le esecuzioni in corso prima di lasciarle</summary>
     public int AttesaChiusuraSecondi { get; set; } = 120;
-    /// <summary>APRIMAIL: usa il relay di LISTA_VALORI (SMTP_SERVER) invece del ServerSMTP scritto nello step</summary>
-    public bool SmtpDaListaValori { get; set; }
+    /// <summary>APRIMAIL: se lo step non ha ServerSMTP, usa il relay di LISTA_VALORI (SMTP_SERVER); lo step, se lo definisce, vince</summary>
+    public bool SmtpDaListaValori { get; set; } = true;
     /// <summary>prove: tutte le mail vanno solo a questo indirizzo, coi destinatari veri nel testo</summary>
     public string? MailSoloA { get; set; }
 

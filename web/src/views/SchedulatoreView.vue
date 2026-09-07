@@ -24,6 +24,8 @@ import TabPanels from 'primevue/tabpanels'
 import TabPanel from 'primevue/tabpanel'
 import SchedulatoreStep from '../components/SchedulatoreStep.vue'
 import SchedulatoreEsecuzione from '../components/SchedulatoreEsecuzione.vue'
+import CronBuilder from '../components/CronBuilder.vue'
+import { descrivi as descriviCron } from '../lib/cron'
 import { severitaStato, dataOra, durata, messaggioErrore, fileBase64 } from '../lib/schedulatore'
 
 const props = defineProps({ idWorkflow: { type: Number, default: null } })
@@ -231,6 +233,16 @@ const toggleRic = d => azionePian(() => api.put(`/schedulatore/dettaglio/${d.IdD
   tipoRicorrenza: d.TipoRicorrenza, cronExpr: d.CronExpr, dataOraSingola: d.DataOraSingola, priorita: d.Priorita, attiva: !d.Attiva
 }))
 const eliminaRic = d => azionePian(() => api.delete(`/schedulatore/dettaglio/${d.IdDettaglio}`))
+// la maschera della ricorrenza: per una nuova (scrive nel form) o per cambiarne una esistente (salva subito)
+const builder = ref({ visibile: false, expr: '', onOk: null })
+const impostaNuovoCron = idPian => {
+  builder.value = { visibile: true, expr: nuoveRic.value[idPian]?.cronExpr || '', onOk: expr => { nuoveRic.value[idPian].cronExpr = expr; provaIlCron(idPian) } }
+}
+const modificaRic = d => {
+  builder.value = { visibile: true, expr: d.CronExpr || '', onOk: expr => azionePian(() => api.put(`/schedulatore/dettaglio/${d.IdDettaglio}`, {
+    tipoRicorrenza: d.TipoRicorrenza, cronExpr: expr, dataOraSingola: d.DataOraSingola, priorita: d.Priorita, attiva: d.Attiva
+  })) }
+}
 // la prova del cron mentre si scrive: si vede subito quando scatterebbe
 let timerCron = null
 function provaIlCron(idPian) {
@@ -374,9 +386,9 @@ const nomeFile = p => (p ?? '').split(/[\\/]/).pop()
                 </div>
                 <DataTable :value="p.Dettagli" size="small" class="ricorrenze">
                   <Column header="Tipo" style="width: 6rem"><template #body="{ data }">{{ data.TipoRicorrenza }}</template></Column>
-                  <Column header="Cron / data" style="width: 12rem">
+                  <Column header="Quando" style="width: 20rem">
                     <template #body="{ data }">
-                      <code v-if="data.TipoRicorrenza === 'CRON'">{{ data.CronExpr }}</code>
+                      <template v-if="data.TipoRicorrenza === 'CRON'">{{ descriviCron(data.CronExpr) }}<br><code class="nota">{{ data.CronExpr }}</code></template>
                       <template v-else>{{ dataOra(data.DataOraSingola) }}</template>
                     </template>
                   </Column>
@@ -387,8 +399,9 @@ const nomeFile = p => (p ?? '').split(/[\\/]/).pop()
                     </template>
                   </Column>
                   <Column field="Priorita" header="Prio" style="width: 4rem" />
-                  <Column header="" style="width: 6rem">
+                  <Column header="" style="width: 8rem">
                     <template #body="{ data }">
+                      <Button v-if="data.TipoRicorrenza === 'CRON'" icon="pi pi-pencil" text size="small" title="Cambia la ricorrenza" @click="modificaRic(data)" />
                       <Button :icon="data.Attiva ? 'pi pi-check-circle' : 'pi pi-circle'" :title="data.Attiva ? 'attiva: clicca per disattivare' : 'disattiva: clicca per attivare'"
                         text size="small" :severity="data.Attiva ? 'success' : 'secondary'" @click="toggleRic(data)" />
                       <Button icon="pi pi-times" text size="small" severity="danger" title="Elimina ricorrenza" @click="eliminaRic(data)" />
@@ -399,8 +412,9 @@ const nomeFile = p => (p ?? '').split(/[\\/]/).pop()
                 <div v-if="nuoveRic[p.IdPianificazione]" class="nuova">
                   <Select v-model="nuoveRic[p.IdPianificazione].tipoRicorrenza" :options="['CRON', 'ONESHOT']" size="small" style="width: 8rem" />
                   <template v-if="nuoveRic[p.IdPianificazione].tipoRicorrenza === 'CRON'">
-                    <InputText v-model="nuoveRic[p.IdPianificazione].cronExpr" placeholder="min ora giorno mese sett — es. 0 6 * * 1-5"
-                      size="small" class="cron" @input="provaIlCron(p.IdPianificazione)" />
+                    <Button :label="nuoveRic[p.IdPianificazione].cronExpr ? descriviCron(nuoveRic[p.IdPianificazione].cronExpr) : 'Imposta la ricorrenza…'"
+                      icon="pi pi-calendar-clock" outlined size="small" @click="impostaNuovoCron(p.IdPianificazione)" />
+                    <code v-if="nuoveRic[p.IdPianificazione].cronExpr" class="nota">{{ nuoveRic[p.IdPianificazione].cronExpr }}</code>
                     <span v-if="provaCron[p.IdPianificazione]" class="anteprima" :class="{ errore: !provaCron[p.IdPianificazione].valida }">
                       {{ provaCron[p.IdPianificazione].valida
                         ? 'prossime: ' + provaCron[p.IdPianificazione].prossime.map(dataOra).join(' · ')
@@ -409,7 +423,7 @@ const nomeFile = p => (p ?? '').split(/[\\/]/).pop()
                   </template>
                   <DatePicker v-else v-model="nuoveRic[p.IdPianificazione].dataOraSingola" showTime hourFormat="24" dateFormat="dd/mm/yy" size="small" placeholder="data e ora" />
                   <label>prio <InputNumber v-model="nuoveRic[p.IdPianificazione].priorita" size="small" inputStyle="width: 4rem" /></label>
-                  <Button label="Ricorrenza" icon="pi pi-plus" text size="small" @click="aggiungiRic(p)" />
+                  <Button label="Ricorrenza" icon="pi pi-plus" text size="small" :disabled="nuoveRic[p.IdPianificazione].tipoRicorrenza === 'CRON' && !nuoveRic[p.IdPianificazione].cronExpr" @click="aggiungiRic(p)" />
                 </div>
               </div>
               <p v-if="!pianificazioni.length" class="nota">Nessuna pianificazione per questo workflow.</p>
@@ -467,6 +481,8 @@ const nomeFile = p => (p ?? '').split(/[\\/]/).pop()
     </Dialog>
 
     <!-- conferma -->
+    <CronBuilder v-model:visible="builder.visibile" :expr="builder.expr" @ok="e => builder.onOk?.(e)" />
+
     <Dialog v-model:visible="conferma.visibile" modal header="Conferma" :style="{ width: '30rem' }">
       <p>{{ conferma.testo }}</p>
       <template #footer>

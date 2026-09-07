@@ -42,8 +42,10 @@ Serve solo il runtime .NET 6 (gia' presente dove gira l'API). Non serve IIS.
    - `Motore:CartellaScript`: la cartella base dei file `.sql` richiamati dagli
      step (`QuerySQL=.\ADEX\x.sql` viene cercato li' dentro);
    - `Motore:FastReportUrl` se diverso dal predefinito;
-   - `Motore:SmtpDaListaValori`: `true` per spedire le mail (APRIMAIL) col relay
-     configurato in LISTA_VALORI invece del `ServerSMTP` scritto negli step;
+   - `Motore:SmtpDaListaValori` (default `true`): le mail (APRIMAIL) usano
+     l'SMTP scritto nello step se c'e' `ServerSMTP`, altrimenti il relay
+     configurato in LISTA_VALORI (lista `SMTP_SERVER`: SERVER, PORT, USER,
+     PASS); con `false` lo step deve avere il suo `ServerSMTP`;
    - `Motore:MailSoloA`: in prova, tutte le mail solo a questo indirizzo.
 3. Registrare il servizio, **come amministratore**:
    `powershell -ExecutionPolicy Bypass -File installa-servizio.ps1 -Cartella C:\servizi\GecoMotore -Account DOMINIO\utente`
