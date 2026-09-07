@@ -345,36 +345,27 @@ onMounted(async () => {
         <div class="meta" v-if="scheda">
           <span v-if="scheda.UltimiKm != null"><b>Ultimi km</b> {{ num(scheda.UltimiKm) }} il {{ dataOra(scheda.DataUltimiKm) }}<template v-if="scheda.DriverAttuale"> · {{ scheda.DriverAttuale }}</template></span>
           <span v-if="scheda.Assegnatario"><b>Assegnatario</b> {{ scheda.Assegnatario }}</span>
+          <span v-if="scheda.Filiale"><b>Filiale</b> {{ scheda.Filiale }}</span>
         </div>
         <Button :label="nuovoInCorso ? 'Crea' : 'Salva'" icon="pi pi-check" :loading="salvataggio" @click="salva" />
       </div>
 
-      <!-- testata: le due colonne del legacy -->
-      <div class="griglia">
+      <!-- testata: la prima colonna del legacy, stretta su tre colonne; il resto sta nella linguetta Info -->
+      <div class="griglia compatta">
         <label>Targa <InputText v-model="edit.targa" class="targa" /></label>
-        <label>Data dismissione <DatePicker v-model="edit.dataDismissione" dateFormat="dd/mm/yy" showIcon /></label>
         <label>Tipo mezzo <Select v-model="edit.codTipoMezzo" :options="lookup.tipi" optionLabel="Descrizione" optionValue="Codice" showClear /></label>
-        <label>Data bollo <DatePicker v-model="edit.DataBollo" dateFormat="dd/mm/yy" showIcon /></label>
-        <label>Modello <InputText v-model="edit.modello" /></label>
-        <label>Data revisione <DatePicker v-model="edit.DataRevisione" dateFormat="dd/mm/yy" showIcon /></label>
+        <label>Azienda <Select v-model="edit.IdAzienda" :options="lookup.aziende" optionLabel="RagioneSociale" optionValue="IdAzienda" showClear /></label>
         <label>Marca <InputText v-model="edit.marca" /></label>
-        <label>Scadenza noleggio <DatePicker v-model="edit.DataScadenzaNoleggio" dateFormat="dd/mm/yy" showIcon /></label>
+        <label>Modello <InputText v-model="edit.modello" /></label>
         <label>Telaio <InputText v-model="edit.telaio" /></label>
-        <label>Filiale <Select v-model="edit.idFiliale" :options="lookup.filiali" optionLabel="Filiale" optionValue="IdFiliale" showClear filter /></label>
         <label>Data acquisto <DatePicker v-model="edit.dataAcquisto" dateFormat="dd/mm/yy" showIcon /></label>
-        <label>Proprietà <Select v-model="edit.Proprieta" :options="lookup.proprieta" optionLabel="testo" optionValue="valore" showClear placeholder="altro" /></label>
         <label>Data immatricolazione <DatePicker v-model="edit.dataImmatricolazione" dateFormat="dd/mm/yy" showIcon /></label>
-        <label>Noleggiatore <Select v-model="edit.Noleggiatore" :options="lookup.noleggiatori" editable showClear /></label>
-        <label>Assegnatario
+        <label>Data contratto noleggio <DatePicker v-model="edit.DataContrattoNoleggio" dateFormat="dd/mm/yy" showIcon /></label>
+        <label class="doppia">Assegnatario
           <AutoComplete v-model="assegnatario" :suggestions="suggerimenti" optionLabel="Nome" @complete="cercaDipendenti" dropdown forceSelection placeholder="cerca per nome o matricola">
             <template #option="{ option }">{{ option.Nome }} <small class="nota">{{ option.Matricola }}</small></template>
           </AutoComplete>
         </label>
-        <label>Importo rata <InputNumber v-model="edit.ImportoRata" mode="currency" currency="EUR" locale="it-IT" /></label>
-        <label>Azienda <Select v-model="edit.IdAzienda" :options="lookup.aziende" optionLabel="RagioneSociale" optionValue="IdAzienda" showClear /></label>
-        <label>Contratto <InputText v-model="edit.Contratto" /></label>
-        <label>Data contratto noleggio <DatePicker v-model="edit.DataContrattoNoleggio" dateFormat="dd/mm/yy" showIcon /></label>
-        <label>Importo riscatto <InputNumber v-model="edit.ImportoRiscatto" mode="currency" currency="EUR" locale="it-IT" /></label>
       </div>
 
       <Tabs v-model:value="linguetta">
@@ -390,6 +381,20 @@ onMounted(async () => {
         </TabList>
         <TabPanels>
           <TabPanel value="info">
+            <!-- la seconda colonna del legacy: filiale, proprieta' e noleggio, scadenze -->
+            <div class="griglia">
+              <label>Filiale <Select v-model="edit.idFiliale" :options="lookup.filiali" optionLabel="Filiale" optionValue="IdFiliale" showClear filter /></label>
+              <label>Data dismissione <DatePicker v-model="edit.dataDismissione" dateFormat="dd/mm/yy" showIcon /></label>
+              <label>Proprietà <Select v-model="edit.Proprieta" :options="lookup.proprieta" optionLabel="testo" optionValue="valore" showClear placeholder="altro" /></label>
+              <label>Data bollo <DatePicker v-model="edit.DataBollo" dateFormat="dd/mm/yy" showIcon /></label>
+              <label>Noleggiatore <Select v-model="edit.Noleggiatore" :options="lookup.noleggiatori" editable showClear /></label>
+              <label>Data revisione <DatePicker v-model="edit.DataRevisione" dateFormat="dd/mm/yy" showIcon /></label>
+              <label>Contratto <InputText v-model="edit.Contratto" /></label>
+              <label>Scadenza noleggio <DatePicker v-model="edit.DataScadenzaNoleggio" dateFormat="dd/mm/yy" showIcon /></label>
+              <label>Importo rata <InputNumber v-model="edit.ImportoRata" mode="currency" currency="EUR" locale="it-IT" /></label>
+              <label>Importo riscatto <InputNumber v-model="edit.ImportoRiscatto" mode="currency" currency="EUR" locale="it-IT" /></label>
+            </div>
+            <h4>Dotazioni e altro</h4>
             <div class="griglia">
               <label>Tessera carburante <InputText v-model="edit.TesseraCarb" /></label>
               <label>Telepass <InputText v-model="edit.Telepass" /></label>
@@ -622,12 +627,18 @@ onMounted(async () => {
 .spazio { flex: 1; }
 .cerca { width: 18rem; }
 .testata { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
-.titolo { margin: 0; display: flex; align-items: center; gap: .5rem; flex: 1; }
-.meta { display: flex; gap: 1.2rem; flex-wrap: wrap; color: var(--p-text-muted-color); font-size: .9rem; }
+.titolo { margin: 0; display: flex; align-items: center; gap: .5rem; flex: 0 1 auto; white-space: nowrap; }
+.meta { display: flex; gap: 1.2rem; flex-wrap: wrap; flex: 1 1 20rem; color: var(--p-text-muted-color); font-size: .9rem; }
 .griglia { display: grid; grid-template-columns: 1fr 1fr; gap: .45rem 1.5rem; }
 .griglia label { display: grid; grid-template-columns: 11rem 1fr; align-items: center; gap: .5rem; font-size: .9rem; color: var(--p-text-muted-color); }
 .griglia label.larga { grid-column: 1 / -1; }
 .griglia label.riga { grid-template-columns: auto 1fr; }
+.griglia.compatta { grid-template-columns: repeat(3, 1fr); gap: .35rem 1.2rem; }
+.griglia.compatta label { grid-template-columns: 9.5rem minmax(0, 1fr); font-size: .85rem; min-width: 0; }
+.griglia.compatta label.doppia { grid-column: span 2; }
+.griglia.compatta :deep(.p-inputtext), .griglia.compatta :deep(.p-select), .griglia.compatta :deep(.p-datepicker), .griglia.compatta :deep(.p-autocomplete), .griglia.compatta :deep(.p-inputnumber) { width: 100%; min-width: 0; }
+.griglia.compatta :deep(.p-inputtext), .griglia.compatta :deep(.p-select-label), .griglia.compatta :deep(.p-datepicker-input) { padding-top: .3rem; padding-bottom: .3rem; }
+@media (max-width: 1300px) { .griglia.compatta { grid-template-columns: 1fr 1fr; } .griglia.compatta label.doppia { grid-column: span 2; } }
 .targa { font-weight: 700; letter-spacing: .05em; }
 .centro { display: flex; justify-content: center; padding: 3rem; }
 .barra-km { display: flex; align-items: center; gap: 1rem; margin-bottom: .5rem; flex-wrap: wrap; }
