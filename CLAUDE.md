@@ -12,9 +12,12 @@ navigazione; le pagine si registrano in `web/src/layout/AppShell.vue` e in
 - Fork di **Speedy Web** ([karlfi/DeliveryAI](https://github.com/karlfi/DeliveryAI)) al commit
   `e49ae7e` del 2026-09-07, reso indipendente il 2026-09-07. **Nessun merge** fra i due repository:
   storia comune fino a quel commit, poi divergono.
-- Il database è un **gemello** di quello di origine, su un altro server (vedi `README.md`):
-  stessa struttura, dati diversi. Non dare per scontato che una modifica di schema fatta
-  nell'origine esista qui: `sql-nuove/ZZ_verifica_oggetti.sql` elenca gli oggetti attesi che mancano.
+- Il database è un **gemello** di quello di origine, su `serverdb` (SQL Server 2019, login in
+  italiano: la nota di `ZZ_configurazione_server.sql` sulla lingua non serve qui): stessa
+  struttura, dati diversi. Non dare per scontato che una modifica di schema fatta nell'origine
+  esista qui: `sql-nuove/ZZ_verifica_oggetti.sql` elenca gli oggetti attesi che mancano;
+  `ZZ_allinea_serverdb_20260908.sql` è l'allineamento dell'8 settembre 2026 (script dal 3 settembre).
+  Su serverdb esiste l'utente di sola lettura `claude` (i GRANT degli script lo prevedono).
 - Marchio: "Ge.C.O. New" (titolo, testata, login). I default di dominio del progetto di origine
   (URL del report server, mittente delle mail) qui sono **solo** in configurazione:
   `Motore:FastReportUrl`, `Motore:MittentePredefinito`.
