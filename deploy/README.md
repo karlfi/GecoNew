@@ -17,7 +17,7 @@ gira sul server.)
 
 ## 1. Prerequisiti sul server
 - **NSSM** — https://nssm.cc (per il servizio Windows). Stesso tool di TNOT.
-- Accesso di rete a SQL `SERVER-NUOVO` (DeliveryDB).
+- Accesso di rete a SQL `serverdb` (DeliveryDB).
 - **Nessun runtime .NET da installare**: la pubblicazione è *self-contained* (porta con sé il runtime).
 
 ## 2. Database

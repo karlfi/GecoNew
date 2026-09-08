@@ -2,7 +2,7 @@
 
 > **Fork** di *Speedy Web* ([karlfi/DeliveryAI](https://github.com/karlfi/DeliveryAI), commit `e49ae7e` del 2026-09-07),
 > reso indipendente il 2026-09-07: stesso codice, **database gemello su un altro server**
-> (`SERVER-NUOVO` / `DeliveryDB`). Nessun merge previsto fra i due repository: le pagine
+> (`serverdb` / `DeliveryDB`). Nessun merge previsto fra i due repository: le pagine
 > si portano da uno all'altro a mano, un commit alla volta (vedi `CLAUDE.md`, "Portare una pagina").
 >
 > Configurazione: `api/appsettings.json` e `motore/appsettings.json` (non tracciati; partire dagli
@@ -212,7 +212,7 @@ Nessun codice: imposti il campo `Link` della voce. Convenzioni (in `config/tabel
 
 - **Backend:** ASP.NET Core minimal API (.NET 6), Dapper, Microsoft.Data.SqlClient, JWT Bearer.
 - **Frontend:** Vue 3 + Vite, PrimeVue (Aura), Pinia, ECharts, Vue Flow + dagre, ExcelJS (lazy).
-- **DB:** SQL Server (`SERVER-NUOVO`), database `DeliveryDB` gemello di quello di origine (+ `geo`, `speedy` se presenti).
+- **DB:** SQL Server (`serverdb`), database `DeliveryDB` gemello di quello di origine (+ `geo`, `speedy` se presenti).
 - Solo componenti open-source, on-premise.
 
 ---

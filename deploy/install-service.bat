@@ -20,7 +20,7 @@ nssm set Geco-Api AppStdout "%APPDIR%\logs\api.out.log"
 nssm set Geco-Api AppStderr "%APPDIR%\logs\api.err.log"
 nssm set Geco-Api AppRotateFiles 1
 
-REM IMPORTANTE: account con accesso a SQL (SERVER-NUOVO / DeliveryDB).
+REM IMPORTANTE: account con accesso a SQL (serverdb / DeliveryDB).
 REM Se l'app usa autenticazione SQL (login dedicato in appsettings.json) va bene
 REM anche LocalSystem; se mai si passasse ad autenticazione Windows integrata,
 REM impostare un utente di dominio con accesso al DB:
