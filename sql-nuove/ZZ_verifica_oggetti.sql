@@ -4,6 +4,7 @@
 -- se si aggiungono script (basta rilanciare la stessa ricognizione).
 USE DeliveryDB;
 GO
+SET NOCOUNT ON;
 DECLARE @attesi TABLE (Nome SYSNAME, Tipo VARCHAR(20), Script VARCHAR(100));
 INSERT INTO @attesi (Nome, Tipo, Script) VALUES
     ('AI_AZIENDE_Save', 'PROCEDURE', '00_crea_tutto.sql'),
