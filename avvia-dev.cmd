@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================================
-REM Avvia Speedy Web in SVILUPPO: apre due finestre, una per l'API .NET (5180)
+REM Avvia Ge.C.O. New in SVILUPPO: apre due finestre, una per l'API .NET (5180)
 REM e una per il frontend Vite (5173), poi apre il browser su localhost:5173.
 REM Doppio click su questo file, oppure da terminale: avvia-dev.cmd
 REM Per fermare tutto: chiudere le due finestre (o Ctrl+C in ciascuna).

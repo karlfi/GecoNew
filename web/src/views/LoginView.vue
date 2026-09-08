@@ -31,7 +31,7 @@ async function accedi() {
 <template>
   <div class="login-page">
     <form class="login-card" @submit.prevent="accedi">
-      <h1>Speedy <span>Web</span></h1>
+      <h1>Ge.C.O. <span>New</span></h1>
       <label for="utente">Username</label>
       <InputText id="utente" v-model="utente" autocomplete="username" autofocus />
       <label for="password">Password</label>

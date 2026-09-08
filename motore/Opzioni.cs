@@ -19,7 +19,7 @@ public class Opzioni
     /// <summary>nome registrato in WF_Esecuzione.MachineName (default: nome macchina)</summary>
     public string? NomeMacchina { get; set; }
     /// <summary>server FastReport per GENERAREPORT: GET url?report=..&format=PDF&..</summary>
-    public string FastReportUrl { get; set; } = "http://cruscotto.speedyworld.it:8097/result";
+    public string FastReportUrl { get; set; } = "";
     /// <summary>timeout delle query degli step (i flussi legacy possono essere lunghi)</summary>
     public int TimeoutQuerySecondi { get; set; } = 3600;
     /// <summary>interprete per gli step ESEGUIPYTHON (percorso di python.exe, o "python" se e' nel PATH)</summary>
@@ -32,6 +32,8 @@ public class Opzioni
     public bool SmtpDaListaValori { get; set; } = true;
     /// <summary>prove: tutte le mail vanno solo a questo indirizzo, coi destinatari veri nel testo</summary>
     public string? MailSoloA { get; set; }
+    /// <summary>APRIMAIL: mittente quando lo step non ne ha uno e Lista Valori non da' uno USER</summary>
+    public string MittentePredefinito { get; set; } = "";
 
     public string Macchina => string.IsNullOrWhiteSpace(NomeMacchina) ? Environment.MachineName : NomeMacchina;
 }

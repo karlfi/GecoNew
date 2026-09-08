@@ -1,8 +1,16 @@
-# Speedy Web — nuova interfaccia
+# Ge.C.O. New — nuova interfaccia
+
+> **Fork** di *Speedy Web* ([karlfi/DeliveryAI](https://github.com/karlfi/DeliveryAI), commit `e49ae7e` del 2026-09-07),
+> reso indipendente il 2026-09-07: stesso codice, **database gemello su un altro server**
+> (`SERVER-NUOVO` / `DeliveryDB`). Nessun merge previsto fra i due repository: le pagine
+> si portano da uno all'altro a mano, un commit alla volta (vedi `CLAUDE.md`, "Portare una pagina").
+>
+> Configurazione: `api/appsettings.json` e `motore/appsettings.json` (non tracciati; partire dagli
+> `appsettings.example.json`). Verifica degli oggetti DB: `sql-nuove/ZZ_verifica_oggetti.sql`.
 
 Riscrittura delle **interfacce** del gestionale legacy Ge.C.O. Web (Instant Developer / ASP.NET)
 sul **database esistente, lasciato intatto**. Non è un nuovo gestionale: è una nuova UI —
-**Speedy Web** — che parla con lo stesso DB.
+**Ge.C.O. New** — che parla con lo stesso DB.
 
 ---
 
@@ -204,7 +212,7 @@ Nessun codice: imposti il campo `Link` della voce. Convenzioni (in `config/tabel
 
 - **Backend:** ASP.NET Core minimal API (.NET 6), Dapper, Microsoft.Data.SqlClient, JWT Bearer.
 - **Frontend:** Vue 3 + Vite, PrimeVue (Aura), Pinia, ECharts, Vue Flow + dagre, ExcelJS (lazy).
-- **DB:** SQL Server 2019 (`serverdb`), database `DeliveryDB` (+ `geo`, `speedy`).
+- **DB:** SQL Server (`SERVER-NUOVO`), database `DeliveryDB` gemello di quello di origine (+ `geo`, `speedy` se presenti).
 - Solo componenti open-source, on-premise.
 
 ---

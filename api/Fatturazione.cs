@@ -253,7 +253,7 @@ static class Fatturazione
     // siti spesso non ha i permessi), si ripiega sulla temp del processo: i file
     // sono rifacibili in ogni momento, meglio che bloccare la fatturazione. Il
     // ripiego non e' silenzioso, torna un avviso che la pagina mostra.
-    static readonly string Ripiego = Path.Combine(Path.GetTempPath(), "speedyweb-fatturazione");
+    static readonly string Ripiego = Path.Combine(Path.GetTempPath(), "geconew-fatturazione");
 
     static async Task<(string Dove, string? Avviso)> CartellaScrivibile(SqlConnection cn)
     {

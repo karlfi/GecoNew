@@ -1,13 +1,13 @@
 # Deploy in produzione (Windows Server 2019)
 
-Speedy Web gira sullo **stesso server di TNOT**. L'API .NET serve sia il REST sia
+Ge.C.O. New gira su un suo server (le note su TNOT vengono dal progetto di origine). L'API .NET serve sia il REST sia
 il frontend Vue (build statica) sulla **stessa porta**, quindi **non serve IIS**.
 
 ## Porte — niente sovrapposizioni con TNOT
 
 | Servizio | Progetto | Porta | Note |
 |---|---|---|---|
-| **Geco-Api** | Speedy Web (questo) | **5180** | API + frontend (porta unica) |
+| **Geco-Api** | Ge.C.O. New (questo) | **5180** | API + frontend (porta unica) |
 | WF-Api | TNOT | 3001 | API + frontend (porta unica) |
 | SQL Server | — | 1433 | `serverdb`/`DeliveryDB` (TWEB), `10.1.0.1`/`NotificheDB` (TNOT) |
 
@@ -17,7 +17,7 @@ gira sul server.)
 
 ## 1. Prerequisiti sul server
 - **NSSM** — https://nssm.cc (per il servizio Windows). Stesso tool di TNOT.
-- Accesso di rete a SQL `serverdb` (DeliveryDB).
+- Accesso di rete a SQL `SERVER-NUOVO` (DeliveryDB).
 - **Nessun runtime .NET da installare**: la pubblicazione è *self-contained* (porta con sé il runtime).
 
 ## 2. Database

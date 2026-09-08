@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================================
-REM Installa Speedy Web (API .NET + frontend, porta unica) come servizio Windows
+REM Installa Ge.C.O. New (API .NET + frontend, porta unica) come servizio Windows
 REM tramite NSSM. Eseguire come Amministratore. Richiede NSSM (https://nssm.cc).
 REM
 REM Porta: 5180 (definita in appsettings.json -> Urls). NON sovrapporre a TNOT (3001).
@@ -20,7 +20,7 @@ nssm set Geco-Api AppStdout "%APPDIR%\logs\api.out.log"
 nssm set Geco-Api AppStderr "%APPDIR%\logs\api.err.log"
 nssm set Geco-Api AppRotateFiles 1
 
-REM IMPORTANTE: account con accesso a SQL (serverdb / DeliveryDB).
+REM IMPORTANTE: account con accesso a SQL (SERVER-NUOVO / DeliveryDB).
 REM Se l'app usa autenticazione SQL (login dedicato in appsettings.json) va bene
 REM anche LocalSystem; se mai si passasse ad autenticazione Windows integrata,
 REM impostare un utente di dominio con accesso al DB:

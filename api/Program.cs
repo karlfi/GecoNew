@@ -3099,7 +3099,7 @@ app.MapPost("/api/hr/unilav/applica", async (UnilavApplicaRequest req) =>
 
 // geocoding Nominatim/OSM: un client condiviso con User-Agent come da policy OSM
 var geocodeHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
-geocodeHttp.DefaultRequestHeaders.UserAgent.ParseAdd("SpeedyWeb/1.0 (speedyworld.it)");
+geocodeHttp.DefaultRequestHeaders.UserAgent.ParseAdd("GecoNew/1.0");
 
 // Clienti attivi dell'azienda con condizioni parcel (famiglia P)
 app.MapGet("/api/sped/init", async (ClaimsPrincipal user) =>
@@ -3379,7 +3379,7 @@ app.MapPost("/api/sped/nuova", async (SpedNuovaRequest req, ClaimsPrincipal user
 // (&format=pdf + redirect, senza il quale risponde il viewer HTML a sessione),
 // appoggiato in una temp locale, servito come application/pdf e la temp svuotata.
 var reportHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
-var reportTempDir = Path.Combine(Path.GetTempPath(), "speedyweb-report");
+var reportTempDir = Path.Combine(Path.GetTempPath(), "geconew-report");
 
 app.MapGet("/api/sped/ldv/{id:int}", async (int id) =>
 {

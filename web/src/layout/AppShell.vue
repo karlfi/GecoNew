@@ -179,7 +179,7 @@ const chiavePagina = computed(() =>
         aria-label="Menu"
         @click="sidebarAperta = !sidebarAperta"
       />
-      <span class="brand" @click="nav.vaiHome()">Speedy <b>Web</b></span>
+      <span class="brand" @click="nav.vaiHome()">Ge.C.O. <b>New</b></span>
       <span v-if="filialeCorrente" class="filiale-info">
         <span class="filiale-nome">{{ filialeCorrente.nome }}</span>
         <span v-if="filialeCorrente.indirizzo" class="filiale-indirizzo">

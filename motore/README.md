@@ -1,6 +1,6 @@
 # Motore dello schedulatore (GecoMotore)
 
-Servizio Windows che esegue i workflow dello schedulatore di Speedy Web. Legge e
+Servizio Windows che esegue i workflow dello schedulatore di Ge.C.O. New. Legge e
 scrive le stesse tabelle `WF_` dell'API (DeliveryDB): le pagine "Schedulatore" e
 "Agenda e storico" mostrano in tempo reale quello che fa.
 

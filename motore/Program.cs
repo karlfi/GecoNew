@@ -1,6 +1,6 @@
 using GecoMotore;
 
-// === Motore dello schedulatore di Speedy Web ===
+// === Motore dello schedulatore di Ge.C.O. New ===
 // Servizio Windows (o console, con `dotnet run`): ogni pochi minuti trasforma le
 // pianificazioni in occorrenze concrete (WF_usp_Esecuzione_Pianifica), ogni
 // pochi secondi pesca quelle scadute (WF_usp_Esecuzione_Claim) ed esegue gli

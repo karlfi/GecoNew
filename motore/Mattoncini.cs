@@ -380,7 +380,9 @@ public static class Mattoncini
             origine = "da Lista Valori";
         }
         if (server == "") throw new Exception("APRIMAIL: ServerSMTP mancante nello step" + (ctx.O.SmtpDaListaValori ? " e SMTP_SERVER vuoto in Lista Valori" : " (SmtpDaListaValori e' spento)"));
-        msg.From.Add(MailboxAddress.Parse(mittente != "" ? mittente : "noreply@speedyworld.it"));
+        if (mittente == "") mittente = ctx.O.MittentePredefinito;
+        if (mittente == "") throw new Exception("APRIMAIL: mittente mancante (MittenteSMTP nello step, USER in Lista Valori o Motore:MittentePredefinito)");
+        msg.From.Add(MailboxAddress.Parse(mittente));
 
         var prova = ctx.O.MailSoloA;
         if (!string.IsNullOrWhiteSpace(prova))
