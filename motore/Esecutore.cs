@@ -72,6 +72,10 @@ public class Contesto
     // (la query, il comando col suo output, i file, la mail), cosi' si puo' rifare a mano
     public async Task Scrivi(string livello, string messaggio, int? idStep = null, int? numRecord = null, string? dettaglio = null, long? durataMs = null)
     {
+        // chiavi e password che passano in un comando, in un URL o in un messaggio d'errore
+        // (una stored legacy ha stampato l'URL di HERE con la sua apiKey) non vanno nel log
+        messaggio = Segreti.Replace(messaggio, "$1=***");
+        if (dettaglio is not null) dettaglio = Segreti.Replace(dettaglio, "$1=***");
         await Cn.ExecuteAsync("dbo.WF_usp_EsecuzioneLog_Add",
             new { IdEsecuzione, IdStep = idStep, Livello = livello, Messaggio = messaggio, NumRecord = numRecord,
                   Dettaglio = string.IsNullOrWhiteSpace(dettaglio) ? null : dettaglio,
@@ -84,6 +88,8 @@ public class Contesto
 
     // sostituzioni nei valori dei parametri (vedi Sostituzioni), con eventuali parametri in piu' dello step
     public string S(string? testo, Dictionary<string, string>? extra = null) => Sostituzioni.Applica(testo, this, extra);
+
+    static readonly Regex Segreti = new(@"\b(apiKey|api_key|key|token|password|pwd|passwordSMTP)=[^&\s;'""]+", RegexOptions.IgnoreCase);
 }
 
 // Un errore di uno step che porta con se' il dettaglio di quello che stava
