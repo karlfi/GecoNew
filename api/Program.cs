@@ -1596,6 +1596,15 @@ app.MapPost("/api/comando/esiti", async (ComandoEsitiRequest req, ClaimsPrincipa
 // flag legacy -1 = vero
 bool FlagAz(IDictionary<string, object> a, string col) =>
     a.TryGetValue(col, out var v) && v != null && Convert.ToInt32(v) == -1;
+// le opzioni di una combo dagli elenchi legacy, sempre come {value, label}: le stored
+// restituiscono le colonne con maiuscole a caso (ElencoQualifiche da' "idqualifica"
+// e "qualifica") e la combo a video le cercava col nome esatto, restando vuota
+IEnumerable<object> OpzioniCombo(IEnumerable<dynamic> righe, string colValore, string colEtichetta) =>
+    righe.Cast<IDictionary<string, object>>().Select(r =>
+    {
+        object? Cerca(string col) => r.FirstOrDefault(kv => string.Equals(kv.Key, col, StringComparison.OrdinalIgnoreCase)).Value;
+        return new { value = Cerca(colValore), label = Cerca(colEtichetta)?.ToString() ?? "" };
+    }).ToList();
 object? Val(IDictionary<string, object> d, string k) => d.TryGetValue(k, out var v) ? v : null;
 
 async Task<IDictionary<string, object>?> CaricaAzione(SqlConnection cn, int idAzione) =>
@@ -1652,8 +1661,8 @@ app.MapGet("/api/esiti/azione/{idAzione:int}", async (int idAzione, int idProces
     // campo "Comune" (primo campo dinamico) — un solo motivo attivo per azione
     if (bStatiResi)
     {
-        var opt = await cn.QueryAsync("dbo.ElencoStatiResi", new { IdAzione = idAzione, IdProcesso = idProcesso }, commandType: CommandType.StoredProcedure);
-        campoComune = new { tipo = "combo", label = "Tipologia Reso", valueKey = "IdStatoReso", labelKey = "StatoReso", options = opt };
+        var opt = OpzioniCombo(await cn.QueryAsync("dbo.ElencoStatiResi", new { IdAzione = idAzione, IdProcesso = idProcesso }, commandType: CommandType.StoredProcedure), "IdStatoReso", "StatoReso");
+        campoComune = new { tipo = "combo", label = "Tipologia Reso", valueKey = "value", labelKey = "label", options = opt };
     }
     else if (bComune)
     {
@@ -1664,13 +1673,13 @@ app.MapGet("/api/esiti/azione/{idAzione:int}", async (int idAzione, int idProces
     }
     else if (bFiliale)
     {
-        var opt = await cn.QueryAsync("dbo.ElencoFiliali", new { IdAzione = idAzione, IdProcesso = idProcesso, IdFiliale = idFiliale }, commandType: CommandType.StoredProcedure);
-        campoComune = new { tipo = "combo", label = "Filiale Dest.", valueKey = "idfiliale", labelKey = "filiale", options = opt };
+        var opt = OpzioniCombo(await cn.QueryAsync("dbo.ElencoFiliali", new { IdAzione = idAzione, IdProcesso = idProcesso, IdFiliale = idFiliale }, commandType: CommandType.StoredProcedure), "IdFiliale", "Filiale");
+        campoComune = new { tipo = "combo", label = "Filiale Dest.", valueKey = "value", labelKey = "label", options = opt };
     }
     else if (bFilialeGiac)
     {
-        var opt = await cn.QueryAsync("dbo.ElencoFiliali", new { IdAzione = idAzione, IdProcesso = idProcesso, IdFiliale = idFiliale }, commandType: CommandType.StoredProcedure);
-        campoComune = new { tipo = "combo", label = "Filiale Giac.", valueKey = "idfiliale", labelKey = "filiale", options = opt };
+        var opt = OpzioniCombo(await cn.QueryAsync("dbo.ElencoFiliali", new { IdAzione = idAzione, IdProcesso = idProcesso, IdFiliale = idFiliale }, commandType: CommandType.StoredProcedure), "IdFiliale", "Filiale");
+        campoComune = new { tipo = "combo", label = "Filiale Giac.", valueKey = "value", labelKey = "label", options = opt };
     }
     else if (bTerzi)
     {
@@ -1678,8 +1687,8 @@ app.MapGet("/api/esiti/azione/{idAzione:int}", async (int idAzione, int idProces
     }
     else if (iScatola > 0)
     {
-        var opt = await cn.QueryAsync("dbo.ElencoScatoleAperte", new { IdFiliale = idFiliale, IdTipoScatola = iScatola }, commandType: CommandType.StoredProcedure);
-        campoComune = new { tipo = "combo", label = "Scatola", valueKey = "barcode", labelKey = "barcode", options = opt };
+        var opt = OpzioniCombo(await cn.QueryAsync("dbo.ElencoScatoleAperte", new { IdFiliale = idFiliale, IdTipoScatola = iScatola }, commandType: CommandType.StoredProcedure), "Barcode", "Barcode");
+        campoComune = new { tipo = "combo", label = "Scatola", valueKey = "value", labelKey = "label", options = opt };
     }
     else if (!string.IsNullOrEmpty(param1Tipo))
     {
@@ -1689,13 +1698,14 @@ app.MapGet("/api/esiti/azione/{idAzione:int}", async (int idAzione, int idProces
     // campo "Operatore" (secondo campo dinamico)
     if (bTerzi)
     {
-        var opt = await cn.QueryAsync("dbo.ElencoQualifiche", new { IdAzione = idAzione, IdProcesso = idProcesso }, commandType: CommandType.StoredProcedure);
-        campoOperatore = new { tipo = "combo", label = "Qualifica", valueKey = "IdQualifica", labelKey = "Qualifica", options = opt };
+        // ElencoQualifiche: portiere e vicino hanno una sola qualifica, terzi tutte le altre
+        var opt = OpzioniCombo(await cn.QueryAsync("dbo.ElencoQualifiche", new { IdAzione = idAzione, IdProcesso = idProcesso }, commandType: CommandType.StoredProcedure), "IdQualifica", "Qualifica");
+        campoOperatore = new { tipo = "combo", label = "Qualifica", valueKey = "value", labelKey = "label", options = opt };
     }
     else if (bOperatore)
     {
-        var opt = await cn.QueryAsync("dbo.ElencoOperatori", new { IdAzione = idAzione, IdProcesso = idProcesso, IdFiliale = idFiliale, IdRuolo = 40 }, commandType: CommandType.StoredProcedure);
-        campoOperatore = new { tipo = "combo", label = "Postino", valueKey = "IdUtente", labelKey = "nome", options = opt };
+        var opt = OpzioniCombo(await cn.QueryAsync("dbo.ElencoOperatori", new { IdAzione = idAzione, IdProcesso = idProcesso, IdFiliale = idFiliale, IdRuolo = 40 }, commandType: CommandType.StoredProcedure), "IdUtente", "Nome");
+        campoOperatore = new { tipo = "combo", label = "Postino", valueKey = "value", labelKey = "label", options = opt };
     }
 
     return Results.Ok(new
