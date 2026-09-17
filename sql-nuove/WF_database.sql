@@ -588,8 +588,10 @@ CREATE TABLE dbo.WF_EsecuzioneLog (
     IdStep       INT           NULL,
     Sequenza     INT           NOT NULL,
     Livello      NVARCHAR(10)  NOT NULL CONSTRAINT DF_WF_EsecLog_Liv DEFAULT 'INFO',
-    Messaggio    NVARCHAR(MAX) NULL,
+    Messaggio    NVARCHAR(MAX) NULL,           -- una riga: cosa e' successo e l'esito
     NumRecord    INT           NULL,
+    Dettaglio    NVARCHAR(MAX) NULL,           -- il testo intero eseguito, coi parametri sostituiti (query, comando, file, mail)
+    DurataMs     INT           NULL,
     TimestampUtc DATETIME2(3)  NOT NULL CONSTRAINT DF_WF_EsecLog_Ts DEFAULT SYSUTCDATETIME(),
     CONSTRAINT FK_WF_EsecLog_Esec FOREIGN KEY (IdEsecuzione)
         REFERENCES dbo.WF_Esecuzione(IdEsecuzione) ON DELETE CASCADE,
@@ -718,14 +720,16 @@ CREATE OR ALTER PROCEDURE dbo.WF_usp_EsecuzioneLog_Add
     @IdStep       INT           = NULL,
     @Livello      NVARCHAR(10)  = 'INFO',
     @Messaggio    NVARCHAR(MAX) = NULL,
-    @NumRecord    INT           = NULL
+    @NumRecord    INT           = NULL,
+    @Dettaglio    NVARCHAR(MAX) = NULL,
+    @DurataMs     INT           = NULL
 AS
 BEGIN
     SET NOCOUNT ON;
     DECLARE @seq INT = (SELECT ISNULL(MAX(Sequenza), 0) + 1
                         FROM dbo.WF_EsecuzioneLog WHERE IdEsecuzione = @IdEsecuzione);
-    INSERT INTO dbo.WF_EsecuzioneLog (IdEsecuzione, IdStep, Sequenza, Livello, Messaggio, NumRecord)
-    VALUES (@IdEsecuzione, @IdStep, @seq, @Livello, @Messaggio, @NumRecord);
+    INSERT INTO dbo.WF_EsecuzioneLog (IdEsecuzione, IdStep, Sequenza, Livello, Messaggio, NumRecord, Dettaglio, DurataMs)
+    VALUES (@IdEsecuzione, @IdStep, @seq, @Livello, @Messaggio, @NumRecord, @Dettaglio, @DurataMs);
 END
 GO
 

@@ -67,11 +67,15 @@ public class Contesto
     public Contesto ConRecord(IDictionary<string, object?> r) => (Contesto)MemberwiseClone() is var c ? Con(c, r) : this;
     static Contesto Con(Contesto c, IDictionary<string, object?> r) { c.Record = r; return c; }
 
-    // una riga nel log dell'esecuzione (e nel file del servizio)
-    public async Task Scrivi(string livello, string messaggio, int? idStep = null, int? numRecord = null)
+    // una riga nel log dell'esecuzione (e nel file del servizio): il messaggio e' corto,
+    // nel dettaglio va tutto quello che e' stato eseguito coi parametri gia' sostituiti
+    // (la query, il comando col suo output, i file, la mail), cosi' si puo' rifare a mano
+    public async Task Scrivi(string livello, string messaggio, int? idStep = null, int? numRecord = null, string? dettaglio = null, long? durataMs = null)
     {
         await Cn.ExecuteAsync("dbo.WF_usp_EsecuzioneLog_Add",
-            new { IdEsecuzione, IdStep = idStep, Livello = livello, Messaggio = messaggio, NumRecord = numRecord },
+            new { IdEsecuzione, IdStep = idStep, Livello = livello, Messaggio = messaggio, NumRecord = numRecord,
+                  Dettaglio = string.IsNullOrWhiteSpace(dettaglio) ? null : dettaglio,
+                  DurataMs = durataMs is null ? (int?)null : (int)Math.Min(durataMs.Value, int.MaxValue) },
             commandType: CommandType.StoredProcedure);
         if (livello == "ERRORE") Log.LogError("{m}", messaggio);
         else if (livello == "WARN") Log.LogWarning("{m}", messaggio);
@@ -80,6 +84,14 @@ public class Contesto
 
     // sostituzioni nei valori dei parametri (vedi Sostituzioni), con eventuali parametri in piu' dello step
     public string S(string? testo, Dictionary<string, string>? extra = null) => Sostituzioni.Applica(testo, this, extra);
+}
+
+// Un errore di uno step che porta con se' il dettaglio di quello che stava
+// facendo (la query, il comando e il suo output): finisce nella riga ERRORE del log.
+public class ErroreStep : Exception
+{
+    public string? Dettaglio;
+    public ErroreStep(string messaggio, string? dettaglio, Exception? interno = null) : base(messaggio, interno) => Dettaglio = dettaglio;
 }
 
 // I segnaposto del formato legacy: &[now(fmt)] data di adesso, +[nome] campo del
@@ -162,13 +174,16 @@ public static class Query
     static readonly Regex SembraPercorso = new(@"^(\.{1,2}[\\/]|[A-Za-z]:[\\/]|\\\\)", RegexOptions.IgnoreCase);
     static readonly Regex Go = new(@"^\s*GO\s*$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
 
+    /// <summary>la QuerySQL e' il percorso di un file, non la query scritta nello step</summary>
+    public static bool EFile(string spec) =>
+        !spec.Contains('\n') && (SembraPercorso.IsMatch(spec) || spec.EndsWith(".sql", StringComparison.OrdinalIgnoreCase));
+
     /// <summary>QuerySQL: un file (".\x.sql" relativo alla cartella script, o assoluto) oppure la query scritta direttamente nello step</summary>
     public static string Carica(string spec, string? cartellaScript)
     {
         spec = (spec ?? "").Trim();
         if (spec == "") throw new Exception("QuerySQL mancante");
-        var eFile = !spec.Contains('\n') && (SembraPercorso.IsMatch(spec) || spec.EndsWith(".sql", StringComparison.OrdinalIgnoreCase));
-        if (!eFile) return spec;
+        if (!EFile(spec)) return spec;
         var rel = Regex.Replace(spec, @"^\.[\\/]", "");
         var pieno = Path.IsPathRooted(spec) ? spec : Path.Combine(cartellaScript ?? AppContext.BaseDirectory, rel);
         if (!File.Exists(pieno)) throw new FileNotFoundException($"QuerySQL non trovata: {pieno}");
@@ -241,7 +256,7 @@ public static class Esecutore
                 try { await EseguiStep(ctx, step); }
                 catch (Exception ex)
                 {
-                    await ctx.Scrivi("ERRORE", $"Step {step.NomeSezione}: {ex.Message}", step.IdStep);
+                    await ctx.Scrivi("ERRORE", $"Step {step.NomeSezione}: {ex.Message}", step.IdStep, dettaglio: (ex as ErroreStep)?.Dettaglio);
                     if (step.EsciSuErrore) throw;
                 }
                 await cn.ExecuteAsync("dbo.WF_usp_Esecuzione_Avanzamento",
@@ -269,7 +284,10 @@ public static class Esecutore
             await ctx.Scrivi("INFO", $"Salto {step.NomeSezione} (disattivo)", step.IdStep);
             return;
         }
-        await ctx.Scrivi("INFO", $"Step {step.NomeSezione} [{step.Tipo}]", step.IdStep);
+        // la riga di avvio solo per gli step radice, coi parametri com'e' scritto lo step:
+        // i sottopassi girano una volta per record e hanno gia' la loro riga di esito
+        if (ctx.Record is null)
+            await ctx.Scrivi("INFO", $"Avvio {step.NomeSezione} [{step.Tipo}]", step.IdStep, dettaglio: ParametriLeggibili(step));
 
         async Task Figli(IDictionary<string, object?> record)
         {
@@ -279,7 +297,7 @@ public static class Esecutore
                 try { await EseguiStep(c, f); }
                 catch (Exception ex)
                 {
-                    await c.Scrivi("ERRORE", $"Sottopasso {f.NomeSezione}: {ex.Message}", f.IdStep);
+                    await c.Scrivi("ERRORE", $"Sottopasso {f.NomeSezione}: {ex.Message}", f.IdStep, dettaglio: (ex as ErroreStep)?.Dettaglio);
                     if (f.EsciSuErrore) throw;
                 }
             }
@@ -300,6 +318,11 @@ public static class Esecutore
             default: await ctx.Scrivi("WARN", $"Tipo {step.Tipo} non gestito dal motore: step saltato", step.IdStep); break;
         }
     }
+
+    // i parametri dello step come sono nel DB, indentati, per la riga di avvio nel log
+    static readonly JsonSerializerOptions Indentato = new() { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+    static string ParametriLeggibili(Step step) =>
+        step.Parametri.ValueKind == JsonValueKind.Object ? JsonSerializer.Serialize(step.Parametri, Indentato) : "";
 
     static Dictionary<string, string> ParametriDaJson(string? json)
     {

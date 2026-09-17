@@ -206,9 +206,14 @@ static class Schedulatore
             if (e is null) return Results.NotFound(new { errore = "Esecuzione non trovata" });
             Utc(e);
             e["Parametri"] = JsonOInvariato(e["Parametri"]);
+            // nome e tipo dello step dalla tabella step (spariscono se lo step e' stato cancellato);
+            // Dettaglio = quello che lo step ha eseguito coi parametri sostituiti, DurataMs
             e["Log"] = Utc(await cn.QueryAsync(@"
-                SELECT Sequenza, IdStep, Livello, Messaggio, NumRecord, TimestampUtc
-                FROM dbo.WF_EsecuzioneLog WHERE IdEsecuzione = @id ORDER BY Sequenza", new { id })).ToList();
+                SELECT l.Sequenza, l.IdStep, s.NomeSezione AS NomeStep, s.Tipo AS TipoStep,
+                       l.Livello, l.Messaggio, l.Dettaglio, l.NumRecord, l.DurataMs, l.TimestampUtc
+                FROM dbo.WF_EsecuzioneLog l
+                LEFT JOIN dbo.WF_WorkflowStep s ON s.IdStep = l.IdStep
+                WHERE l.IdEsecuzione = @id ORDER BY l.Sequenza", new { id })).ToList();
             return Results.Ok(e);
         }).RequireAuthorization();
 

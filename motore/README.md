@@ -18,6 +18,15 @@ Cosa fa, in ciclo:
   stato finale in `WF_Esecuzione`. Tra uno step e l'altro controlla se
   l'esecuzione e' stata annullata dalla pagina.
 
+Ogni riga di log ha lo step (`IdStep`, da cui la pagina prende nome e tipo), un
+`Messaggio` corto con l'esito, e nel `Dettaglio` tutto quello che lo step ha
+eseguito coi segnaposto gia' sostituiti: la query intera (col percorso del file
+se veniva da un `.sql`), il comando lanciato e il suo output, i file copiati, la
+mail (mai la password SMTP). Anche le righe ERRORE portano il dettaglio, cosi'
+la query fallita si riprova a mano. `DurataMs` e' il tempo dello step. La riga
+"Avvio" c'e' solo per gli step radice (nel dettaglio i parametri dello step);
+i sottopassi, che girano una volta per record, hanno solo la riga di esito.
+
 Mattoncini: ESEGUIQUERY, EXPORTTXT, EXPORTXLS, COPYFILE, COMPRIMIFILE,
 ESEGUISHELL, ESEGUIPYTHON, GENERAREPORT (server FastReport), APRIMAIL (SMTP),
 IMPORTTXT. Gli altri tipi vengono saltati con un avviso nel log.
@@ -27,8 +36,9 @@ ESEGUIPYTHON: `Script` (relativo a `CartellaScript` o assoluto), `Argomenti`
 (default: quella dello script), `TimeoutSecondi`, `Python` (interprete, default
 `Motore:Python` di appsettings). Lo script trova nell'ambiente `WF_ID_ESECUZIONE`,
 `WF_ID_WORKFLOW`, `WF_ID_STEP`, `WF_PARAMETRI` (JSON), `WF_OUTPUT` e, dentro un
-sottopasso, `WF_RECORD` (JSON del record corrente). Quello che stampa va nel log
-riga per riga; exit code diverso da zero = step in errore.
+sottopasso, `WF_RECORD` (JSON del record corrente). Quello che stampa va nel
+dettaglio della riga di log, insieme al comando lanciato; exit code diverso da
+zero = step in errore (col dettaglio sulla riga ERRORE).
 
 ## Installazione sul server
 

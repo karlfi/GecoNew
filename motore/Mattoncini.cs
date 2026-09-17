@@ -25,8 +25,11 @@ public static class Mattoncini
         var extra = Sostituzioni.ParametriDaStringa(step.P("Parametri"));
         var spec = ctx.S(step.P("QuerySQL"), extra);
         var sql = ctx.S(Query.Carica(spec, ctx.O.CartellaScript), extra);
-        var (righe, interessate, conRecordset) = await Query.Esegui(ctx, sql);
-        await ctx.Scrivi("INFO", $"ESEGUIQUERY {Riassunto(spec)}", step.IdStep, conRecordset ? righe.Count : interessate);
+        var dettaglio = DettaglioQuery(spec, sql);
+        var sw = Stopwatch.StartNew();
+        var (righe, interessate, conRecordset) = await EseguiOErrore("ESEGUIQUERY", ctx, sql, dettaglio);
+        var esito = conRecordset ? $"{righe.Count} righe lette" : $"{interessate} righe interessate";
+        await ctx.Scrivi("INFO", $"ESEGUIQUERY: {esito} in {Durata(sw)} - {Riassunto(spec)}", step.IdStep, conRecordset ? righe.Count : interessate, dettaglio, sw.ElapsedMilliseconds);
 
         var limite = int.TryParse(step.P("EsciSuRecordCountMaggiore"), out var l) ? l : -1;
         if (limite > -1 && righe.Count > limite) throw new Exception($"ESEGUIQUERY: {righe.Count} record, piu' del limite {limite}");
@@ -41,13 +44,15 @@ public static class Mattoncini
         var extra = Sostituzioni.ParametriDaStringa(step.P("Parametri"));
         var spec = ctx.S(step.P("QuerySQL"), extra);
         var sql = ctx.S(Query.Carica(spec, ctx.O.CartellaScript), extra);
-        var (righe, _, _) = await Query.Esegui(ctx, sql);
         var dest = ctx.S(step.P("NomeFileDest"), extra);
         if (dest == "") throw new Exception("EXPORTTXT: NomeFileDest mancante");
+        var dettaglio = DettaglioQuery(spec, sql) + $"\r\n\r\n-- file: {dest}";
+        var sw = Stopwatch.StartNew();
+        var (righe, _, _) = await EseguiOErrore("EXPORTTXT", ctx, sql, dettaglio);
 
         if (righe.Count == 0 && !step.Flag("EsportaSeVuoto", false))
         {
-            await ctx.Scrivi("WARN", $"EXPORTTXT: nessun record, file non generato ({dest})", step.IdStep);
+            await ctx.Scrivi("WARN", $"EXPORTTXT: nessun record, file non generato ({dest})", step.IdStep, dettaglio: dettaglio, durataMs: sw.ElapsedMilliseconds);
             return;
         }
         var colonne = righe.Count > 0 ? righe[0].Keys.ToList() : new List<string>();
@@ -86,7 +91,7 @@ public static class Mattoncini
             await f.WriteAsync(contenuto);
         }
         else await File.WriteAllBytesAsync(dest, contenuto);
-        await ctx.Scrivi("INFO", $"EXPORTTXT: {righe.Count} righe -> {dest}", step.IdStep, righe.Count);
+        await ctx.Scrivi("INFO", $"EXPORTTXT: {righe.Count} righe -> {dest} in {Durata(sw)}", step.IdStep, righe.Count, dettaglio, sw.ElapsedMilliseconds);
     }
 
     // ---- EXPORTXLS: query su file Excel ----
@@ -95,12 +100,14 @@ public static class Mattoncini
         var extra = Sostituzioni.ParametriDaStringa(step.P("Parametri"));
         var spec = ctx.S(step.P("QuerySQL"), extra);
         var sql = ctx.S(Query.Carica(spec, ctx.O.CartellaScript), extra);
-        var (righe, _, _) = await Query.Esegui(ctx, sql);
         var dest = ctx.S(step.P("NomeFileDest"), extra);
         if (dest == "") throw new Exception("EXPORTXLS: NomeFileDest mancante");
+        var dettaglio = DettaglioQuery(spec, sql) + $"\r\n\r\n-- file: {dest}";
+        var sw = Stopwatch.StartNew();
+        var (righe, _, _) = await EseguiOErrore("EXPORTXLS", ctx, sql, dettaglio);
         if (righe.Count == 0 && step.Flag("nongeneraresevuoto", false))
         {
-            await ctx.Scrivi("WARN", $"EXPORTXLS: nessun record, file non generato ({dest})", step.IdStep);
+            await ctx.Scrivi("WARN", $"EXPORTXLS: nessun record, file non generato ({dest})", step.IdStep, dettaglio: dettaglio, durataMs: sw.ElapsedMilliseconds);
             return;
         }
         var colonne = righe.Count > 0 ? righe[0].Keys.ToList() : new List<string>();
@@ -122,7 +129,7 @@ public static class Mattoncini
         ws.Columns().AdjustToContents();
         Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
         wb.SaveAs(dest);
-        await ctx.Scrivi("INFO", $"EXPORTXLS: {righe.Count} righe -> {dest}", step.IdStep, righe.Count);
+        await ctx.Scrivi("INFO", $"EXPORTXLS: {righe.Count} righe -> {dest} in {Durata(sw)}", step.IdStep, righe.Count, dettaglio, sw.ElapsedMilliseconds);
     }
 
     static XLCellValue Cella(object? v) => v switch
@@ -147,15 +154,17 @@ public static class Mattoncini
         if (src == "" || dst == "") throw new Exception("COPYFILE: FileSorgente/FileDestinazione mancante");
         var sostituisci = step.Flag("SostituisciFile", true);
         var elimina = step.Flag("EliminaFileSorgente", false);
+        var opzioni = (elimina ? "sposta (elimina il sorgente)" : "copia") + (sostituisci ? ", sostituisce se esiste" : ", errore se esiste");
 
         if (src.IndexOfAny(new[] { '*', '?' }) >= 0)
         {
             var cartella = Path.GetDirectoryName(src) ?? ".";
             var trovati = Directory.Exists(cartella) ? Directory.GetFiles(cartella, Path.GetFileName(src)) : Array.Empty<string>();
-            if (trovati.Length == 0) { await ctx.Scrivi("WARN", $"COPYFILE: nessun file per {src}", step.IdStep); return; }
+            if (trovati.Length == 0) { await ctx.Scrivi("WARN", $"COPYFILE: nessun file per {src}", step.IdStep, dettaglio: $"{opzioni}\r\n{src} -> {dst}"); return; }
             Directory.CreateDirectory(dst.TrimEnd('\\', '/'));
             foreach (var f in trovati) Copia(f, Path.Combine(dst, Path.GetFileName(f)), sostituisci, elimina);
-            await ctx.Scrivi("INFO", $"COPYFILE: {trovati.Length} file {src} -> {dst}", step.IdStep, trovati.Length);
+            var elenco = string.Join("\r\n", trovati.Select(f => $"{f} -> {Path.Combine(dst, Path.GetFileName(f))}"));
+            await ctx.Scrivi("INFO", $"COPYFILE: {trovati.Length} file {src} -> {dst}", step.IdStep, trovati.Length, $"{opzioni}\r\n{elenco}");
             return;
         }
         if (src.EndsWith('\\') || dst.EndsWith('\\'))
@@ -166,7 +175,7 @@ public static class Mattoncini
         if (!File.Exists(src)) throw new FileNotFoundException($"COPYFILE: sorgente non trovato: {src}");
         Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
         Copia(src, dst, sostituisci, elimina);
-        await ctx.Scrivi("INFO", $"COPYFILE: {src} -> {dst}", step.IdStep);
+        await ctx.Scrivi("INFO", $"COPYFILE: {src} -> {dst}", step.IdStep, dettaglio: $"{opzioni}\r\n{src} -> {dst}");
     }
 
     static void Copia(string src, string dst, bool sostituisci, bool elimina)
@@ -189,7 +198,7 @@ public static class Mattoncini
             if (fuori == "") fuori = ctx.CartellaOutput ?? ".";
             Directory.CreateDirectory(fuori);
             ZipFile.ExtractToDirectory(fileZip, fuori, true);
-            await ctx.Scrivi("INFO", $"COMPRIMIFILE: decompresso {fileZip} -> {fuori}", step.IdStep);
+            await ctx.Scrivi("INFO", $"COMPRIMIFILE: decompresso {fileZip} -> {fuori}", step.IdStep, dettaglio: $"{fileZip} -> {fuori}");
             return;
         }
 
@@ -220,7 +229,8 @@ public static class Mattoncini
                 if (Directory.Exists(f)) Directory.Delete(f, true);
                 else if (File.Exists(f)) File.Delete(f);
             }
-        await ctx.Scrivi("INFO", $"COMPRIMIFILE: creato {fileZip} ({aggiunti} elementi)", step.IdStep, aggiunti);
+        await ctx.Scrivi("INFO", $"COMPRIMIFILE: creato {fileZip} ({aggiunti} elementi)", step.IdStep, aggiunti,
+            $"zip: {fileZip}" + (step.Flag("EliminaSrc", false) ? " (sorgenti eliminati)" : "") + "\r\n" + string.Join("\r\n", lista));
     }
 
     // ---- ESEGUISHELL: un comando esterno, aspettando o no ----
@@ -236,10 +246,12 @@ public static class Mattoncini
             RedirectStandardOutput = aspetta, RedirectStandardError = aspetta,
             WorkingDirectory = cartella != "" ? cartella : Environment.CurrentDirectory,
         };
-        using var p = Process.Start(psi) ?? throw new Exception("ESEGUISHELL: avvio fallito");
+        var comando = $"cmd.exe /c {programma}\r\ncartella: {psi.WorkingDirectory}";
+        var sw = Stopwatch.StartNew();
+        using var p = Process.Start(psi) ?? throw new ErroreStep("ESEGUISHELL: avvio fallito", comando);
         if (!aspetta)
         {
-            await ctx.Scrivi("INFO", $"ESEGUISHELL avviato (senza attendere): {programma}", step.IdStep);
+            await ctx.Scrivi("INFO", $"ESEGUISHELL avviato (senza attendere): {programma}", step.IdStep, dettaglio: comando);
             return;
         }
         var so = p.StandardOutput.ReadToEndAsync();
@@ -247,15 +259,35 @@ public static class Mattoncini
         await p.WaitForExitAsync();
         var errore = (await se).Trim();
         var uscita = (await so).Trim();
-        if (p.ExitCode != 0) throw new Exception($"ESEGUISHELL \"{programma}\" exit {p.ExitCode} {errore}".Trim());
-        await ctx.Scrivi("INFO", $"ESEGUISHELL \"{programma}\" completato" + (uscita.Length > 0 ? ": " + Taglia(uscita, 500) : ""), step.IdStep);
+        // nel dettaglio il comando e tutto quello che ha stampato; nel messaggio solo l'esito
+        var dettaglio = comando + ConOutput(uscita, errore);
+        if (p.ExitCode != 0) throw new ErroreStep($"ESEGUISHELL \"{programma}\" exit {p.ExitCode}" + (errore != "" ? ": " + Taglia(errore, 300) : ""), dettaglio);
+        await ctx.Scrivi("INFO", $"ESEGUISHELL \"{programma}\" completato in {Durata(sw)} (exit 0, {Righe(uscita)} righe di output)", step.IdStep, dettaglio: dettaglio, durataMs: sw.ElapsedMilliseconds);
+    }
+
+    // l'output di un programma in coda al dettaglio (tagliato se enorme)
+    static string ConOutput(string uscita, string errore) =>
+        (uscita != "" ? "\r\n\r\n--- output ---\r\n" + Taglia(uscita, 200_000) : "") +
+        (errore != "" ? "\r\n\r\n--- errori (stderr) ---\r\n" + Taglia(errore, 50_000) : "");
+    static int Righe(string s) => s == "" ? 0 : s.Split('\n').Length;
+    static string Durata(Stopwatch sw) => sw.ElapsedMilliseconds < 1000 ? $"{sw.ElapsedMilliseconds} ms" : $"{sw.Elapsed.TotalSeconds:0.0} s";
+
+    // la query nel log, coi segnaposto gia' sostituiti: se veniva da un file, col percorso in testa
+    static string DettaglioQuery(string spec, string sql) => Query.EFile(spec) ? $"-- QuerySQL: {spec}\r\n{sql}" : sql;
+
+    // un errore SQL porta con se' la query, cosi' dal log la si riprova a mano
+    static async Task<(List<IDictionary<string, object?>> righe, int interessate, bool conRecordset)> EseguiOErrore(string tipo, Contesto ctx, string sql, string dettaglio)
+    {
+        try { return await Query.Esegui(ctx, sql); }
+        catch (Exception ex) { throw new ErroreStep($"{tipo}: {ex.Message}", dettaglio, ex); }
     }
 
     // ---- ESEGUIPYTHON: uno script Python. Script relativo alla cartella script o
     // assoluto, Argomenti con le sostituzioni, directory di lavoro, TimeoutSecondi.
     // Lo script trova nell'ambiente WF_ID_ESECUZIONE, WF_ID_WORKFLOW, WF_PARAMETRI
     // (JSON) e, nei sottopassi, WF_RECORD (JSON del record corrente); quello che
-    // stampa finisce nel log, exit code diverso da zero = errore. ----
+    // stampa finisce nel dettaglio della riga di log (col comando lanciato), exit
+    // code diverso da zero = errore. ----
     public static async Task EseguiPython(Contesto ctx, Step step)
     {
         var script = ctx.S(step.P("Script") ?? step.P("File") ?? step.P("Programma"));
@@ -288,23 +320,28 @@ public static class Mattoncini
             psi.Environment["WF_RECORD"] = System.Text.Json.JsonSerializer.Serialize(ctx.Record.ToDictionary(k => k.Key, k => (object?)Sostituzioni.Segnaposto(k.Value)));
         if (ctx.CartellaOutput is not null) psi.Environment["WF_OUTPUT"] = ctx.CartellaOutput;
 
-        using var p = Process.Start(psi) ?? throw new Exception("ESEGUIPYTHON: avvio fallito");
+        // il comando com'e' stato lanciato, con l'ambiente che lo script legge
+        var comando = $"\"{interprete}\" -X utf8 \"{pieno}\" {argomenti}".TrimEnd() + $"\r\ncartella: {cartella}" +
+            $"\r\nWF_ID_ESECUZIONE={ctx.IdEsecuzione} WF_ID_WORKFLOW={ctx.IdWorkflow} WF_ID_STEP={step.IdStep}" +
+            (psi.Environment.TryGetValue("WF_RECORD", out var rec) ? $"\r\nWF_RECORD={rec}" : "");
+        var sw = Stopwatch.StartNew();
+        using var p = Process.Start(psi) ?? throw new ErroreStep("ESEGUIPYTHON: avvio fallito", comando);
         var so = p.StandardOutput.ReadToEndAsync();
         var se = p.StandardError.ReadToEndAsync();
         var finito = await Task.WhenAny(p.WaitForExitAsync(), Task.Delay(TimeSpan.FromSeconds(timeout)));
         if (!p.HasExited)
         {
             try { p.Kill(true); } catch { }
-            throw new Exception($"ESEGUIPYTHON: {Path.GetFileName(pieno)} interrotto dopo {timeout} s");
+            throw new ErroreStep($"ESEGUIPYTHON: {Path.GetFileName(pieno)} interrotto dopo {timeout} s", comando);
         }
         var uscita = (await so).Trim();
         var errore = (await se).Trim();
-        foreach (var riga in uscita.Split('\n').Select(r => r.TrimEnd('\r')).Where(r => r != "").Take(200))
-            await ctx.Scrivi("INFO", $"  py> {Taglia(riga, 1000)}", step.IdStep);
+        // prima ogni riga stampata era una riga di log: ora sta tutta nel dettaglio, col comando
+        var dettaglio = comando + ConOutput(uscita, errore);
         if (p.ExitCode != 0)
-            throw new Exception($"ESEGUIPYTHON: {Path.GetFileName(pieno)} exit {p.ExitCode}" + (errore != "" ? ": " + Taglia(errore, 1500) : ""));
-        if (errore != "") await ctx.Scrivi("WARN", $"ESEGUIPYTHON stderr: {Taglia(errore, 1000)}", step.IdStep);
-        await ctx.Scrivi("INFO", $"ESEGUIPYTHON: {Path.GetFileName(pieno)} {argomenti} completato", step.IdStep);
+            throw new ErroreStep($"ESEGUIPYTHON: {Path.GetFileName(pieno)} exit {p.ExitCode}" + (errore != "" ? ": " + Taglia(errore, 300) : ""), dettaglio);
+        if (errore != "") await ctx.Scrivi("WARN", $"ESEGUIPYTHON stderr: {Taglia(errore, 300)}", step.IdStep, dettaglio: errore);
+        await ctx.Scrivi("INFO", $"ESEGUIPYTHON: {Path.GetFileName(pieno)} {argomenti} completato in {Durata(sw)} ({Righe(uscita)} righe di output)", step.IdStep, dettaglio: dettaglio, durataMs: sw.ElapsedMilliseconds);
     }
 
     // argomenti separati da spazio, con le virgolette per quelli che contengono spazi
@@ -333,15 +370,22 @@ public static class Mattoncini
         var q = new List<string> { "report=" + Uri.EscapeDataString(nomeReport), "format=" + Uri.EscapeDataString(step.P("Formato", "PDF")) };
         q.AddRange(parametri.Select(kv => Uri.EscapeDataString(kv.Key) + "=" + Uri.EscapeDataString(kv.Value)));
         var url = ctx.O.FastReportUrl + (ctx.O.FastReportUrl.Contains('?') ? "&" : "?") + string.Join("&", q);
+        var dettaglio = $"GET {url}\r\nfile: {dest}";
+        var sw = Stopwatch.StartNew();
 
-        using var risposta = await Http.GetAsync(url);
-        if (!risposta.IsSuccessStatusCode) throw new Exception($"GENERAREPORT: HTTP {(int)risposta.StatusCode} {risposta.ReasonPhrase} su {url}");
-        var bytes = await risposta.Content.ReadAsByteArrayAsync();
-        if (bytes.Length < 5 || Encoding.ASCII.GetString(bytes, 0, 4) != "%PDF")
-            await ctx.Scrivi("WARN", $"GENERAREPORT: la risposta non sembra un PDF ({bytes.Length} byte) - {url}", step.IdStep);
-        Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-        await File.WriteAllBytesAsync(dest, bytes);
-        await ctx.Scrivi("INFO", $"GENERAREPORT: {nomeReport} -> {dest} ({bytes.Length} byte)", step.IdStep);
+        HttpResponseMessage risposta;
+        try { risposta = await Http.GetAsync(url); }
+        catch (Exception ex) { throw new ErroreStep($"GENERAREPORT: {ex.Message}", dettaglio, ex); }
+        using (risposta)
+        {
+            if (!risposta.IsSuccessStatusCode) throw new ErroreStep($"GENERAREPORT: HTTP {(int)risposta.StatusCode} {risposta.ReasonPhrase} ({nomeReport})", dettaglio);
+            var bytes = await risposta.Content.ReadAsByteArrayAsync();
+            if (bytes.Length < 5 || Encoding.ASCII.GetString(bytes, 0, 4) != "%PDF")
+                await ctx.Scrivi("WARN", $"GENERAREPORT: la risposta non sembra un PDF ({bytes.Length} byte) - {nomeReport}", step.IdStep, dettaglio: dettaglio);
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            await File.WriteAllBytesAsync(dest, bytes);
+            await ctx.Scrivi("INFO", $"GENERAREPORT: {nomeReport} -> {dest} ({bytes.Length} byte) in {Durata(sw)}", step.IdStep, dettaglio: dettaglio, durataMs: sw.ElapsedMilliseconds);
+        }
     }
 
     // ---- APRIMAIL: una mail. Nel legacy "apriva" il client di posta; qui con
@@ -357,11 +401,20 @@ public static class Mattoncini
         var allegati = (ctx.S(step.P("Allegati") ?? step.P("FileAllegato") ?? step.P("Allegato")))
             .Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()).Where(x => x != "").ToList();
         if (a.Count == 0) throw new Exception("APRIMAIL: Destinatario mancante");
+        // il riepilogo della mail per il dettaglio del log (mai la password SMTP)
+        var desc = new StringBuilder();
+        desc.AppendLine($"A: {string.Join(", ", a)}");
+        if (cc.Count > 0) desc.AppendLine($"Cc: {string.Join(", ", cc)}");
+        if (ccn.Count > 0) desc.AppendLine($"Ccn: {string.Join(", ", ccn)}");
+        desc.AppendLine($"Oggetto: {oggetto}");
+        if (allegati.Count > 0) desc.AppendLine($"Allegati: {string.Join("; ", allegati)}");
         if (!step.Flag("InviaDirettamente", false))
         {
-            await ctx.Scrivi("WARN", $"APRIMAIL: InviaDirettamente=0, mail non spedita (a {string.Join(", ", a)}: \"{Taglia(oggetto, 80)}\")", step.IdStep);
+            await ctx.Scrivi("WARN", $"APRIMAIL: InviaDirettamente=0, mail non spedita (a {string.Join(", ", a)}: \"{Taglia(oggetto, 80)}\")", step.IdStep,
+                dettaglio: desc + "\r\n" + corpo);
             return;
         }
+        var sw = Stopwatch.StartNew();
 
         var msg = new MimeMessage();
         var mittente = ctx.S(step.P("MittenteSMTP"));
@@ -405,13 +458,22 @@ public static class Mattoncini
             else await ctx.Scrivi("WARN", $"APRIMAIL: allegato non trovato {f}", step.IdStep);
         }
         msg.Body = contenuto.ToMessageBody();
+        desc.AppendLine($"Da: {msg.From.Mailboxes.First().Address}");
+        desc.AppendLine($"SMTP: {server}:{porta} ({origine})" + (!string.IsNullOrEmpty(utente) ? $", utente {utente}" : ""));
+        if (!string.IsNullOrWhiteSpace(prova)) desc.AppendLine($"PROVA (MailSoloA): spedita solo a {prova.Trim()}");
+        var dettaglio = desc + "\r\n" + corpo;
 
-        using var smtp = new SmtpClient();
-        await smtp.ConnectAsync(server, porta, porta == 465 ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTlsWhenAvailable);
-        if (!string.IsNullOrEmpty(utente)) await smtp.AuthenticateAsync(utente, password ?? "");
-        await smtp.SendAsync(msg);
-        await smtp.DisconnectAsync(true);
-        await ctx.Scrivi("INFO", $"APRIMAIL: spedita a {string.Join(", ", msg.To.Mailboxes.Select(m => m.Address))} via {server} ({origine}): \"{Taglia(oggetto, 80)}\"", step.IdStep);
+        try
+        {
+            using var smtp = new SmtpClient();
+            await smtp.ConnectAsync(server, porta, porta == 465 ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTlsWhenAvailable);
+            if (!string.IsNullOrEmpty(utente)) await smtp.AuthenticateAsync(utente, password ?? "");
+            await smtp.SendAsync(msg);
+            await smtp.DisconnectAsync(true);
+        }
+        catch (Exception ex) { throw new ErroreStep($"APRIMAIL: {ex.Message}", dettaglio, ex); }
+        await ctx.Scrivi("INFO", $"APRIMAIL: spedita a {string.Join(", ", msg.To.Mailboxes.Select(m => m.Address))} via {server} ({origine}): \"{Taglia(oggetto, 80)}\"", step.IdStep,
+            dettaglio: dettaglio, durataMs: sw.ElapsedMilliseconds);
     }
 
     static List<string> Indirizzi(string s) =>
@@ -439,6 +501,11 @@ public static class Mattoncini
 
         var cartella = Path.GetDirectoryName(maschera) ?? ".";
         var file = Directory.Exists(cartella) ? Directory.GetFiles(cartella, Path.GetFileName(maschera)).OrderBy(f => f).ToList() : new List<string>();
+        var impostazioni = $"file: {maschera}\r\ntabella: {tabella}\r\ncampi: {string.Join(", ", campi)}" +
+            (aCampiFissi ? "\r\nmodalita': campi fissi" : $"\r\nseparatore: \"{separatore}\"") +
+            (!string.IsNullOrEmpty(campoFile) ? $"\r\ncampo nome file: {campoFile}" : "") +
+            (spostaIn != "" ? $"\r\nal termine sposta in: {spostaIn}" : "");
+        var sw = Stopwatch.StartNew();
 
         // la tabella: rifatta, creata se manca, svuotata
         var esiste = await ctx.Cn.ExecuteScalarAsync<int?>("SELECT OBJECT_ID(@t, 'U')", new { t = tabella }) is not null;
@@ -453,17 +520,18 @@ public static class Mattoncini
             if (!string.IsNullOrEmpty(campoId)) colonne.Add($"[{campoId}] INT IDENTITY(1,1) PRIMARY KEY");
             colonne.AddRange(campi.Select(c => $"[{c}] NVARCHAR(MAX) NULL"));
             if (!string.IsNullOrEmpty(campoFile)) colonne.Add($"[{campoFile}] NVARCHAR(260) NULL");
-            await ctx.Cn.ExecuteAsync($"CREATE TABLE {tabella} ({string.Join(", ", colonne)})");
-            await ctx.Scrivi("WARN", $"IMPORTTXT: tabella {tabella} creata ({string.Join(", ", campi)})", step.IdStep);
+            var crea = $"CREATE TABLE {tabella} ({string.Join(", ", colonne)})";
+            await ctx.Cn.ExecuteAsync(crea);
+            await ctx.Scrivi("WARN", $"IMPORTTXT: tabella {tabella} creata ({string.Join(", ", campi)})", step.IdStep, dettaglio: crea);
         }
         else if (step.Flag("SvuotaTabella", false))
         {
             var tolte = await ctx.Cn.ExecuteAsync($"DELETE FROM {tabella}");
-            await ctx.Scrivi("INFO", $"IMPORTTXT: tabella {tabella} svuotata ({tolte} righe)", step.IdStep, tolte);
+            await ctx.Scrivi("INFO", $"IMPORTTXT: tabella {tabella} svuotata ({tolte} righe)", step.IdStep, tolte, $"DELETE FROM {tabella}");
         }
         if (file.Count == 0)
         {
-            await ctx.Scrivi("WARN", $"IMPORTTXT: nessun file per {maschera}", step.IdStep);
+            await ctx.Scrivi("WARN", $"IMPORTTXT: nessun file per {maschera}", step.IdStep, dettaglio: impostazioni);
             return;
         }
 
@@ -498,7 +566,7 @@ public static class Mattoncini
                     await bulk.WriteToServerAsync(dt);
                 }
                 totale += n;
-                await ctx.Scrivi("INFO", $"IMPORTTXT: {nomeFile} -> {n} righe in {tabella}", step.IdStep, n);
+                var spostato = "";
                 if (spostaIn != "")
                 {
                     var dest = Path.IsPathRooted(spostaIn) ? spostaIn : Path.Combine(cartella, spostaIn);
@@ -506,14 +574,17 @@ public static class Mattoncini
                     var destFile = Path.Combine(dest, nomeFile);
                     if (File.Exists(destFile)) destFile = Path.Combine(dest, $"{Path.GetFileNameWithoutExtension(nomeFile)}_{DateTime.Now:yyyyMMdd_HHmmss}{Path.GetExtension(nomeFile)}");
                     File.Move(f, destFile);
+                    spostato = $"\r\nspostato in: {destFile}";
                 }
+                await ctx.Scrivi("INFO", $"IMPORTTXT: {nomeFile} -> {n} righe in {tabella}", step.IdStep, n, $"{f}{spostato}");
             }
             catch (Exception ex) when (!interrompi)
             {
-                await ctx.Scrivi("ERRORE", $"IMPORTTXT: {Path.GetFileName(f)} saltato: {ex.Message}", step.IdStep);
+                await ctx.Scrivi("ERRORE", $"IMPORTTXT: {Path.GetFileName(f)} saltato: {ex.Message}", step.IdStep, dettaglio: f);
             }
         }
-        await ctx.Scrivi("INFO", $"IMPORTTXT: {file.Count} file, {totale} righe in {tabella}", step.IdStep, totale);
+        await ctx.Scrivi("INFO", $"IMPORTTXT: {file.Count} file, {totale} righe in {tabella} in {Durata(sw)}", step.IdStep, totale,
+            impostazioni + "\r\nfile letti:\r\n" + string.Join("\r\n", file), sw.ElapsedMilliseconds);
     }
 
     static string[] Fissi(string linea, List<Dictionary<string, string>> campi)
