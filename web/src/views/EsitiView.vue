@@ -104,6 +104,10 @@ async function caricaConfig() {
       params: { idProcesso: processoSel.value }
     })
     cfg.value = c
+    // una combo con una voce sola (Portiere, Vicino) parte gia' scelta
+    const unica = campo => campo?.tipo === 'combo' && campo.options?.length === 1 ? campo.options[0][campo.valueKey] : null
+    comuneVal.value = unica(c.campoComune)
+    operatoreVal.value = unica(c.campoOperatore)
   } catch (e) {
     errore.value = e.response?.data?.errore ?? "Errore nel caricamento della configurazione dell'azione"
   }
