@@ -69,8 +69,31 @@ e non ha credenziali sue: nei workflow i percorsi vanno scritti come UNC
 pagina Lista Valori). Il motore apre la sessione SMB all'avvio e la rinfresca
 a ogni giro di materializzazione; per altri server: `SMB_SERVER_2`, `SMB_SERVER_3`.
 Con le credenziali in tabella il servizio puo' girare come LocalSystem.
-Sul server `.176` sta in `C:\progetti\scheduler\motore`, gli script `.sql`
-in `C:\progetti\scheduler\script`.
+
+### Ge.C.O. New in produzione (server 10.1.0.8)
+
+Installato il 2026-09-17 dal PC di sviluppo, senza mettere mano al server:
+- cartella `C:\Progetti\scheduler\motore` (pubblicazione **self-contained win-x64**,
+  `dotnet publish motore/GecoMotore.csproj -c Release -r win-x64 --self-contained true`,
+  cosi' non dipende dal runtime installato), script `.sql` in `C:\Progetti\scheduler\script`,
+  log in `...\motore\logs`; dal PC si raggiunge come `\\10.1.0.8\c$\Progetti\scheduler`
+  (solo in VPN, share lenta: copiare con robocopy, mai con `/MIR` dalla cartella dell'API);
+- `appsettings.json` del servizio: stessa connection string dell'API (quella di
+  `C:\Progetti\GecoNew\appsettings.json`), `CartellaScript = C:\Progetti\scheduler\script`,
+  `FastReportUrl = http://localhost:8097/result` (il server FastReport gira sulla stessa
+  macchina), `SmtpDaListaValori = true`, `MittentePredefinito = info@speedyworld.it`
+  (l'account del relay in `SMTP_SERVER`); `Python` resta `python` (da verificare se
+  serviranno step ESEGUIPYTHON);
+- servizio Windows `GecoMotore` (nome visualizzato "GecoMotore (Ge.C.O. New)"), LocalSystem,
+  avvio automatico, riavvio dopo 60 s in caso di crash, registrato da remoto con
+  `sc.exe \\10.1.0.8 create GecoMotore binPath= "C:\Progetti\scheduler\motore\GecoMotore.exe" start= auto`;
+  si gestisce con `sc.exe \\10.1.0.8 stop|start|query GecoMotore` (l'output e' in italiano).
+  Aggiornamento: `stop`, copia della nuova pubblicazione (senza `appsettings.json`), `start`.
+- `SMB_SERVER` in Lista Valori su serverdb ha USER e PASS vuoti: finche' restano vuoti gli
+  step che leggono o scrivono su condivisioni di rete non funzionano.
+
+Sul server di Speedy Web (`.176`) il motore sta in `C:\progetti\scheduler\motore`, gli
+script `.sql` in `C:\progetti\scheduler\script`.
 
 Log: `logs\motore-AAAAMMGG.log` accanto all'exe (o `Motore:CartellaLog`), piu'
 il registro eventi di Windows per avvio/arresto.
