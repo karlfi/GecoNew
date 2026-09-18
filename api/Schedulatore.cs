@@ -184,17 +184,23 @@ static class Schedulatore
             return Results.Ok(new { ok = true });
         })).RequireAuthorization();
 
-        // storico: le ultime N, filtrabili per workflow e per stato
-        app.MapGet("/api/schedulatore/esecuzioni", async (int? idWorkflow, int? stato, int? top) =>
+        // storico: filtrabile per workflow, stato e intervallo di date (dal/al in UTC, sulla data
+        // effettiva: inizio se e' partita, altrimenti la prevista). Senza intervallo: le ultime N
+        // dalla piu' recente; con crescente=1 in ordine di data, cosi' la scheda del workflow
+        // parte da ieri e le pianificate future stanno in fondo (richiesta di Carlo, 2026-09-18)
+        app.MapGet("/api/schedulatore/esecuzioni", async (int? idWorkflow, int? stato, int? top, DateTime? dal, DateTime? al, bool? crescente) =>
         {
             await using var cn = new SqlConnection(connString());
+            var ordine = crescente == true ? "ORDER BY COALESCE(InizioUtc, DataOraPrevista), IdEsecuzione" : "ORDER BY IdEsecuzione DESC";
             return Results.Ok(Utc(await cn.QueryAsync($@"
                 SELECT TOP {Math.Clamp(top ?? 200, 1, 2000)}
                        IdEsecuzione, IdWorkflow, NomeWorkflow, IdPianificazione, IdDettaglio, Stato, StatoNome, Origine,
                        GruppoConcorrenza, DataOraPrevista, InizioUtc, FineUtc, MachineName, NomeUtente, Avanzamento, Esito, DataCreazione
                 FROM dbo.WF_vw_Esecuzione
                 WHERE (@idWorkflow IS NULL OR IdWorkflow = @idWorkflow) AND (@stato IS NULL OR Stato = @stato)
-                ORDER BY IdEsecuzione DESC", new { idWorkflow, stato })));
+                  AND (@dal IS NULL OR COALESCE(InizioUtc, DataOraPrevista) >= @dal)
+                  AND (@al IS NULL OR COALESCE(InizioUtc, DataOraPrevista) < @al)
+                {ordine}", new { idWorkflow, stato, dal = DaUtc(dal), al = DaUtc(al) })));
         }).RequireAuthorization();
 
         // una esecuzione col suo log: una chiamata sola, la pagina la ripete finche' e' in corso
@@ -505,6 +511,10 @@ static class Schedulatore
         return DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var d)
             ? d.UtcDateTime : throw new ArgumentException($"Data non valida: {s}");
     }
+    // una data dalla query string (ISO con la Z): il binding la porta all'ora locale del server,
+    // qui si torna a UTC; senza indicazione di fuso si intende gia' UTC
+    static DateTime? DaUtc(DateTime? d) => d is null ? null
+        : d.Value.Kind == DateTimeKind.Local ? d.Value.ToUniversalTime() : DateTime.SpecifyKind(d.Value, DateTimeKind.Utc);
 }
 
 // === Parser dei "file step" legacy (.stp, simil-INI) ===

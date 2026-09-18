@@ -254,14 +254,40 @@ function provaIlCron(idPian) {
   }, 400)
 }
 
-// --- esecuzioni del workflow ---
+// --- esecuzioni del workflow: in ordine di data, da ieri in poi (quelle appena fatte in
+// alto, le pianificate future in fondo); scorciatoie e due date libere per cercare indietro ---
 const esecuzioni = ref([])
+const inizioGiorno = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x }
+const giorniFa = n => { const x = inizioGiorno(new Date()); x.setDate(x.getDate() - n); return x }
+const esecDal = ref(giorniFa(1))
+const esecAl = ref(null)
+const esecPreset = ref('ieri')
 async function caricaEsecuzioni() {
   if (!dettaglio.value) return
   try {
-    esecuzioni.value = (await api.get('/schedulatore/esecuzioni', { params: { idWorkflow: dettaglio.value.IdWorkflow, top: 100 } })).data
+    const params = { idWorkflow: dettaglio.value.IdWorkflow, top: 500, crescente: true }
+    if (esecDal.value) params.dal = inizioGiorno(esecDal.value).toISOString()
+    if (esecAl.value) { const a = inizioGiorno(esecAl.value); a.setDate(a.getDate() + 1); params.al = a.toISOString() }
+    esecuzioni.value = (await api.get('/schedulatore/esecuzioni', { params })).data
   } catch (e) { errore(e) }
 }
+async function presetEsec(quale) {
+  esecPreset.value = quale
+  esecAl.value = null
+  if (quale === 'ieri') esecDal.value = giorniFa(1)
+  else if (quale === '7') esecDal.value = giorniFa(7)
+  else if (quale === '30') esecDal.value = giorniFa(30)
+  else if (quale === 'ultima') {
+    // dal giorno dell'ultima esecuzione finita (bene o male) del workflow
+    try {
+      const { data } = await api.get('/schedulatore/esecuzioni', { params: { idWorkflow: dettaglio.value.IdWorkflow, top: 50 } })
+      const ultima = data.find(e => e.Stato === 2 || e.Stato === 3)
+      esecDal.value = ultima ? inizioGiorno(new Date(ultima.InizioUtc ?? ultima.DataOraPrevista)) : giorniFa(30)
+    } catch (e) { errore(e); return }
+  }
+  await caricaEsecuzioni()
+}
+function dateEsecCambiate() { esecPreset.value = ''; caricaEsecuzioni() }
 const nomeFile = p => (p ?? '').split(/[\\/]/).pop()
 </script>
 
@@ -431,7 +457,16 @@ const nomeFile = p => (p ?? '').split(/[\\/]/).pop()
 
             <!-- esecuzioni -->
             <TabPanel value="esec">
-              <div class="barra"><Button icon="pi pi-refresh" label="Aggiorna" text size="small" @click="caricaEsecuzioni" /></div>
+              <div class="barra">
+                <label>Dal <DatePicker v-model="esecDal" dateFormat="dd/mm/yy" showIcon size="small" :inputStyle="{ width: '6.5rem' }" @update:modelValue="dateEsecCambiate" /></label>
+                <label>al <DatePicker v-model="esecAl" dateFormat="dd/mm/yy" showIcon showButtonBar size="small" placeholder="in avanti" :inputStyle="{ width: '6.5rem' }" @update:modelValue="dateEsecCambiate" /></label>
+                <Button label="Ieri" size="small" :text="esecPreset !== 'ieri'" :outlined="esecPreset === 'ieri'" @click="presetEsec('ieri')" />
+                <Button label="Dall'ultima eseguita" size="small" :text="esecPreset !== 'ultima'" :outlined="esecPreset === 'ultima'" @click="presetEsec('ultima')" />
+                <Button label="7 giorni" size="small" :text="esecPreset !== '7'" :outlined="esecPreset === '7'" @click="presetEsec('7')" />
+                <Button label="30 giorni" size="small" :text="esecPreset !== '30'" :outlined="esecPreset === '30'" @click="presetEsec('30')" />
+                <Button icon="pi pi-refresh" label="Aggiorna" text size="small" @click="caricaEsecuzioni" />
+                <small class="nota">{{ esecuzioni.length }} esecuzioni dalla piu' vecchia; le pianificate future sono in fondo</small>
+              </div>
               <DataTable :value="esecuzioni" size="small" stripedRows selectionMode="single" @row-click="e => apriEsec(e.data.IdEsecuzione)" class="esec">
                 <Column field="IdEsecuzione" header="#" style="width: 5rem" />
                 <Column header="Stato" style="width: 9rem"><template #body="{ data }"><Tag :value="data.StatoNome" :severity="severitaStato(data.Stato)" /></template></Column>
