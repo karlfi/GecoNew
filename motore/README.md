@@ -37,8 +37,8 @@ ESEGUIPYTHON: `Script` (relativo a `CartellaScript` o assoluto), `Argomenti`
 `Motore:Python` di appsettings). Lo script trova nell'ambiente `WF_ID_ESECUZIONE`,
 `WF_ID_WORKFLOW`, `WF_ID_STEP`, `WF_PARAMETRI` (JSON), `WF_OUTPUT`, `WF_CONNSTRING`
 (la connection string del motore, cosi' gli script non la portano scritta dentro:
-vedi `scheduler-script/poste/speedy.py`) e, dentro un sottopasso, `WF_RECORD` (JSON
-del record corrente). Quello che stampa va nel
+un esempio d'uso e' `scheduler-script/poste/speedy.py` nel repo di Speedy Web) e, dentro
+un sottopasso, `WF_RECORD` (JSON del record corrente). Quello che stampa va nel
 dettaglio della riga di log, insieme al comando lanciato; exit code diverso da
 zero = step in errore (col dettaglio sulla riga ERRORE).
 
