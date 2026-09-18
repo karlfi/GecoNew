@@ -12,10 +12,12 @@ import ContextMenu from 'primevue/contextmenu'
 import Message from 'primevue/message'
 import Button from 'primevue/button'
 import InputText from 'primevue/inputtext'
+import Select from 'primevue/select'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
 import ProgressSpinner from 'primevue/progressspinner'
-import { FilterMatchMode } from '@primevue/core/api'
+import { FilterMatchMode, FilterService } from '@primevue/core/api'
+import { rigaExcel } from '../lib/esporta'
 
 const props = defineProps({
   idQuery: { type: Number, default: null },
@@ -36,6 +38,67 @@ const righe = ref([])
 const righeFiltrate = ref(null)
 const filters = ref({ global: { value: null, matchMode: FilterMatchMode.CONTAINS } })
 
+// --- filtri di colonna per tipo. Testo: contiene (predefinito), inizia con, finisce con,
+// uguale, diverso, vuoto, non vuoto. Numeri e date: uguale (predefinito), diverso, maggiore,
+// minore, intervallo, vuoto, non vuoto. Il tipo si ricava dai valori della colonna; per
+// vuoto e non vuoto il valore del filtro e' un segnaposto (senza valore PrimeVue lo ignora).
+const tipi = ref({})
+const eIsoData = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}(T|$)/.test(v)
+function tipiColonne(cols, righe) {
+  const t = {}
+  for (const c of cols) {
+    const v = righe.map(r => r[c]).filter(x => x != null && x !== '')
+    t[c] = !v.length ? 'testo' : v.every(x => typeof x === 'number') ? 'numero' : v.every(eIsoData) ? 'data' : 'testo'
+  }
+  return t
+}
+// valore confrontabile: numero, oppure istante per le date (dal valore ISO o dalla casella data)
+const norm = v => {
+  if (v == null || v === '') return null
+  if (typeof v === 'number') return v
+  const s = String(v).trim()
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) { const d = new Date(s.length > 10 ? s : s + 'T00:00:00'); return isNaN(d) ? null : d.getTime() }
+  const n = Number(s.replace(',', '.'))
+  return isNaN(n) ? null : n
+}
+const giorno = t => new Date(t).setHours(0, 0, 0, 0)
+// con un filtro data si confronta il giorno, senza l'orario che la cella puo' avere
+const cfr = (v, f) => { const a = norm(v), b = norm(f); return { a: a != null && eIsoData(String(f).trim()) ? giorno(a) : a, b: b != null && eIsoData(String(f).trim()) ? giorno(b) : b } }
+const vuota = v => v == null || `${v}`.trim() === ''
+FilterService.register('vuoto', v => vuota(v))
+FilterService.register('pieno', v => !vuota(v))
+FilterService.register('ugualeN', (v, f) => { const { a, b } = cfr(v, f); return b == null ? true : a != null && a === b })
+FilterService.register('diversoN', (v, f) => { const { a, b } = cfr(v, f); return b == null ? true : a == null || a !== b })
+FilterService.register('maggiore', (v, f) => { const { a, b } = cfr(v, f); return b == null ? true : a != null && a > b })
+FilterService.register('minore', (v, f) => { const { a, b } = cfr(v, f); return b == null ? true : a != null && a < b })
+FilterService.register('intervallo', (v, f) => {
+  if (!Array.isArray(f)) return true
+  const da = cfr(v, f[0]), a = cfr(v, f[1])
+  if (da.b == null && a.b == null) return true
+  if (norm(v) == null) return false
+  return (da.b == null || da.a >= da.b) && (a.b == null || a.a <= a.b)
+})
+const MODI_TESTO = [
+  { label: 'contiene', value: FilterMatchMode.CONTAINS }, { label: 'inizia con', value: FilterMatchMode.STARTS_WITH },
+  { label: 'finisce con', value: FilterMatchMode.ENDS_WITH }, { label: 'uguale', value: FilterMatchMode.EQUALS },
+  { label: 'diverso', value: FilterMatchMode.NOT_EQUALS }, { label: 'vuoto', value: 'vuoto' }, { label: 'non vuoto', value: 'pieno' }
+]
+const MODI_NUMERO = [
+  { label: 'uguale', value: 'ugualeN' }, { label: 'diverso', value: 'diversoN' }, { label: 'maggiore', value: 'maggiore' },
+  { label: 'minore', value: 'minore' }, { label: 'intervallo', value: 'intervallo' }, { label: 'vuoto', value: 'vuoto' }, { label: 'non vuoto', value: 'pieno' }
+]
+const modiPer = c => tipi.value[c] === 'testo' ? MODI_TESTO : MODI_NUMERO
+const modoPredefinito = c => tipi.value[c] === 'testo' ? FilterMatchMode.CONTAINS : 'ugualeN'
+const tipoInput = c => tipi.value[c] === 'data' ? 'date' : tipi.value[c] === 'numero' ? 'number' : 'text'
+function cambiaModo(filterModel, filterCallback) {
+  const m = filterModel.matchMode
+  if (m === 'vuoto' || m === 'pieno') filterModel.value = '*'
+  else if (m === 'intervallo') filterModel.value = ['', '']
+  else if (filterModel.value === '*' || Array.isArray(filterModel.value)) filterModel.value = null
+  filterCallback()
+}
+
+
 // colonne speciali: query1#.., report1#.., web1#.., pagina1#.. = azioni del tasto destro
 const RX_AZIONE = /^(query|report|web|pagina)(\d)#(.*)$/i
 
@@ -46,7 +109,7 @@ const colonnaColore = computed(() => colonne.value.find(c => c.toLowerCase() ===
 
 function initFiltri(cols) {
   const f = { global: { value: null, matchMode: FilterMatchMode.CONTAINS } }
-  for (const c of cols) f[c] = { value: null, matchMode: FilterMatchMode.CONTAINS }
+  for (const c of cols) f[c] = { value: null, matchMode: modoPredefinito(c) }
   filters.value = f
 }
 
@@ -66,9 +129,10 @@ async function carica() {
     titolo.value = data.titolo
     descrizione.value = data.descrizione
     colonne.value = data.colonne
-    initFiltri(data.colonne)
     righe.value = data.righe.map(arr =>
       Object.fromEntries(data.colonne.map((c, i) => [c, arr[i]])))
+    tipi.value = tipiColonne(data.colonne, righe.value)
+    initFiltri(data.colonne)
     righeFiltrate.value = null
   } catch (e) {
     errore.value = e.response?.data?.errore ?? 'Errore nel caricamento dei dati'
@@ -123,7 +187,7 @@ async function esportaExcel() {
     ws.addRow(cols)
     ws.getRow(1).font = { bold: true }
     const dati = righeFiltrate.value ?? righe.value
-    for (const r of dati) ws.addRow(cols.map(c => valoreExcel(r[c])))
+    for (const r of dati) rigaExcel(ws, cols.map(c => r[c] ?? ''))
     cols.forEach((c, i) => {
       ws.getColumn(i + 1).width = Math.min(45, Math.max(12, c.length + 4))
     })
@@ -139,14 +203,6 @@ async function esportaExcel() {
   } finally {
     esportazione.value = false
   }
-}
-function valoreExcel(v) {
-  if (v == null) return ''
-  if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v)) {
-    const d = new Date(v)
-    return isNaN(d) ? v : d
-  }
-  return v
 }
 
 // --- menu del tasto destro ---
@@ -314,12 +370,18 @@ function eseguiAzione(tipo, valore, etichetta) {
       >
         <template #body="{ data }">{{ formatta(data[c]) }}</template>
         <template #filter="{ filterModel, filterCallback }">
-          <InputText
-            v-model="filterModel.value"
-            @input="filterCallback()"
-            size="small"
-            class="filtro-colonna"
-          />
+          <div class="filtro-cella">
+            <select v-model="filterModel.matchMode" class="modo-filtro" :title="'Colonna di tipo ' + (tipi[c] || 'testo') + ': come filtrare'"
+              @change="cambiaModo(filterModel, filterCallback)">
+              <option v-for="m in modiPer(c)" :key="m.value" :value="m.value">{{ m.label }}</option>
+            </select>
+            <template v-if="filterModel.matchMode === 'intervallo'">
+              <InputText v-model="filterModel.value[0]" :type="tipoInput(c)" step="any" placeholder="da" @input="filterCallback()" size="small" class="filtro-colonna corto" />
+              <InputText v-model="filterModel.value[1]" :type="tipoInput(c)" step="any" placeholder="a" @input="filterCallback()" size="small" class="filtro-colonna corto" />
+            </template>
+            <InputText v-else-if="filterModel.matchMode !== 'vuoto' && filterModel.matchMode !== 'pieno'"
+              v-model="filterModel.value" :type="tipoInput(c)" step="any" @input="filterCallback()" size="small" class="filtro-colonna" />
+          </div>
         </template>
       </Column>
       <template #empty>Nessun dato trovato</template>
@@ -417,4 +479,9 @@ function eseguiAzione(tipo, valore, etichetta) {
   min-height: 60vh;
   border: 0;
 }
+.filtro-cella { display: flex; align-items: center; gap: .25rem; }
+.modo-filtro { flex: none; font: inherit; font-size: .78rem; padding: .25rem .2rem; border: 1px solid var(--p-inputtext-border-color); border-radius: 6px; background: var(--p-inputtext-background); color: var(--p-inputtext-color); }
+.filtro-colonna { min-width: 5rem; flex: 1; }
+.filtro-colonna.corto { min-width: 4rem; }
+.filtro-colonna[type="date"] { min-width: 8.5rem; }
 </style>
