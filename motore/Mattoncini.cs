@@ -315,6 +315,8 @@ public static class Mattoncini
         psi.Environment["WF_ID_ESECUZIONE"] = ctx.IdEsecuzione.ToString();
         psi.Environment["WF_ID_WORKFLOW"] = ctx.IdWorkflow.ToString();
         psi.Environment["WF_ID_STEP"] = step.IdStep.ToString();
+        // la connessione al DB del motore: cosi' gli script non la portano scritta dentro
+        psi.Environment["WF_CONNSTRING"] = ctx.O.ConnString;
         psi.Environment["WF_PARAMETRI"] = System.Text.Json.JsonSerializer.Serialize(ctx.Parametri);
         if (ctx.Record is not null)
             psi.Environment["WF_RECORD"] = System.Text.Json.JsonSerializer.Serialize(ctx.Record.ToDictionary(k => k.Key, k => (object?)Sostituzioni.Segnaposto(k.Value)));
