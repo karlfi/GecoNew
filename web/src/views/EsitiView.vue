@@ -55,6 +55,10 @@ const barcodeRef = ref(null)
 
 // header bloccato quando ci sono barcode in lista (come il legacy)
 const headerBloccato = computed(() => righe.value.length > 0)
+// per le azioni con consegna a terzi (portiere, vicino, terzo) nome del terzo e qualifica
+// restano modificabili anche coi barcode in lista: ogni barcode prende i valori del momento
+// in cui viene letto (colonna Attributo), quindi possono cambiare da un barcode all'altro
+const terziLiberi = computed(() => !!cfg.value?.flags?.bTerzi)
 
 const numeroDocumenti = computed(() => righe.value.length)
 const confermaAbilitata = computed(() =>
@@ -300,16 +304,16 @@ function reset() {
           v-else-if="cfg.campoComune.tipo === 'date'"
           v-model="comuneVal" dateFormat="dd/mm/yy" showIcon :disabled="headerBloccato"
         />
-        <InputText v-else v-model="comuneVal" fluid :disabled="headerBloccato" />
+        <InputText v-else v-model="comuneVal" fluid :disabled="headerBloccato && !terziLiberi" />
       </div>
 
-      <!-- campo dinamico Operatore -->
+      <!-- campo dinamico Operatore (la qualifica, per le consegne a terzi, resta modificabile) -->
       <div v-if="cfg?.campoOperatore" class="campo">
         <label>{{ cfg.campoOperatore.label }}</label>
         <Select
           v-model="operatoreVal" :options="cfg.campoOperatore.options"
           :optionValue="cfg.campoOperatore.valueKey" :optionLabel="cfg.campoOperatore.labelKey"
-          filter showClear fluid :disabled="headerBloccato"
+          filter showClear fluid :disabled="headerBloccato && !terziLiberi"
         />
       </div>
 
