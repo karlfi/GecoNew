@@ -11,9 +11,10 @@ import Column from 'primevue/column'
 import Button from 'primevue/button'
 import Checkbox from 'primevue/checkbox'
 import Select from 'primevue/select'
+import DatePicker from 'primevue/datepicker'
 import Tag from 'primevue/tag'
 import SchedulatoreEsecuzione from '../components/SchedulatoreEsecuzione.vue'
-import { severitaStato, dataOra, durata, messaggioErrore, STATI } from '../lib/schedulatore'
+import { severitaStato, dataOra, durata, messaggioErrore, STATI, giorniFa, parametriFinestra } from '../lib/schedulatore'
 
 const toast = useToast()
 const nav = useNavStore()
@@ -21,9 +22,14 @@ const nav = useNavStore()
 const workflow = ref([])
 const prossime = ref([])
 const giorni = ref(7)
+// esecuzioni in ordine di data da ieri (quelle appena fatte in alto, le pianificate future in
+// fondo), con le stesse scorciatoie e date libere della scheda del workflow
 const esecuzioni = ref([])
 const filtroStato = ref(null)
 const filtroWorkflow = ref(null)
+const esecDal = ref(giorniFa(1))
+const esecAl = ref(null)
+const esecPreset = ref('ieri')
 const autoAggiorna = ref(true)
 const caricamento = ref(false)
 let timer = null
@@ -33,7 +39,7 @@ async function carica() {
   try {
     const [p, e] = await Promise.all([
       api.get('/schedulatore/prossime', { params: { giorni: giorni.value } }),
-      api.get('/schedulatore/esecuzioni', { params: { idWorkflow: filtroWorkflow.value, stato: filtroStato.value, top: 300 } })
+      api.get('/schedulatore/esecuzioni', { params: { idWorkflow: filtroWorkflow.value, stato: filtroStato.value, top: 1000, crescente: true, ...parametriFinestra(esecDal.value, esecAl.value) } })
     ])
     prossime.value = p.data
     esecuzioni.value = e.data
@@ -56,6 +62,13 @@ const apriEsec = id => { idEsec.value = id; dialogEsec.value = true }
 const apriWorkflow = id => nav.drill({ tipo: 'schedulatore', idWorkflow: id })
 const severitaFonte = f => ({ CRON: 'info', ONESHOT: 'contrast', CODA: 'warn' }[f] ?? 'secondary')
 const giorniOpzioni = [1, 3, 7, 14, 30]
+function presetEsec(quale) {
+  esecPreset.value = quale
+  esecAl.value = null
+  esecDal.value = giorniFa({ ieri: 1, 7: 7, 30: 30 }[quale] ?? 1)
+  carica()
+}
+function dateEsecCambiate() { esecPreset.value = ''; carica() }
 </script>
 
 <template>
@@ -102,6 +115,12 @@ const giorniOpzioni = [1, 3, 7, 14, 30]
         Esecuzioni <Tag :value="String(esecuzioni.length)" severity="secondary" />
         <Select v-model="filtroWorkflow" :options="workflow" optionLabel="Nome" optionValue="IdWorkflow" placeholder="tutti i workflow" showClear size="small" class="filtro" @change="carica" />
         <Select v-model="filtroStato" :options="STATI" optionLabel="Nome" optionValue="Codice" placeholder="tutti gli stati" showClear size="small" class="filtro" @change="carica" />
+        <label class="filtro">dal <DatePicker v-model="esecDal" dateFormat="dd/mm/yy" showIcon size="small" :inputStyle="{ width: '6.5rem' }" @update:modelValue="dateEsecCambiate" /></label>
+        <label class="filtro">al <DatePicker v-model="esecAl" dateFormat="dd/mm/yy" showIcon showButtonBar size="small" placeholder="in avanti" :inputStyle="{ width: '6.5rem' }" @update:modelValue="dateEsecCambiate" /></label>
+        <Button label="Ieri" size="small" :text="esecPreset !== 'ieri'" :outlined="esecPreset === 'ieri'" @click="presetEsec('ieri')" />
+        <Button label="7 giorni" size="small" :text="esecPreset !== '7'" :outlined="esecPreset === '7'" @click="presetEsec('7')" />
+        <Button label="30 giorni" size="small" :text="esecPreset !== '30'" :outlined="esecPreset === '30'" @click="presetEsec('30')" />
+        <small class="nota">dalla piu' vecchia; le pianificate future sono in fondo</small>
       </h3>
       <DataTable :value="esecuzioni" size="small" stripedRows selectionMode="single" @row-click="e => apriEsec(e.data.IdEsecuzione)" class="esec"
         paginator :rows="25">

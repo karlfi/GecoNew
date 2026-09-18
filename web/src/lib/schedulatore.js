@@ -9,6 +9,16 @@ export const STATI = [
 ]
 
 export const dataOra = v => v ? new Date(v).toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' }) : '—'
+// finestre di date per gli elenchi di esecuzioni (ora locale, a mezzanotte)
+export const inizioGiorno = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x }
+export const giorniFa = n => { const x = inizioGiorno(new Date()); x.setDate(x.getDate() - n); return x }
+// i parametri dal/al per /schedulatore/esecuzioni: "al" e' incluso fino a fine giornata
+export function parametriFinestra(dal, al) {
+  const p = {}
+  if (dal) p.dal = inizioGiorno(dal).toISOString()
+  if (al) { const a = inizioGiorno(al); a.setDate(a.getDate() + 1); p.al = a.toISOString() }
+  return p
+}
 export const oraSec = v => v ? new Date(v).toLocaleTimeString('it-IT') : ''
 
 export function durata(inizio, fine) {

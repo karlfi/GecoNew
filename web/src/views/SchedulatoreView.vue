@@ -26,7 +26,7 @@ import SchedulatoreStep from '../components/SchedulatoreStep.vue'
 import SchedulatoreEsecuzione from '../components/SchedulatoreEsecuzione.vue'
 import CronBuilder from '../components/CronBuilder.vue'
 import { descrivi as descriviCron } from '../lib/cron'
-import { severitaStato, dataOra, durata, messaggioErrore, fileBase64 } from '../lib/schedulatore'
+import { severitaStato, dataOra, durata, messaggioErrore, fileBase64, inizioGiorno, giorniFa, parametriFinestra } from '../lib/schedulatore'
 
 const props = defineProps({ idWorkflow: { type: Number, default: null } })
 const toast = useToast()
@@ -257,17 +257,13 @@ function provaIlCron(idPian) {
 // --- esecuzioni del workflow: in ordine di data, da ieri in poi (quelle appena fatte in
 // alto, le pianificate future in fondo); scorciatoie e due date libere per cercare indietro ---
 const esecuzioni = ref([])
-const inizioGiorno = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x }
-const giorniFa = n => { const x = inizioGiorno(new Date()); x.setDate(x.getDate() - n); return x }
 const esecDal = ref(giorniFa(1))
 const esecAl = ref(null)
 const esecPreset = ref('ieri')
 async function caricaEsecuzioni() {
   if (!dettaglio.value) return
   try {
-    const params = { idWorkflow: dettaglio.value.IdWorkflow, top: 500, crescente: true }
-    if (esecDal.value) params.dal = inizioGiorno(esecDal.value).toISOString()
-    if (esecAl.value) { const a = inizioGiorno(esecAl.value); a.setDate(a.getDate() + 1); params.al = a.toISOString() }
+    const params = { idWorkflow: dettaglio.value.IdWorkflow, top: 500, crescente: true, ...parametriFinestra(esecDal.value, esecAl.value) }
     esecuzioni.value = (await api.get('/schedulatore/esecuzioni', { params })).data
   } catch (e) { errore(e) }
 }
