@@ -1,4 +1,4 @@
-using System.Data;
+﻿using System.Data;
 using System.Globalization;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -369,7 +369,11 @@ static class Schedulatore
         });
         p.Add("@IdPianificazione", id, DbType.Int32, ParameterDirection.InputOutput);
         await cn.ExecuteAsync("dbo.WF_usp_Pianificazione_Salva", p, commandType: CommandType.StoredProcedure);
-        return p.Get<int>("@IdPianificazione");
+        var idPianificazione = p.Get<int>("@IdPianificazione");
+        // orizzonte, data finale, parametri o stato cambiati: le occorrenze di ogni ricorrenza seguono
+        foreach (var idDettaglio in await cn.QueryAsync<int>("SELECT IdDettaglio FROM dbo.WF_PianificazioneDettaglio WHERE IdPianificazione = @idPianificazione", new { idPianificazione }))
+            await RigeneraOccorrenze(cn, idDettaglio);
+        return idPianificazione;
     }
 
     static async Task<int> SalvaDettaglio(SqlConnection cn, int? id, int idPianificazione, JsonElement b)
@@ -385,8 +389,56 @@ static class Schedulatore
         });
         p.Add("@IdDettaglio", id, DbType.Int32, ParameterDirection.InputOutput);
         await cn.ExecuteAsync("dbo.WF_usp_Dettaglio_Salva", p, commandType: CommandType.StoredProcedure);
-        return p.Get<int>("@IdDettaglio");
+        // Una ricorrenza modificata: le occorrenze gia' materializzate con la regola vecchia restano in
+        // WF_Esecuzione (la stored di materializzazione aggiunge e basta) e continuerebbero a partire
+        // agli orari di prima. Si tolgono tutte quelle ancora pianificate: il motore rigenera quelle
+        // giuste al primo giro. (E' successo con IMPORT-01_POSTE: 8:30 cambiato in 3:00, le 8:30 restavano.)
+        var idDettaglio = p.Get<int>("@IdDettaglio");
+        await RigeneraOccorrenze(cn, idDettaglio);
+        return idDettaglio;
     }
+
+    // Ricalcola le occorrenze pianificate di una ricorrenza: toglie quelle ancora da eseguire
+    // (WF_usp_Dettaglio_SvuotaOccorrenze) e le ricrea con la regola attuale, come fa il motore nella
+    // materializzazione (stessa stored WF_usp_Esecuzione_Pianifica, stesso orizzonte, stessa
+    // tolleranza per le ONESHOT). Cosi' l'agenda e' giusta subito, senza aspettare il giro del motore.
+    // Ricorrenza o pianificazione non attiva, o pianificazione cancellata: si tolgono e basta.
+    static async Task<(int tolte, int create)> RigeneraOccorrenze(SqlConnection cn, int idDettaglio)
+    {
+        var p = new DynamicParameters(new { IdDettaglio = idDettaglio });
+        p.Add("@Svuotate", dbType: DbType.Int32, direction: ParameterDirection.Output);
+        await cn.ExecuteAsync("dbo.WF_usp_Dettaglio_SvuotaOccorrenze", p, commandType: CommandType.StoredProcedure);
+        var tolte = p.Get<int?>("@Svuotate") ?? 0;
+        var r = await cn.QueryFirstOrDefaultAsync(@"
+            SELECT m.IdPianificazione, m.IdWorkflow, m.GruppoConcorrenza, m.Parametri, m.OrizzonteGiorni, m.DataOraFinale,
+                   m.Attiva AS MasterAttiva, m.DataCancellazione,
+                   d.TipoRicorrenza, d.CronExpr, d.DataOraSingola, d.Attiva AS DettaglioAttivo, d.Parametri AS ParametriDet
+            FROM dbo.WF_PianificazioneMaster m
+            JOIN dbo.WF_PianificazioneDettaglio d ON d.IdPianificazione = m.IdPianificazione
+            WHERE d.IdDettaglio = @idDettaglio", new { idDettaglio });
+        if (r is null || !(bool)r.MasterAttiva || r.DataCancellazione is not null || !(bool)r.DettaglioAttivo) return (tolte, 0);
+        var adesso = DateTime.UtcNow;
+        var orizzonte = adesso.AddDays((int?)r.OrizzonteGiorni ?? 30);
+        var limite = r.DataOraFinale is DateTime fine && UtcDb(fine) < orizzonte ? UtcDb(fine) : orizzonte;
+        var occorrenze = new List<DateTime>();
+        if ((string)r.TipoRicorrenza == "ONESHOT")
+        {
+            if (r.DataOraSingola is DateTime s && UtcDb(s) > adesso.AddMinutes(-15) && UtcDb(s) <= limite) occorrenze.Add(UtcDb(s));
+        }
+        else if (!string.IsNullOrWhiteSpace((string?)r.CronExpr))
+            occorrenze.AddRange(Cron((string)r.CronExpr).GetOccurrences(adesso, limite, TimeZoneInfo.Local).Take(1000));
+        string? parametri = (string?)r.ParametriDet ?? (string?)r.Parametri;
+        foreach (var quando in occorrenze)
+            await cn.ExecuteAsync("dbo.WF_usp_Esecuzione_Pianifica", new
+            {
+                IdPianificazione = (int)r.IdPianificazione, IdDettaglio = idDettaglio, IdWorkflow = (int)r.IdWorkflow,
+                DataOraPrevista = quando, GruppoConcorrenza = (string?)r.GruppoConcorrenza, Parametri = parametri,
+            }, commandType: CommandType.StoredProcedure);
+        return (tolte, occorrenze.Count);
+    }
+
+    // le date del DB sono UTC senza Kind: si marcano cosi' (come Utc() nel motore)
+    static DateTime UtcDb(DateTime d) => d.Kind == DateTimeKind.Utc ? d : DateTime.SpecifyKind(d, DateTimeKind.Utc);
 
     // ---- cron ------------------------------------------------------------------------
     // cinque campi (min ora giorno mese sett.) come il motore; sei = coi secondi davanti

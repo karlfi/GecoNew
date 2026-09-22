@@ -932,6 +932,19 @@ BEGIN
 END
 GO
 
+/* Toglie le occorrenze ancora pianificate (Stato 0) di una ricorrenza: si usa quando la ricorrenza
+   cambia (cron diverso, disattivata), perche' WF_usp_Esecuzione_Pianifica aggiunge solo e non toglie
+   mai; il motore rigenera quelle giuste al primo giro di materializzazione. */
+CREATE OR ALTER PROCEDURE dbo.WF_usp_Dettaglio_SvuotaOccorrenze
+    @IdDettaglio INT,
+    @Svuotate    INT = NULL OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DELETE FROM dbo.WF_Esecuzione WHERE IdDettaglio = @IdDettaglio AND Stato = 0 AND Origine = 'SCHEDULER';
+    SET @Svuotate = @@ROWCOUNT;
+END
+GO
 /* ----------------------------------------------------------------------------
    WF_usp_Workflow_Delete
    Elimina un workflow e tutti i suoi step/sottopassi. La DELETE massiva sugli
