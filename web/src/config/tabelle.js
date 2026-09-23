@@ -90,6 +90,11 @@ export function isVideataSpedGiorno(videata) {
   return videata === 'Assegnagiri' || videata === 'Spostageo'
 }
 
+// videate legacy "Giri - Assegna a Driver" e "Giri - Ottimizza percorso": Piano della giornata
+export function isVideataPianoGiornata(videata) {
+  return videata === 'Assegnadriver' || videata === 'Ottimizza'
+}
+
 // videata legacy "Nuova Spedizione Parcel Speedy"
 export function isVideataSpedNuova(videata) {
   return videata === 'Nuovaspedizione'
@@ -219,6 +224,7 @@ export function navDaVideata(videata, parametri = '') {
   if (isVideataEsiti(v)) return { tipo: 'esiti', parametri: parametri ?? '' }
   if (isVideataGiriMappa(v)) return { tipo: 'giri-mappa' }
   if (isVideataSpedGiorno(v)) return { tipo: 'sped-giorno' }
+  if (isVideataPianoGiornata(v)) return { tipo: 'piano-giornata' }
   if (isVideataSpedNuova(v)) return { tipo: 'sped-nuova' }
   if (isVideataAccettazioneFile(v)) return { tipo: 'accettazione-file', parametri: parametri ?? '' }
   if (isVideataAccettazioneBanco(v)) return { tipo: 'accettazione-banco', parametri: parametri ?? '' }
@@ -283,6 +289,7 @@ export function navDaLink(voce) {
   if (link === '/esiti') return { tipo: 'esiti', parametri: voce.Parametri ?? '' }
   if (link === '/giri-mappa') return { tipo: 'giri-mappa' }
   if (link === '/spedizioni-giorno') return { tipo: 'sped-giorno' }
+  if (link === '/piano-giornata') return { tipo: 'piano-giornata' }
   if (link === '/export-hr') return { tipo: 'export-hr' }
   if (link === '/presenze-ts') return { tipo: 'presenze-ts' }
   if (link === '/unilav') return { tipo: 'unilav' }
