@@ -95,6 +95,14 @@ async function carica(silenzioso = false) {
     giri.value = d.giri; driver.value = d.driver; senzaGiro.value = d.senzaGiro
     spedizioni.value = s.spedizioni
     if (!shapes.value.length) shapes.value = (await api.get('/giri/shapes')).data
+    // giorno ancora senza assegnazioni: i giri prendono da soli il driver dell'ultima volta (il predefinito)
+    if (!silenzioso && !giri.value.some(g => g.idDriver) && giri.value.some(g => g.nSped && g.idDriverDefault)) {
+      const { data: r } = await api.post('/piano/driver-predefiniti', { data: dataIso.value })
+      if (r.assegnati) {
+        avviso('info', 'Driver proposti', `${r.assegnati} giri hanno preso il driver dell'ultima volta: cambia quello che serve`, 5000)
+        giri.value = (await api.get('/piano', { params: { data: dataIso.value } })).data.giri
+      }
+    }
     await nextTick()
     disegnaTutto(!silenzioso)
     clearTimeout(timer)
@@ -427,7 +435,7 @@ function vaiSpedizioni() { nav.drill({ tipo: 'sped-giorno' }) }
     <div class="testata">
       <div>
         <h2>Piano della giornata <span class="filiale">{{ filiale }}</span></h2>
-        <p class="sotto">Trascina un giro su un driver, o seleziona il driver e usa la freccia, Ctrl+clic sull'area chiara nella mappa, Maiusc+rettangolo sui punti liberi. Tasto destro sul driver: partenza e ritorno da casa o dalla filiale.</p>
+        <p class="sotto">Trascina un giro su un driver, o seleziona il driver e usa la freccia, Ctrl+clic sull'area chiara nella mappa, Maiusc+rettangolo sui punti liberi. Tasto destro sul driver: partenza e ritorno da casa o dalla filiale. La scelta resta come predefinita: il giorno dopo la pagina la ripropone da sola.</p>
       </div>
       <div class="barra">
         <DatePicker v-model="data" dateFormat="dd/mm/yy" showIcon size="small" class="data" @update:modelValue="chiudiPercorso(); carica()" />

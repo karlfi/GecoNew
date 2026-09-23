@@ -80,13 +80,17 @@ BEGIN
     SELECT @Id = IdPianoDriver FROM dbo.PIANO_DRIVER WHERE Data = @Data AND IdDriver = @IdDriver;
     IF @Id IS NULL
     BEGIN
-        INSERT INTO dbo.PIANO_DRIVER (Data, IdFiliale, IdDriver, Utente) VALUES (@Data, @IdFiliale, @IdDriver, @Utente);
+        -- partenza e ritorno come nell'ultimo piano del driver: la scelta resta valida per i giorni dopo
+        DECLARE @pc bit = 0, @rc bit = 0;
+        SELECT TOP 1 @pc = PartenzaCasa, @rc = RitornoCasa FROM dbo.PIANO_DRIVER WHERE IdDriver = @IdDriver AND Data < @Data ORDER BY Data DESC;
+        INSERT INTO dbo.PIANO_DRIVER (Data, IdFiliale, IdDriver, PartenzaCasa, RitornoCasa, Utente) VALUES (@Data, @IdFiliale, @IdDriver, @pc, @rc, @Utente);
         SET @Id = SCOPE_IDENTITY();
     END
 END
 GO
 
--- Giro -> driver (NULL = toglie): come prima, ma segna "da rifare" il percorso dei driver toccati.
+-- Giro -> driver (NULL = toglie): segna "da rifare" il percorso dei driver toccati e fa del driver scelto il
+-- predefinito del giro (GEO_GIRI.IdDriverDefault), cosi' il giorno dopo la pagina lo ripropone da sola.
 CREATE OR ALTER PROCEDURE dbo.AI_PIANO_Driver
     @IdFiliale int, @Data date, @IdGiro int, @IdDriver int = NULL, @Utente varchar(100) = NULL
 AS
@@ -120,6 +124,13 @@ BEGIN
         END
         UPDATE dbo.PIANO_DRIVER SET DaRifare = 1, DataModifica = GETDATE()
         WHERE Data = @Data AND Stato = 'FATTA' AND IdDriver IN (ISNULL(@Prima, -1), ISNULL(@IdDriver, -1));
+        -- la scelta resta come predefinita del giro per i giorni dopo (togliere il driver oggi non la cancella)
+        IF @IdDriver IS NOT NULL AND EXISTS (SELECT 1 FROM dbo.GEO_GIRI WHERE IdGiro = @IdGiro AND ISNULL(IdDriverDefault, 0) <> @IdDriver)
+        BEGIN
+            INSERT INTO dbo.GEO_GIRI_VARIAZIONI (IdGiro, Utente, Campo, Prima, Dopo)
+            SELECT @IdGiro, @Utente, 'IdDriverDefault', CAST(IdDriverDefault AS varchar(20)), CAST(@IdDriver AS varchar(20)) FROM dbo.GEO_GIRI WHERE IdGiro = @IdGiro;
+            UPDATE dbo.GEO_GIRI SET IdDriverDefault = @IdDriver, DataModifica = GETDATE() WHERE IdGiro = @IdGiro;
+        END
     END
     SELECT p.IdPiano, p.IdDriver, u.Nome AS Driver FROM dbo.GIRI_PIANO p LEFT JOIN dbo.UTENTI u ON u.IdUtente = p.IdDriver WHERE p.IdPiano = @IdPiano;
 END
