@@ -528,6 +528,7 @@ Schedulatore.Map(app, ConnString);
 Sim.Map(app, ConnString);
 Palmari.Map(app, ConnString);
 Giri.Map(app, ConnString);
+SpedGiri.Map(app, ConnString);
 Mezzi.Map(app, ConnString);
 
 // Stato di archiviazione del dipendente, modificabile dalla griglia "Elenco

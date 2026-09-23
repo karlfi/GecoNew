@@ -85,6 +85,11 @@ export function isVideataGiriMappa(videata) {
   return videata === 'Sped2mappe'
 }
 
+// videate legacy "Giri - Assegnazione" e "Giri - Modifica punti": una pagina sola, Spedizioni del giorno
+export function isVideataSpedGiorno(videata) {
+  return videata === 'Assegnagiri' || videata === 'Spostageo'
+}
+
 // videata legacy "Nuova Spedizione Parcel Speedy"
 export function isVideataSpedNuova(videata) {
   return videata === 'Nuovaspedizione'
@@ -213,6 +218,7 @@ export function navDaVideata(videata, parametri = '') {
   if (isVideataEseguiComando(v)) return { tipo: 'esegui-comando', parametri: parametri ?? '' }
   if (isVideataEsiti(v)) return { tipo: 'esiti', parametri: parametri ?? '' }
   if (isVideataGiriMappa(v)) return { tipo: 'giri-mappa' }
+  if (isVideataSpedGiorno(v)) return { tipo: 'sped-giorno' }
   if (isVideataSpedNuova(v)) return { tipo: 'sped-nuova' }
   if (isVideataAccettazioneFile(v)) return { tipo: 'accettazione-file', parametri: parametri ?? '' }
   if (isVideataAccettazioneBanco(v)) return { tipo: 'accettazione-banco', parametri: parametri ?? '' }
@@ -276,6 +282,7 @@ export function navDaLink(voce) {
   if (link === '/esegui-comando') return { tipo: 'esegui-comando', parametri: voce.Parametri ?? '' }
   if (link === '/esiti') return { tipo: 'esiti', parametri: voce.Parametri ?? '' }
   if (link === '/giri-mappa') return { tipo: 'giri-mappa' }
+  if (link === '/spedizioni-giorno') return { tipo: 'sped-giorno' }
   if (link === '/export-hr') return { tipo: 'export-hr' }
   if (link === '/presenze-ts') return { tipo: 'presenze-ts' }
   if (link === '/unilav') return { tipo: 'unilav' }

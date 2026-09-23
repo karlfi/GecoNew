@@ -212,21 +212,34 @@ static class Giri
             return Results.Ok(new { idGiro = id });
         })).RequireAuthorization();
 
-        // aggiorna i giri alle spedizioni del giorno (GEO_AssegnaGIRI per ogni giro scelto, o per tutti)
+        // aggiorna i giri alle spedizioni di oggi (AI_SPED_AssegnaGiri con riassegnazione, per ogni giro
+        // scelto o per tutti; stessa regola della legacy GEO_AssegnaGIRI, con lo storico)
         app.MapPost("/api/giri/assegna", (AssegnaGiriRequest req, ClaimsPrincipal user) => Prova(async () =>
         {
             var idFiliale = Filiale(user);
             await using var cn = new SqlConnection(connString());
             if (req.IdGiri is { Count: > 0 })
                 foreach (var idGiro in req.IdGiri)
-                    await cn.ExecuteAsync("dbo.GEO_AssegnaGIRI", new { idgiro = idGiro, forza = 1, IdFiliale = idFiliale }, commandType: CommandType.StoredProcedure);
+                    await cn.ExecuteAsync("dbo.AI_SPED_AssegnaGiri", new { IdFiliale = idFiliale, Data = DateTime.Today, IdGiro = idGiro, Forza = true, Utente = user.Identity?.Name },
+                        commandType: CommandType.StoredProcedure);
             else if (req.Tutti == true)
-                await cn.ExecuteAsync("dbo.GEO_AssegnaGIRI", new { idgiro = (int?)null, forza = 1, IdFiliale = idFiliale }, commandType: CommandType.StoredProcedure);
+                await cn.ExecuteAsync("dbo.AI_SPED_AssegnaGiri", new { IdFiliale = idFiliale, Data = DateTime.Today, IdGiro = (int?)null, Forza = true, Utente = user.Identity?.Name },
+                    commandType: CommandType.StoredProcedure);
             else throw new ErroreGiri("Nessun giro selezionato");
             var sped = await cn.QueryFirstAsync(@"
                 SELECT COUNT(*) AS totale, ISNULL(SUM(CASE WHEN IdGiro IS NULL THEN 1 ELSE 0 END), 0) AS senzaGiro
                 FROM V_ElencoGeoSped WHERE IdFiliale = @id", new { id = idFiliale });
             return Results.Ok(new { ok = true, spedizioni = sped });
+        })).RequireAuthorization();
+
+        // le aree di tutti i giri attivi della filiale in un colpo solo (sfondo della pagina Spedizioni del giorno)
+        app.MapGet("/api/giri/shapes", (ClaimsPrincipal user) => Prova(async () =>
+        {
+            await using var cn = new SqlConnection(connString());
+            var righe = await cn.QueryAsync(@"
+                SELECT IdGiro AS idGiro, Giro AS giro, Colore AS colore, SHAPE.STAsText() AS wkt
+                FROM GEO_GIRI WHERE IdFiliale = @id AND DataFine IS NULL AND SHAPE IS NOT NULL ORDER BY Giro", new { id = Filiale(user) });
+            return Results.Ok(righe);
         })).RequireAuthorization();
     }
 

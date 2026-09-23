@@ -37,6 +37,7 @@ import DdtView from '../views/DdtView.vue'
 import EseguiComandoView from '../views/EseguiComandoView.vue'
 import EsitiView from '../views/EsitiView.vue'
 import GiriMappaView from '../views/GiriMappaView.vue'
+import SpedizioniGiornoView from '../views/SpedizioniGiornoView.vue'
 import ExportHrView from '../views/ExportHrView.vue'
 import UnilavView from '../views/UnilavView.vue'
 import StoriciView from '../views/StoriciView.vue'
@@ -322,6 +323,10 @@ const chiavePagina = computed(() =>
         />
         <GiriMappaView
           v-else-if="nav.corrente.tipo === 'giri-mappa'"
+          :key="chiavePagina"
+        />
+        <SpedizioniGiornoView
+          v-else-if="nav.corrente.tipo === 'sped-giorno'"
           :key="chiavePagina"
         />
         <ExportHrView
