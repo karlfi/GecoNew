@@ -1,5 +1,11 @@
 <script setup>
-import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
+// Giri della filiale (ex videata legacy "Creazione giri su Mappa"): le aree di consegna dei driver.
+// Sulla mappa (Leaflet, OSM o satellite) si vedono i giri esistenti, i confini dei comuni, le
+// spedizioni geolocalizzate del giorno colorate per giro; un giro nuovo si disegna a mano (pin
+// numerati, trascinabili, con i punti intermedi cliccabili) o si crea come unione di comuni; un giro
+// esistente si modifica da qui (nome, colore, CAP e comune fissi, driver predefinito, chiusura) e il
+// suo confine si ritocca trascinando i vertici o si rifa' dai comuni. Ogni modifica resta nello storico.
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import api from '../api'
 import L from 'leaflet'
@@ -13,46 +19,84 @@ import Button from 'primevue/button'
 import InputText from 'primevue/inputtext'
 import Checkbox from 'primevue/checkbox'
 import ColorPicker from 'primevue/colorpicker'
+import Select from 'primevue/select'
+import Dialog from 'primevue/dialog'
+import Tag from 'primevue/tag'
 import Message from 'primevue/message'
-
-// Videata legacy "Creazione giri su Mappa" (Sped2mappe) su Leaflet + OSM, con:
-// - comuni/giri renderizzati dallo SHAPE (gestisce anche i MULTIPOLYGON)
-// - creazione giro come UNIONE dei comuni selezionati (rapido e preciso)
-// - disegno manuale con pin numerati riordinabili
-// - anteprima: evidenzia le spedizioni che cadrebbero nel giro in disegno
-// - clustering dei marker spedizioni
 
 const toast = useToast()
 const errore = ref('')
+const avviso = (severity, summary, detail, life = 4000) => toast.add({ severity, summary, detail, life })
+const messaggio = e => e?.response?.data?.errore ?? e?.message ?? 'Errore'
+const dataOra = v => v ? new Date(v).toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' }) : ''
+const MAX_VERTICI = 300      // oltre, il confine viene semplificato prima di poterlo trascinare
 
+// --- mappa e livelli ---
 let map = null, resizeObs = null
-let comuniLayer, giriLayer, spedizioniCluster, disegnoLayer, anteprimaLayer
-const comuniDisegnati = new Map()   // idComune -> L.layerGroup
-const giriDisegnati = new Map()     // idGiro   -> L.layerGroup
+let comuniLayer, giriLayer, spedizioniCluster, anteprimaLayer, disegnoLayer, intermediLayer
+const comuniDisegnati = new Map()   // idComune -> L.featureGroup
+const giriDisegnati = new Map()     // idGiro   -> L.featureGroup
 const mapEl = ref(null)
+const filiale = ref('')
 
+// --- dati ---
 const comuni = ref([])
 const giri = ref([])
+const driver = ref([])
+const contatori = ref({ totale: 0, senzaGiro: 0 })
 const comuniSel = ref([])
 const giriSel = ref([])
+const filtroComuni = ref('')
+const filtroGiri = ref('')
+const mostraChiusi = ref(false)
+const caricamento = ref(false)
 
+const comuniFiltrati = computed(() => {
+  const q = filtroComuni.value.trim().toLowerCase()
+  return q ? comuni.value.filter(c => `${c.denominazione} ${c.cap} ${c.belfiore}`.toLowerCase().includes(q)) : comuni.value
+})
+const giriFiltrati = computed(() => {
+  const q = filtroGiri.value.trim().toLowerCase()
+  return q ? giri.value.filter(g => `${g.giro} ${g.cap ?? ''} ${g.comune ?? ''} ${g.driverDefault ?? ''}`.toLowerCase().includes(q)) : giri.value
+})
+
+// --- spedizioni del giorno ---
 const visualizza = ref(false)
 const filtroGiro = ref(null)
 const filtroCap = ref('')
-let spedData = []   // [{lat,lng,...}] per l'anteprima point-in-polygon
+let spedData = []   // [{lat,lng,...}] per l'anteprima punto-nel-poligono
 
-const nome = ref('')
-const colore = ref('F44F22')
-const attivoDisegno = ref(false)
-const bordi = ref([])               // [{lat,lng, marker}]
+// --- editor (nuovo giro o modifica di un giro esistente) ---
+const modo = ref('nuovo')            // 'nuovo' | 'modifica'
+const vuoto = () => ({ idGiro: null, giro: '', colore: 'F44F22', cap: '', belfiore: null, idDriverDefault: null, attivo: true })
+const form = ref(vuoto())
+const dettaglio = ref(null)          // scheda del giro in modifica (/giri/{id})
+const attivoDisegno = ref(false)     // il clic sulla mappa aggiunge un vertice
+const confineInModifica = ref(false) // i vertici del giro esistente sono sulla mappa, trascinabili
+const semplificato = ref(null)       // { da, a } quando il confine e' stato ridotto per la modifica
+const bordi = ref([])                // [{lat, lng, marker}]
 const salvataggio = ref(false)
-const salvataggioComuni = ref(false)
+const nDentro = ref(0)
+const coloreHex = computed(() => '#' + `${form.value.colore || 'F44F22'}`.replace('#', ''))
+const nomeValido = computed(() => form.value.giro.trim().length > 3)
+const puoCreare = computed(() => nomeValido.value && bordi.value.length >= 3)
+const puoCreareDaComuni = computed(() => nomeValido.value && comuniSel.value.length > 0)
+const puoSalvare = computed(() => nomeValido.value && (!confineInModifica.value || bordi.value.length >= 3))
+const poligonoSemplice = computed(() => dettaglio.value?.tipoShape === 'Polygon' && Array.isArray(dettaglio.value?.anello))
+const descrizioneArea = computed(() => {
+  const d = dettaglio.value
+  if (!d) return ''
+  if (!d.tipoShape) return 'Giro senza area: disegna il confine o scegli i comuni'
+  if (d.tipoShape === 'Polygon') return `Poligono di ${d.anello?.length ?? d.nPunti} punti`
+  return `Area in ${d.nParti} parti (${d.nPunti} punti): il confine si rifa' dai comuni`
+})
 
-const puoSalvare = computed(() => nome.value.trim().length > 3 && bordi.value.length >= 3)
-const puoSalvareComuni = computed(() => nome.value.trim().length > 3 && comuniSel.value.length > 0)
-const coloreHex = computed(() => '#' + `${colore.value}`.replace('#', ''))
+// --- conferme (niente ConfirmationService nell'app: un Dialog basta) ---
+const conferma = ref(null)           // { titolo, testo, azione }
+function chiedi(titolo, testo, azione) { conferma.value = { titolo, testo, azione } }
+async function confermato() { const c = conferma.value; conferma.value = null; if (c) await c.azione() }
 
-// --- parsing WKT (POLYGON / MULTIPOLYGON) -> anelli [[lat,lng],...] ---
+// --- WKT (POLYGON / MULTIPOLYGON / GEOMETRYCOLLECTION) -> anelli [[lat,lng],...] ---
 function wktToRings(wkt) {
   if (!wkt) return []
   const rings = []
@@ -71,25 +115,24 @@ function wktToRings(wkt) {
 onMounted(async () => {
   try {
     const { data: init } = await api.get('/giri/init')
+    filiale.value = init.filiale ?? ''
     map = L.map(mapEl.value, { center: [init.lat, init.lng], zoom: 11 })
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19, attribution: '© OpenStreetMap'
-    }).addTo(map)
+    const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map)
+    const satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Tiles © Esri' })
+    L.control.layers({ Mappa: osm, Satellite: satellite }, null, { position: 'topright' }).addTo(map)
     comuniLayer = L.layerGroup().addTo(map)
     giriLayer = L.layerGroup().addTo(map)
-    spedizioniCluster = L.markerClusterGroup({ chunkedLoading: true, maxClusterRadius: 45 }).addTo(map)
+    spedizioniCluster = L.markerClusterGroup({ chunkedLoading: true, maxClusterRadius: 40, disableClusteringAtZoom: 15 }).addTo(map)
     anteprimaLayer = L.layerGroup().addTo(map)
     disegnoLayer = L.layerGroup().addTo(map)
+    intermediLayer = L.layerGroup().addTo(map)
     map.on('click', onMapClick)
     resizeObs = new ResizeObserver(() => map && map.invalidateSize())
     resizeObs.observe(mapEl.value)
     setTimeout(() => map && map.invalidateSize(), 200)
-
-    const [{ data: c }, { data: g }] = await Promise.all([api.get('/giri/comuni'), api.get('/giri/elenco')])
-    comuni.value = c
-    giri.value = g
+    await carica()
   } catch (e) {
-    errore.value = e.response?.data?.errore ?? 'Errore nel caricamento della mappa'
+    errore.value = messaggio(e) || 'Errore nel caricamento della mappa'
   }
 })
 onBeforeUnmount(() => {
@@ -97,7 +140,24 @@ onBeforeUnmount(() => {
   if (map) { map.remove(); map = null }
 })
 
-// --- comuni: confini (dallo SHAPE, multipolygon-safe) ---
+async function carica() {
+  caricamento.value = true
+  try {
+    const [{ data: lk }, { data: g }] = await Promise.all([api.get('/giri/lookup'), api.get('/giri/elenco', { params: { tutti: mostraChiusi.value } })])
+    comuni.value = lk.comuni; driver.value = lk.driver; contatori.value = lk.spedizioni
+    giri.value = g
+    if (visualizza.value) await aggiornaSpedizioni()
+  } catch (e) { avviso('error', 'Giri', messaggio(e)) } finally { caricamento.value = false }
+}
+async function ricaricaGiri() {
+  const { data } = await api.get('/giri/elenco', { params: { tutti: mostraChiusi.value } })
+  giri.value = data
+  // le righe selezionate (mostrate sulla mappa) seguono i dati nuovi
+  const ids = new Set(giriSel.value.map(g => g.idGiro))
+  giriSel.value = giri.value.filter(g => ids.has(g.idGiro))
+}
+
+// --- comuni: confini dallo SHAPE ---
 async function toggleComuni() {
   const selIds = new Set(comuniSel.value.map(c => c.idComune))
   for (const [id, grp] of comuniDisegnati) {
@@ -113,7 +173,7 @@ async function toggleComuni() {
   }
 }
 
-// --- giri: area + perimetro (dallo SHAPE) ---
+// --- giri: area e perimetro dallo SHAPE ---
 async function toggleGiri() {
   const selIds = new Set(giriSel.value.map(g => g.idGiro))
   for (const [id, grp] of giriDisegnati) {
@@ -121,60 +181,69 @@ async function toggleGiri() {
   }
   for (const g of giriSel.value) {
     if (giriDisegnati.has(g.idGiro)) continue
-    try {
-      const { data } = await api.get('/giri/shape', { params: { idGiro: g.idGiro } })
-      const grp = disegnaShape(data.wkt, g.colore || '#3388ff', 0.25, g.giro)
-      if (grp) { giriLayer.addLayer(grp); giriDisegnati.set(g.idGiro, grp) }
-    } catch { /* giro senza geometria */ }
+    await disegnaGiro(g)
   }
 }
-
+async function disegnaGiro(g) {
+  try {
+    const { data } = await api.get('/giri/shape', { params: { idGiro: g.idGiro } })
+    const grp = disegnaShape(data.wkt, g.colore || '#3388ff', 0.25, `${g.giro}${g.nSped ? ' · ' + g.nSped + ' sped.' : ''}`)
+    if (grp) { giriLayer.addLayer(grp); giriDisegnati.set(g.idGiro, grp) }
+    return grp
+  } catch { return null }
+}
+async function ridisegnaGiro(idGiro) {
+  const grp = giriDisegnati.get(idGiro)
+  if (grp) { giriLayer.removeLayer(grp); giriDisegnati.delete(idGiro) }
+  const g = giri.value.find(x => x.idGiro === idGiro)
+  if (g && giriSel.value.some(x => x.idGiro === idGiro)) await disegnaGiro(g)
+}
 function disegnaShape(wkt, col, opacity, tooltip) {
   const rings = wktToRings(wkt)
   if (!rings.length) return null
-  const grp = L.layerGroup()
+  const grp = L.featureGroup()
   for (const ring of rings) {
     L.polygon(ring, { color: col, weight: 2, fillColor: col, fillOpacity: opacity })
       .bindTooltip(tooltip).on('click', onRefClick).addTo(grp)
   }
   return grp
 }
+function mostraTutti() { giriSel.value = [...giri.value]; toggleGiri() }
+function nascondiTutti() { giriSel.value = []; toggleGiri() }
+async function inquadra(g) {
+  if (!giriSel.value.some(x => x.idGiro === g.idGiro)) { giriSel.value = [...giriSel.value, g]; await toggleGiri() }
+  const grp = giriDisegnati.get(g.idGiro)
+  if (grp && grp.getBounds().isValid()) map.fitBounds(grp.getBounds(), { padding: [20, 20] })
+  else avviso('info', g.giro, 'Il giro non ha un\'area disegnata')
+}
 
-// --- spedizioni (cluster) ---
+// --- spedizioni del giorno (cluster, colore del giro; grigie quelle senza giro) ---
 async function aggiornaSpedizioni() {
   spedizioniCluster.clearLayers()
   spedData = []
-  if (!visualizza.value) { anteprimaLayer.clearLayers(); return }
+  if (!visualizza.value) { anteprimaLayer.clearLayers(); nDentro.value = 0; return }
   try {
     const { data: sped } = await api.get('/giri/spedizioni', {
-      params: {
-        idGiro: filtroGiro.value ?? undefined,
-        cap: filtroCap.value?.length === 5 ? filtroCap.value : undefined
-      }
+      params: { idGiro: filtroGiro.value ?? undefined, cap: filtroCap.value?.length === 5 ? filtroCap.value : undefined }
     })
     const markers = []
     for (const s of sped) {
       if (s.lat == null || s.lng == null) continue
       spedData.push(s)
-      const col = (s.colore && `${s.colore}`.trim()) || '#e53935'
-      // L.marker (non circleMarker) per compatibilita' con il clustering
-      markers.push(L.marker([s.lat, s.lng], { icon: dotIcon(col) })
-        .bindTooltip(`<b>${s.barcode ?? ''}</b><br>${s.indirizzo ?? ''}<br>${s.cap ?? ''} ${s.localita ?? ''}${s.giro ? '<br>Giro: ' + s.giro : ''}`))
+      const col = s.idGiro ? ((s.colore && `${s.colore}`.trim()) || '#e53935') : '#8d8d8d'
+      markers.push(L.marker([s.lat, s.lng], { icon: dotIcon(col, !s.idGiro) })
+        .bindTooltip(`<b>${s.barcode ?? ''}</b><br>${s.indirizzo ?? ''}<br>${s.cap ?? ''} ${s.localita ?? ''}<br>${s.giro ? 'Giro: ' + s.giro : '<i>senza giro</i>'}`))
     }
     spedizioniCluster.addLayers(markers)
-    if (!sped.length) toast.add({ severity: 'info', summary: 'Spedizioni', detail: 'Nessuna spedizione da mostrare', life: 2500 })
+    if (!sped.length) avviso('info', 'Spedizioni', 'Nessuna spedizione geolocalizzata da mostrare', 2500)
     aggiornaAnteprima()
-  } catch (e) {
-    toast.add({ severity: 'error', summary: 'Spedizioni', detail: e.response?.data?.errore ?? 'Errore', life: 4000 })
-  }
+  } catch (e) { avviso('error', 'Spedizioni', messaggio(e)) }
+}
+function dotIcon(col, senzaGiro) {
+  return L.divIcon({ className: 'sped-dot' + (senzaGiro ? ' senza-giro' : ''), html: `<span style="background:${col}"></span>`, iconSize: [12, 12], iconAnchor: [6, 6] })
 }
 
-// pallino colorato per la spedizione (icona compatibile col clustering)
-function dotIcon(col) {
-  return L.divIcon({ className: 'sped-dot', html: `<span style="background:${col}"></span>`, iconSize: [12, 12], iconAnchor: [6, 6] })
-}
-
-// --- anteprima assegnazione: evidenzia le spedizioni dentro il giro in disegno ---
+// --- anteprima: le spedizioni che cadono nel confine in disegno/modifica ---
 function puntoInPoligono(lat, lng, ring) {
   let inside = false
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -183,7 +252,6 @@ function puntoInPoligono(lat, lng, ring) {
   }
   return inside
 }
-const nDentro = ref(0)
 function aggiornaAnteprima() {
   anteprimaLayer.clearLayers()
   nDentro.value = 0
@@ -199,9 +267,9 @@ function aggiornaAnteprima() {
   nDentro.value = n
 }
 
-// --- disegno manuale con pin numerati ---
+// --- vertici sulla mappa: pin numerati trascinabili, punti intermedi per aggiungerne, tasto destro per togliere ---
 function iconaNum(n) {
-  return L.divIcon({ className: 'vertice-num', html: `<span>${n}</span>`, iconSize: [24, 24], iconAnchor: [12, 12] })
+  return L.divIcon({ className: 'vertice-num', html: `<span style="background:${coloreHex.value}">${n}</span>`, iconSize: [24, 24], iconAnchor: [12, 12] })
 }
 function onMapClick(e) { if (attivoDisegno.value) aggiungiVertice(e.latlng.lat, e.latlng.lng) }
 function onRefClick(e) {
@@ -209,16 +277,25 @@ function onRefClick(e) {
   aggiungiVertice(e.latlng.lat, e.latlng.lng)
   L.DomEvent.stopPropagation(e)
 }
-function aggiungiVertice(lat, lng) {
-  const marker = L.marker([lat, lng], { draggable: true, icon: iconaNum(bordi.value.length + 1) })
-  const v = { lat, lng, marker }
-  marker.on('drag', ev => { const ll = ev.target.getLatLng(); v.lat = ll.lat; v.lng = ll.lng; ridisegnaBozza(); aggiornaAnteprima() })
-  bordi.value.push(v)
+function creaMarker(v, n) {
+  const marker = L.marker([v.lat, v.lng], { draggable: true, icon: iconaNum(n) })
+  marker.on('drag', ev => { const ll = ev.target.getLatLng(); v.lat = ll.lat; v.lng = ll.lng; ridisegnaBozza(false) })
+  marker.on('dragend', () => { ridisegnaBozza(true); aggiornaAnteprima() })
+  marker.on('contextmenu', ev => { L.DomEvent.stopPropagation(ev); rimuoviVertice(v) })
+  marker.bindTooltip('trascina per spostare, tasto destro per togliere', { direction: 'top', offset: [0, -10] })
+  v.marker = marker
   disegnoLayer.addLayer(marker)
-  ridisegnaBozza(); aggiornaAnteprima()
+  return marker
+}
+function aggiungiVertice(lat, lng, posizione = null) {
+  const v = { lat, lng, marker: null }
+  if (posizione === null || posizione >= bordi.value.length) bordi.value.push(v)
+  else bordi.value.splice(posizione, 0, v)
+  creaMarker(v, bordi.value.indexOf(v) + 1)
+  refreshNumeri(); ridisegnaBozza(true); aggiornaAnteprima()
 }
 let bozzaPoly = null
-function ridisegnaBozza() {
+function ridisegnaBozza(conIntermedi) {
   if (bozzaPoly) { disegnoLayer.removeLayer(bozzaPoly); bozzaPoly = null }
   if (bordi.value.length >= 2) {
     bozzaPoly = L.polygon(bordi.value.map(v => [v.lat, v.lng]), {
@@ -226,204 +303,447 @@ function ridisegnaBozza() {
     })
     disegnoLayer.addLayer(bozzaPoly)
   }
+  if (conIntermedi) ridisegnaIntermedi()
 }
-function refreshNumeri() { bordi.value.forEach((v, i) => v.marker.setIcon(iconaNum(i + 1))) }
+// i punti a meta' di ogni lato: un clic li trasforma in un vertice vero
+function ridisegnaIntermedi() {
+  intermediLayer.clearLayers()
+  const n = bordi.value.length
+  if (n < 2) return
+  for (let i = 0; i < n; i++) {
+    if (n === 2 && i === 1) break
+    const a = bordi.value[i], b = bordi.value[(i + 1) % n]
+    const m = L.marker([(a.lat + b.lat) / 2, (a.lng + b.lng) / 2], {
+      icon: L.divIcon({ className: 'vertice-mezzo', html: '<span>+</span>', iconSize: [16, 16], iconAnchor: [8, 8] }),
+      keyboard: false, zIndexOffset: -100
+    }).bindTooltip('clic per aggiungere un punto qui', { direction: 'top', offset: [0, -8] })
+    m.on('click', ev => { L.DomEvent.stopPropagation(ev); aggiungiVertice(ev.latlng.lat, ev.latlng.lng, i + 1) })
+    intermediLayer.addLayer(m)
+  }
+}
+function refreshNumeri() { bordi.value.forEach((v, i) => v.marker && v.marker.setIcon(iconaNum(i + 1))) }
 function sposta(i, dir) {
   const j = i + dir
   if (j < 0 || j >= bordi.value.length) return
   const arr = [...bordi.value]
   ;[arr[i], arr[j]] = [arr[j], arr[i]]
   bordi.value = arr
-  refreshNumeri(); ridisegnaBozza(); aggiornaAnteprima()
+  refreshNumeri(); ridisegnaBozza(true); aggiornaAnteprima()
 }
 function rimuoviVertice(v) {
-  disegnoLayer.removeLayer(v.marker)
+  if (v.marker) disegnoLayer.removeLayer(v.marker)
   bordi.value = bordi.value.filter(x => x !== v)
-  refreshNumeri(); ridisegnaBozza(); aggiornaAnteprima()
+  refreshNumeri(); ridisegnaBozza(true); aggiornaAnteprima()
 }
 function svuotaDisegno() {
-  bordi.value.forEach(v => disegnoLayer.removeLayer(v.marker))
+  bordi.value.forEach(v => v.marker && disegnoLayer.removeLayer(v.marker))
   bordi.value = []
-  ridisegnaBozza(); aggiornaAnteprima()
+  intermediLayer.clearLayers()
+  ridisegnaBozza(false); aggiornaAnteprima()
+}
+function centraSuVertice(v) { map.panTo([v.lat, v.lng]) }
+
+// --- semplificazione (Douglas-Peucker) per i confini con troppi punti ---
+function semplifica(punti, tol) {
+  if (punti.length <= 2) return punti
+  const dist = (p, a, b) => {
+    const k = Math.cos(a[0] * Math.PI / 180)
+    const x = p[1] * k, y = p[0], x1 = a[1] * k, y1 = a[0], x2 = b[1] * k, y2 = b[0]
+    const dx = x2 - x1, dy = y2 - y1
+    if (dx === 0 && dy === 0) return Math.hypot(x - x1, y - y1)
+    const t = Math.max(0, Math.min(1, ((x - x1) * dx + (y - y1) * dy) / (dx * dx + dy * dy)))
+    return Math.hypot(x - (x1 + t * dx), y - (y1 + t * dy))
+  }
+  const keep = new Array(punti.length).fill(false)
+  keep[0] = keep[punti.length - 1] = true
+  const stack = [[0, punti.length - 1]]
+  while (stack.length) {
+    const [i, j] = stack.pop()
+    let max = 0, idx = -1
+    for (let k = i + 1; k < j; k++) { const d = dist(punti[k], punti[i], punti[j]); if (d > max) { max = d; idx = k } }
+    if (max > tol && idx > 0) { keep[idx] = true; stack.push([i, idx], [idx, j]) }
+  }
+  return punti.filter((_, i) => keep[i])
+}
+function riduci(punti, massimo) {
+  let tol = 0.00005, out = punti
+  while (out.length > massimo && tol < 0.05) { out = semplifica(punti, tol); tol *= 1.6 }
+  return out
 }
 
-async function ricaricaGiri() { const { data } = await api.get('/giri/elenco'); giri.value = data }
+// --- editor: nuovo / modifica ---
+function nuovoGiro() {
+  chiudiConfine()
+  modo.value = 'nuovo'; dettaglio.value = null; form.value = vuoto(); semplificato.value = null
+}
+async function apriModifica(g) {
+  try {
+    chiudiConfine()
+    const { data } = await api.get(`/giri/${g.idGiro}`)
+    dettaglio.value = data
+    modo.value = 'modifica'
+    form.value = {
+      idGiro: data.idGiro, giro: data.giro ?? '', colore: `${data.colore || '#3388ff'}`.replace('#', ''),
+      cap: data.cap ?? '', belfiore: data.belfiore ?? null, idDriverDefault: data.idDriverDefault ?? null, attivo: !!data.attivo
+    }
+    semplificato.value = null
+    await inquadra(g)
+  } catch (e) { avviso('error', 'Giro', messaggio(e)) }
+}
+// il confine del giro in modifica diventa una bozza trascinabile (l'area originale resta sotto, sbiadita)
+function modificaConfine() {
+  const d = dettaglio.value
+  if (!d?.anello?.length) return
+  svuotaDisegno()
+  let punti = d.anello.map(p => [p.lat, p.lng])
+  if (punti.length > MAX_VERTICI) {
+    const ridotti = riduci(punti, MAX_VERTICI)
+    semplificato.value = { da: punti.length, a: ridotti.length }
+    punti = ridotti
+  } else semplificato.value = null
+  for (const [lat, lng] of punti) bordi.value.push({ lat, lng, marker: null })
+  bordi.value.forEach((v, i) => creaMarker(v, i + 1))
+  const grp = giriDisegnati.get(d.idGiro)
+  if (grp) grp.setStyle({ fillOpacity: 0.05, dashArray: '2,6' })
+  confineInModifica.value = true
+  ridisegnaBozza(true); aggiornaAnteprima()
+}
+function chiudiConfine() {
+  svuotaDisegno()
+  attivoDisegno.value = false
+  if (confineInModifica.value && dettaglio.value) {
+    const grp = giriDisegnati.get(dettaglio.value.idGiro)
+    if (grp) grp.setStyle({ fillOpacity: 0.25, dashArray: null })
+  }
+  confineInModifica.value = false
+  semplificato.value = null
+}
 
+const corpoForm = () => ({
+  giro: form.value.giro.trim(), colore: coloreHex.value, cap: form.value.cap?.trim() || null,
+  belfiore: form.value.belfiore || null, idDriverDefault: form.value.idDriverDefault ?? null
+})
 async function creaGiro() {
   salvataggio.value = true
   try {
-    const { data } = await api.post('/giri', {
-      nome: nome.value.trim(), colore: coloreHex.value,
-      vertici: bordi.value.map(v => ({ lat: v.lat, lng: v.lng }))
-    })
-    toast.add({ severity: 'success', summary: 'Giro creato', detail: `${nome.value} (Id ${data.idGiro})`, life: 3500 })
-    svuotaDisegno(); nome.value = ''; attivoDisegno.value = false
-    await ricaricaGiri()
-  } catch (e) {
-    toast.add({ severity: 'error', summary: 'Creazione giro', detail: e.response?.data?.errore ?? 'Errore', life: 5000 })
-  } finally { salvataggio.value = false }
+    const { data } = await api.post('/giri', { nome: form.value.giro.trim(), ...corpoForm(), vertici: bordi.value.map(v => ({ lat: v.lat, lng: v.lng })) })
+    avviso('success', 'Giro creato', `${form.value.giro} (Id ${data.idGiro})`)
+    await dopoCreazione(data.idGiro)
+  } catch (e) { avviso('error', 'Creazione giro', messaggio(e), 5000) } finally { salvataggio.value = false }
 }
-
 async function creaGiroDaComuni() {
-  salvataggioComuni.value = true
+  salvataggio.value = true
   try {
-    const { data } = await api.post('/giri/da-comuni', {
-      nome: nome.value.trim(), colore: coloreHex.value,
-      idComuni: comuniSel.value.map(c => c.idComune)
-    })
-    toast.add({ severity: 'success', summary: 'Giro da comuni', detail: `${nome.value} (${comuniSel.value.length} comuni, Id ${data.idGiro})`, life: 4000 })
-    nome.value = ''
+    const { data } = await api.post('/giri/da-comuni', { nome: form.value.giro.trim(), ...corpoForm(), idComuni: comuniSel.value.map(c => c.idComune) })
+    avviso('success', 'Giro da comuni', `${form.value.giro} (${comuniSel.value.length} comuni, Id ${data.idGiro})`)
+    await dopoCreazione(data.idGiro)
+  } catch (e) { avviso('error', 'Giro da comuni', messaggio(e), 5000) } finally { salvataggio.value = false }
+}
+async function dopoCreazione(idGiro) {
+  svuotaDisegno(); attivoDisegno.value = false
+  form.value = vuoto()
+  await ricaricaGiri()
+  const g = giri.value.find(x => x.idGiro === idGiro)
+  if (g) { giriSel.value = [...giriSel.value, g]; await toggleGiri() }
+}
+async function salvaModifica() {
+  salvataggio.value = true
+  try {
+    const corpo = { ...corpoForm(), attivo: form.value.attivo }
+    if (confineInModifica.value) corpo.vertici = bordi.value.map(v => ({ lat: v.lat, lng: v.lng }))
+    await api.put(`/giri/${form.value.idGiro}`, corpo)
+    avviso('success', 'Giro salvato', form.value.giro)
+    const id = form.value.idGiro
+    chiudiConfine()
     await ricaricaGiri()
-  } catch (e) {
-    toast.add({ severity: 'error', summary: 'Giro da comuni', detail: e.response?.data?.errore ?? 'Errore', life: 5000 })
-  } finally { salvataggioComuni.value = false }
+    await ridisegnaGiro(id)
+    const g = giri.value.find(x => x.idGiro === id)
+    if (g) await apriModifica(g); else nuovoGiro()
+    if (visualizza.value) await aggiornaSpedizioni()
+  } catch (e) { avviso('error', 'Salvataggio', messaggio(e), 5000) } finally { salvataggio.value = false }
+}
+async function sostituisciDaComuni() {
+  if (!comuniSel.value.length) { avviso('warn', 'Comuni', 'Seleziona i comuni nell\'elenco in basso'); return }
+  salvataggio.value = true
+  try {
+    await api.post(`/giri/${form.value.idGiro}/da-comuni`, { idComuni: comuniSel.value.map(c => c.idComune) })
+    avviso('success', 'Confine rifatto', `${form.value.giro}: unione di ${comuniSel.value.length} comuni`)
+    const id = form.value.idGiro
+    chiudiConfine()
+    await ricaricaGiri()
+    await ridisegnaGiro(id)
+    const g = giri.value.find(x => x.idGiro === id)
+    if (g) await apriModifica(g)
+  } catch (e) { avviso('error', 'Confine', messaggio(e), 5000) } finally { salvataggio.value = false }
+}
+function chiediChiusura() {
+  const riapre = !form.value.attivo
+  chiedi(riapre ? 'Riapri giro' : 'Chiudi giro',
+    riapre ? `Il giro "${form.value.giro}" torna attivo e assegnabile.` : `Il giro "${form.value.giro}" viene chiuso (DataFine di oggi): non riceve piu' spedizioni e sparisce dagli elenchi. Lo storico resta.`,
+    async () => { form.value.attivo = riapre; await salvaModifica() })
 }
 
+// --- assegnazione delle spedizioni del giorno ai giri ---
 const assegnazione = ref(false)
-async function aggiornaGiriDiSped() {
-  if (!giriSel.value.length) {
-    toast.add({ severity: 'warn', summary: 'Giri', detail: 'Seleziona uno o più giri nell\'elenco', life: 3000 })
-    return
-  }
+function chiediAssegnazione() {
+  if (giriSel.value.length) return assegna({ idGiri: giriSel.value.map(g => g.idGiro) })
+  chiedi('Aggiorna giri di sped', `Nessun giro selezionato: le spedizioni geolocalizzate di oggi della filiale (${contatori.value.totale}) vengono riassegnate a tutti i giri per CAP, comune e area. Procedo?`,
+    () => assegna({ tutti: true }))
+}
+async function assegna(corpo) {
   assegnazione.value = true
   try {
-    await api.post('/giri/assegna', { idGiri: giriSel.value.map(g => g.idGiro) })
-    toast.add({ severity: 'success', summary: 'Giri', detail: 'Giri aggiornati alle spedizioni', life: 3000 })
-    if (visualizza.value) aggiornaSpedizioni()
-  } catch (e) {
-    toast.add({ severity: 'error', summary: 'Giri', detail: e.response?.data?.errore ?? 'Errore', life: 4000 })
-  } finally { assegnazione.value = false }
+    const { data } = await api.post('/giri/assegna', corpo)
+    contatori.value = data.spedizioni
+    avviso('success', 'Giri', `Giri aggiornati alle spedizioni: ${data.spedizioni.totale} geolocalizzate, ${data.spedizioni.senzaGiro} senza giro`)
+    await ricaricaGiri()
+    if (visualizza.value) await aggiornaSpedizioni()
+  } catch (e) { avviso('error', 'Giri', messaggio(e)) } finally { assegnazione.value = false }
 }
+const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfiore: 'comune fisso', IdDriverDefault: 'driver predefinito', Attivo: 'attivo', SHAPE: 'confine' }
 </script>
 
 <template>
   <div class="pagina">
     <div class="testata">
-      <h2>Giri — Creazione giri su Mappa</h2>
-      <Button label="Aggiorna Giri di Sped" icon="pi pi-sync" size="small" outlined
-        :loading="assegnazione" @click="aggiornaGiriDiSped" />
+      <div>
+        <h2>Giri <span class="filiale">{{ filiale }}</span></h2>
+        <p class="sotto">Le aree di consegna dei driver: si disegnano, si creano dai comuni, si modificano; le spedizioni del giorno prendono il giro dal CAP o dal comune fisso, altrimenti dall'area.</p>
+      </div>
+      <div class="barra">
+        <Button label="Aggiorna giri di sped" icon="pi pi-sync" size="small" outlined :loading="assegnazione"
+          :title="giriSel.length ? `Riassegna le spedizioni di oggi ai ${giriSel.length} giri selezionati` : 'Riassegna le spedizioni di oggi a tutti i giri'" @click="chiediAssegnazione" />
+        <Button icon="pi pi-refresh" text :loading="caricamento" title="Ricarica" @click="carica" />
+      </div>
     </div>
     <Message v-if="errore" severity="error" :closable="false">{{ errore }}</Message>
 
     <div class="controlli">
-      <label class="chk"><Checkbox v-model="visualizza" binary @change="aggiornaSpedizioni" /> Visualizza spedizioni</label>
-      <label>Punti del giro:
-        <select v-model="filtroGiro" @change="visualizza && aggiornaSpedizioni()" class="sel-giro">
-          <option :value="null">— tutti —</option>
-          <option v-for="g in giri" :key="g.idGiro" :value="g.idGiro">{{ g.giro }}</option>
-        </select>
+      <label class="chk"><Checkbox v-model="visualizza" binary @change="aggiornaSpedizioni" /> Spedizioni di oggi
+        <span class="nota">{{ contatori.totale }} geolocalizzate<template v-if="contatori.senzaGiro">, {{ contatori.senzaGiro }} senza giro</template></span></label>
+      <label>Punti del giro
+        <Select v-model="filtroGiro" :options="[{ idGiro: null, giro: '— tutti —' }, { idGiro: 0, giro: '— senza giro —' }, ...giri]" optionLabel="giro" optionValue="idGiro"
+          size="small" class="sel-giro" @change="visualizza && aggiornaSpedizioni()" />
       </label>
-      <label>CAP <InputText v-model="filtroCap" maxlength="5" class="cap" @update:modelValue="visualizza && aggiornaSpedizioni()" /></label>
+      <label>CAP <InputText v-model="filtroCap" maxlength="5" size="small" class="cap" @update:modelValue="visualizza && aggiornaSpedizioni()" /></label>
+      <span class="spazio"></span>
+      <label class="chk"><Checkbox v-model="mostraChiusi" binary @change="ricaricaGiri" /> Mostra i giri chiusi</label>
     </div>
 
     <div class="corpo">
       <div ref="mapEl" class="mappa"></div>
 
       <aside class="pannello">
-        <div class="pannello-titolo">Nuovo Giro</div>
+        <div class="pannello-titolo">
+          <span v-if="modo === 'nuovo'">Nuovo giro</span>
+          <span v-else>Modifica giro <span class="conteggio">Id {{ form.idGiro }}</span></span>
+          <Button v-if="modo === 'modifica'" icon="pi pi-plus" text rounded size="small" class="chiaro" title="Nuovo giro" @click="nuovoGiro" />
+        </div>
         <div class="form">
           <label>Nome</label>
-          <InputText v-model="nome" maxlength="200" fluid />
-          <label>Colore</label>
-          <ColorPicker v-model="colore" />
-          <Button label="Crea da comuni selezionati" icon="pi pi-clone" severity="help"
-            :disabled="!puoSalvareComuni" :loading="salvataggioComuni" @click="creaGiroDaComuni" />
-          <small class="hint">{{ comuniSel.length }} comuni selezionati in basso</small>
-          <hr />
-          <label class="chk"><Checkbox v-model="attivoDisegno" binary /> Disegna a mano (clic sulla mappa)</label>
-          <Button label="Crea Nuovo Giro" icon="pi pi-check" :disabled="!puoSalvare" :loading="salvataggio" @click="creaGiro" />
-          <small v-if="nDentro" class="anteprima">≈ {{ nDentro }} spedizioni in quest'area</small>
+          <InputText v-model="form.giro" maxlength="50" fluid size="small" />
+          <div class="due">
+            <div>
+              <label>Colore</label>
+              <div class="colore"><ColorPicker v-model="form.colore" @update:modelValue="ridisegnaBozza(true); refreshNumeri()" /> <span class="nota">{{ coloreHex }}</span></div>
+            </div>
+            <div>
+              <label>CAP fisso</label>
+              <InputText v-model="form.cap" maxlength="5" fluid size="small" placeholder="es. 50018" />
+            </div>
+          </div>
+          <label>Comune fisso</label>
+          <Select v-model="form.belfiore" :options="comuni" optionLabel="denominazione" optionValue="belfiore" filter showClear size="small" placeholder="nessuno" fluid />
+          <label>Driver predefinito</label>
+          <Select v-model="form.idDriverDefault" :options="driver" optionLabel="nome" optionValue="idUtente" filter showClear size="small" placeholder="nessuno" fluid />
+          <small class="hint">CAP e comune fissi vincono sull'area: tutte le spedizioni con quel CAP o comune vanno a questo giro.</small>
+
+          <!-- nuovo giro: disegno a mano o unione di comuni -->
+          <template v-if="modo === 'nuovo'">
+            <hr />
+            <label class="chk"><Checkbox v-model="attivoDisegno" binary /> Disegna a mano (clic sulla mappa)</label>
+            <Button label="Crea nuovo giro" icon="pi pi-check" size="small" :disabled="!puoCreare" :loading="salvataggio" @click="creaGiro" />
+            <Button label="Crea da comuni selezionati" icon="pi pi-clone" severity="help" size="small" :disabled="!puoCreareDaComuni" :loading="salvataggio" @click="creaGiroDaComuni" />
+            <small class="hint">{{ comuniSel.length }} comuni selezionati in basso</small>
+          </template>
+
+          <!-- giro esistente: confine, salvataggio, chiusura -->
+          <template v-else>
+            <hr />
+            <div class="nota">{{ descrizioneArea }}</div>
+            <div v-if="semplificato" class="attenzione">Confine semplificato da {{ semplificato.da }} a {{ semplificato.a }} punti per poterlo modificare.</div>
+            <template v-if="!confineInModifica">
+              <Button v-if="poligonoSemplice" label="Modifica confine" icon="pi pi-pencil" size="small" outlined @click="modificaConfine" />
+              <Button v-else-if="!dettaglio?.tipoShape" label="Disegna il confine" icon="pi pi-pencil" size="small" outlined @click="confineInModifica = true; attivoDisegno = true" />
+            </template>
+            <template v-else>
+              <label class="chk"><Checkbox v-model="attivoDisegno" binary /> Aggiungi punti col clic sulla mappa</label>
+              <Button label="Annulla modifica confine" icon="pi pi-undo" size="small" text @click="chiudiConfine" />
+            </template>
+            <Button label="Sostituisci con i comuni selezionati" icon="pi pi-clone" severity="help" size="small" :disabled="!comuniSel.length" :loading="salvataggio" @click="sostituisciDaComuni" />
+            <Button label="Salva" icon="pi pi-check" size="small" :disabled="!puoSalvare" :loading="salvataggio" @click="salvaModifica" />
+            <Button :label="form.attivo ? 'Chiudi giro' : 'Riapri giro'" :icon="form.attivo ? 'pi pi-lock' : 'pi pi-lock-open'" :severity="form.attivo ? 'danger' : 'secondary'" size="small" text @click="chiediChiusura" />
+          </template>
+          <small v-if="nDentro" class="anteprima">≈ {{ nDentro }} spedizioni di oggi in quest'area</small>
         </div>
 
-        <div class="pannello-titolo">
-          Bordi <span class="conteggio">{{ bordi.length }} punti</span>
-          <Button icon="pi pi-trash" text rounded size="small" title="Svuota" :disabled="!bordi.length" @click="svuotaDisegno" />
-        </div>
-        <div class="bordi">
-          <div v-for="(v, i) in bordi" :key="i" class="bordo">
-            <span class="num">{{ i + 1 }}</span>
-            <span class="coord">{{ v.lat.toFixed(5) }}, {{ v.lng.toFixed(5) }}</span>
-            <span class="azioni">
-              <Button icon="pi pi-arrow-up" text rounded size="small" :disabled="i === 0" @click="sposta(i, -1)" />
-              <Button icon="pi pi-arrow-down" text rounded size="small" :disabled="i === bordi.length - 1" @click="sposta(i, 1)" />
-              <Button icon="pi pi-times" text rounded size="small" severity="danger" @click="rimuoviVertice(v)" />
-            </span>
+        <template v-if="bordi.length || modo === 'nuovo' || confineInModifica">
+          <div class="pannello-titolo">
+            Bordi <span class="conteggio">{{ bordi.length }} punti</span>
+            <Button icon="pi pi-trash" text rounded size="small" class="chiaro" title="Svuota" :disabled="!bordi.length" @click="svuotaDisegno" />
           </div>
-          <p v-if="!bordi.length" class="vuoto">Attiva il disegno e clicca sulla mappa, oppure crea il giro dai comuni.</p>
-        </div>
+          <div class="bordi">
+            <div v-for="(v, i) in bordi" :key="i" class="bordo">
+              <span class="num" :style="{ background: coloreHex }">{{ i + 1 }}</span>
+              <span class="coord" title="centra" @click="centraSuVertice(v)">{{ v.lat.toFixed(5) }}, {{ v.lng.toFixed(5) }}</span>
+              <span class="azioni">
+                <Button icon="pi pi-arrow-up" text rounded size="small" :disabled="i === 0" @click="sposta(i, -1)" />
+                <Button icon="pi pi-arrow-down" text rounded size="small" :disabled="i === bordi.length - 1" @click="sposta(i, 1)" />
+                <Button icon="pi pi-times" text rounded size="small" severity="danger" @click="rimuoviVertice(v)" />
+              </span>
+            </div>
+            <p v-if="!bordi.length" class="vuoto">Attiva il disegno e clicca sulla mappa (i pin si trascinano, il + a metà lato aggiunge un punto, il tasto destro lo toglie), oppure crea il giro dai comuni.</p>
+          </div>
+        </template>
+
+        <template v-if="modo === 'modifica' && dettaglio?.variazioni?.length">
+          <div class="pannello-titolo">Ultime modifiche</div>
+          <div class="variazioni">
+            <div v-for="(v, i) in dettaglio.variazioni" :key="i" class="variazione">
+              <span class="quando">{{ dataOra(v.dataOra) }}</span> <b>{{ etichettaCampo[v.campo] ?? v.campo }}</b>
+              <template v-if="v.campo !== 'SHAPE'">: {{ v.prima ?? '—' }} → {{ v.dopo ?? '—' }}</template>
+              <span v-if="v.utente" class="nota"> · {{ v.utente }}</span>
+            </div>
+          </div>
+        </template>
       </aside>
     </div>
 
     <div class="tabelle">
       <div class="tab">
-        <div class="tab-titolo">Comuni ({{ comuni.length }})</div>
-        <DataTable :value="comuni" v-model:selection="comuniSel" dataKey="idComune"
+        <div class="tab-titolo">Comuni della filiale ({{ comuni.length }})
+          <InputText v-model="filtroComuni" placeholder="cerca" size="small" class="cerca" /></div>
+        <DataTable :value="comuniFiltrati" v-model:selection="comuniSel" dataKey="idComune"
           selectionMode="multiple" :metaKeySelection="false"
-          @update:selection="toggleComuni" scrollable scrollHeight="220px" size="small" stripedRows>
+          @update:selection="toggleComuni" scrollable scrollHeight="240px" size="small" stripedRows>
           <Column selectionMode="multiple" style="width: 3rem" />
-          <Column field="denominazione" header="Denominazione" />
+          <Column field="denominazione" header="Comune" />
           <Column field="belfiore" header="Belfiore" style="width: 6rem" />
           <Column field="cap" header="CAP" style="width: 5rem" />
         </DataTable>
       </div>
       <div class="tab">
-        <div class="tab-titolo">Elenco Giri ({{ giri.length }})</div>
-        <DataTable :value="giri" v-model:selection="giriSel" dataKey="idGiro"
-          selectionMode="multiple" :metaKeySelection="false"
-          @update:selection="toggleGiri" scrollable scrollHeight="220px" size="small" stripedRows>
+        <div class="tab-titolo">Giri ({{ giri.length }})
+          <span class="tab-azioni">
+            <InputText v-model="filtroGiri" placeholder="cerca" size="small" class="cerca" />
+            <Button label="Tutti" size="small" text @click="mostraTutti" title="Mostra tutti i giri sulla mappa" />
+            <Button label="Nessuno" size="small" text @click="nascondiTutti" title="Togli tutti i giri dalla mappa" />
+          </span>
+        </div>
+        <DataTable :value="giriFiltrati" v-model:selection="giriSel" dataKey="idGiro"
+          selectionMode="multiple" :metaKeySelection="false" :rowClass="d => d.idGiro === form.idGiro ? 'riga-in-modifica' : ''"
+          @update:selection="toggleGiri" scrollable scrollHeight="240px" size="small" stripedRows>
           <Column selectionMode="multiple" style="width: 3rem" />
-          <Column header="" style="width: 2.5rem">
+          <Column header="" style="width: 2.2rem">
             <template #body="{ data }"><span class="pallino" :style="{ background: data.colore || '#ccc' }" /></template>
           </Column>
-          <Column field="giro" header="Giro" />
-          <Column field="cap" header="CAP" style="width: 5rem" />
+          <Column field="giro" header="Giro">
+            <template #body="{ data }">{{ data.giro }} <Tag v-if="!data.attivo" value="chiuso" severity="secondary" /></template>
+          </Column>
+          <Column field="cap" header="CAP" style="width: 4.5rem" />
+          <Column field="comune" header="Comune fisso" style="width: 9rem" />
+          <Column field="driverDefault" header="Driver" style="width: 11rem" />
+          <Column field="nSped" header="Sped. oggi" style="width: 5.5rem" class="num-col" />
+          <Column header="" style="width: 5.5rem">
+            <template #body="{ data }">
+              <Button icon="pi pi-search" text rounded size="small" title="Inquadra sulla mappa" @click="inquadra(data)" />
+              <Button icon="pi pi-pencil" text rounded size="small" title="Modifica" @click="apriModifica(data)" />
+            </template>
+          </Column>
         </DataTable>
       </div>
     </div>
+
+    <Dialog :visible="!!conferma" modal :header="conferma?.titolo" :style="{ width: '32rem' }" @update:visible="conferma = null">
+      <p>{{ conferma?.testo }}</p>
+      <template #footer>
+        <Button label="Annulla" text @click="conferma = null" />
+        <Button label="Conferma" @click="confermato" />
+      </template>
+    </Dialog>
   </div>
 </template>
 
 <style scoped>
-.testata { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .5rem; }
+.pagina { display: flex; flex-direction: column; gap: .5rem; }
+.testata { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .testata h2 { margin: 0; }
-.controlli { display: flex; align-items: center; gap: 1.5rem; margin-bottom: .5rem; flex-wrap: wrap; font-size: .9rem; }
+.filiale { font-weight: 400; color: var(--p-text-muted-color); font-size: 1rem; margin-left: .5rem; }
+.sotto { margin: .15rem 0 0; color: var(--p-text-muted-color); font-size: .9rem; }
+.barra { display: flex; align-items: center; gap: .5rem; }
+.controlli { display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap; font-size: .9rem; }
 .chk { display: inline-flex; align-items: center; gap: .4rem; cursor: pointer; }
-.sel-giro { padding: .3rem; border: 1px solid var(--p-surface-300); border-radius: 4px; max-width: 240px; }
-.cap { width: 6rem; }
+.nota { color: var(--p-text-muted-color); font-size: .85rem; }
+.attenzione { color: var(--p-orange-600); font-size: .85rem; }
+.sel-giro { width: 15rem; margin-left: .3rem; }
+.cap { width: 6rem; margin-left: .3rem; }
+.spazio { flex: 1; }
 
 .corpo { display: flex; gap: 1rem; align-items: stretch; }
-.mappa { flex: 1; height: 60vh; min-height: 420px; border: 1px solid var(--p-surface-300); border-radius: 6px; z-index: 0; }
-.pannello { flex: 0 0 300px; border: 1px solid var(--p-surface-200); border-radius: 6px; overflow: hidden; display: flex; flex-direction: column; }
-.pannello-titolo { background: #00a5cf; color: #fff; padding: .4rem .75rem; font-weight: 600; font-size: .9rem; display: flex; align-items: center; justify-content: space-between; }
+.mappa { flex: 1; height: 62vh; min-height: 440px; border: 1px solid var(--p-surface-300); border-radius: 6px; z-index: 0; }
+.pannello { flex: 0 0 320px; border: 1px solid var(--p-surface-200); border-radius: 6px; overflow: hidden; display: flex; flex-direction: column; max-height: 62vh; }
+.pannello-titolo { background: #00a5cf; color: #fff; padding: .35rem .75rem; font-weight: 600; font-size: .9rem; display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.pannello-titolo .chiaro { color: #fff; }
 .conteggio { font-weight: 400; opacity: .9; font-size: .8rem; }
-.form { display: flex; flex-direction: column; gap: .5rem; padding: .75rem; }
-.form > label { font-size: .85rem; color: #555; }
-.form hr { width: 100%; border: none; border-top: 1px solid var(--p-surface-200); margin: .25rem 0; }
+.form { display: flex; flex-direction: column; gap: .4rem; padding: .6rem .75rem; overflow-y: auto; }
+.form > label, .form .due label { font-size: .8rem; color: #555; }
+.form hr { width: 100%; border: none; border-top: 1px solid var(--p-surface-200); margin: .2rem 0; }
+.due { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+.colore { display: flex; align-items: center; gap: .5rem; }
 .hint { color: #888; font-size: .75rem; }
 .anteprima { color: #1a7a1a; font-weight: 600; font-size: .8rem; }
-.bordi { padding: .5rem .75rem; overflow-y: auto; max-height: 32vh; }
+.bordi { padding: .4rem .75rem; overflow-y: auto; min-height: 3rem; max-height: 24vh; }
 .bordo { display: flex; align-items: center; gap: .4rem; font-size: .78rem; }
-.bordo .num { flex: 0 0 1.4rem; height: 1.4rem; line-height: 1.4rem; text-align: center; background: #00628f; color: #fff; border-radius: 50%; font-weight: 700; }
-.bordo .coord { flex: 1; font-family: monospace; }
+.bordo .num { flex: 0 0 1.4rem; height: 1.4rem; line-height: 1.4rem; text-align: center; color: #fff; border-radius: 50%; font-weight: 700; }
+.bordo .coord { flex: 1; font-family: monospace; cursor: pointer; }
 .bordo .azioni { display: flex; }
 .vuoto { color: #888; font-size: .85rem; }
+.variazioni { padding: .4rem .75rem; overflow-y: auto; max-height: 20vh; font-size: .78rem; }
+.variazione { padding: .1rem 0; border-bottom: 1px dotted var(--p-surface-200); }
+.variazione .quando { color: var(--p-text-muted-color); }
 
-.tabelle { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
+.tabelle { display: grid; grid-template-columns: 1fr 1.4fr; gap: 1rem; margin-top: .5rem; }
 .tab { border: 1px solid var(--p-surface-200); border-radius: 6px; overflow: hidden; }
-.tab-titolo { background: var(--p-surface-50); padding: .4rem .75rem; font-weight: 600; font-size: .9rem; border-bottom: 1px solid var(--p-surface-200); }
+.tab-titolo { background: var(--p-surface-50); padding: .3rem .75rem; font-weight: 600; font-size: .9rem; border-bottom: 1px solid var(--p-surface-200); display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.tab-azioni { display: flex; align-items: center; gap: .25rem; }
+.cerca { width: 10rem; }
 .pallino { display: inline-block; width: 14px; height: 14px; border-radius: 50%; border: 1px solid #999; }
+:deep(.num-col) { text-align: right; }
+:deep(.riga-in-modifica) { outline: 2px solid #00a5cf; outline-offset: -2px; }
+@media (max-width: 1100px) {
+  .corpo { flex-direction: column; }
+  .pannello { flex: none; max-height: none; }
+  .tabelle { grid-template-columns: 1fr; }
+}
 </style>
 
 <style>
-/* pin numerati del disegno (icona globale, fuori da scoped) */
+/* pin dei vertici e punti intermedi (icone globali, fuori da scoped) */
 .vertice-num span {
   display: flex; align-items: center; justify-content: center;
   width: 24px; height: 24px; border-radius: 50%;
-  background: #f44f22; color: #fff; font-weight: 700; font-size: 12px;
+  color: #fff; font-weight: 700; font-size: 12px;
   border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.4);
+}
+.vertice-mezzo span {
+  display: flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: rgba(255,255,255,.85); color: #333; font-weight: 700; font-size: 12px; line-height: 1;
+  border: 1px solid #666; cursor: pointer;
 }
 .sped-dot span {
   display: block; width: 12px; height: 12px; border-radius: 50%;
   border: 1px solid rgba(0,0,0,.4);
 }
+.sped-dot.senza-giro span { border: 2px solid #c62828; width: 10px; height: 10px; }
 </style>

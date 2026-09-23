@@ -527,6 +527,7 @@ Fatturazione.Map(app, ConnString);
 Schedulatore.Map(app, ConnString);
 Sim.Map(app, ConnString);
 Palmari.Map(app, ConnString);
+Giri.Map(app, ConnString);
 Mezzi.Map(app, ConnString);
 
 // Stato di archiviazione del dipendente, modificabile dalla griglia "Elenco
@@ -1807,176 +1808,6 @@ app.MapPost("/api/esiti/conferma", async (EsitiConfermaRequest req, ClaimsPrinci
     {
         return Results.Json(new { errore = $"Riscontrata anomalia in esecuzione stored: {ex.Message}" },
             statusCode: StatusCodes.Status400BadRequest);
-    }
-}).RequireAuthorization();
-
-// === Giri su Mappa (videata legacy "Creazione giri su Mappa") ===
-
-// Centro mappa = coordinate della filiale corrente (fallback Toscana)
-app.MapGet("/api/giri/init", async (ClaimsPrincipal user) =>
-{
-    if (!int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale))
-        return Results.BadRequest(new { errore = "Filiale non disponibile" });
-    await using var cn = new SqlConnection(ConnString());
-    var f = await cn.QueryFirstOrDefaultAsync(
-        "SELECT Latitude AS lat, Longitude AS lng, FILIALE AS filiale FROM FILIALI WHERE IDFILIALE = @id",
-        new { id = idFiliale }) as IDictionary<string, object>;
-    double lat = f?["lat"] is double la ? la : 43.84;
-    double lng = f?["lng"] is double lo ? lo : 11.1143;
-    return Results.Ok(new { lat, lng, filiale = f?["filiale"] as string });
-}).RequireAuthorization();
-
-// Elenco giri della filiale (GEO_GIRI)
-app.MapGet("/api/giri/elenco", async (ClaimsPrincipal user) =>
-{
-    if (!int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale))
-        return Results.BadRequest(new { errore = "Filiale non disponibile" });
-    await using var cn = new SqlConnection(ConnString());
-    var g = await cn.QueryAsync(@"
-        SELECT IdGiro AS idGiro, Giro AS giro, CAP AS cap, Belfiore AS belfiore, Colore AS colore
-        FROM GEO_GIRI WHERE IdFiliale = @id AND DataFine IS NULL ORDER BY Giro",
-        new { id = idFiliale });
-    return Results.Ok(g);
-}).RequireAuthorization();
-
-// Comuni coperti dalla filiale (via GEO_COPERTURE.CAP)
-app.MapGet("/api/giri/comuni", async (ClaimsPrincipal user) =>
-{
-    if (!int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale))
-        return Results.BadRequest(new { errore = "Filiale non disponibile" });
-    await using var cn = new SqlConnection(ConnString());
-    var c = await cn.QueryAsync(@"
-        SELECT c.IdComune AS idComune, c.DENOMINAZIONE AS denominazione, c.BELFIORE AS belfiore,
-               MIN(c.CAP) AS cap, MIN(c.SIGLAPROV) AS siglaProv
-        FROM GEO_COMUNE c
-        JOIN GEO_COPERTURE cop ON cop.CAP = c.CAP
-        WHERE cop.IdFilialeDistribuzione = @id
-        GROUP BY c.IdComune, c.DENOMINAZIONE, c.BELFIORE
-        ORDER BY c.DENOMINAZIONE", new { id = idFiliale });
-    return Results.Ok(c);
-}).RequireAuthorization();
-
-// Vertici di un comune o di un giro (Geo_GetVertici) -> poligono
-app.MapGet("/api/giri/vertici", async (int? idComune, int? idGiro) =>
-{
-    if (idComune is null && idGiro is null)
-        return Results.BadRequest(new { errore = "Specificare idComune o idGiro" });
-    await using var cn = new SqlConnection(ConnString());
-    var v = await cn.QueryAsync("dbo.Geo_GetVertici",
-        new { IdComune = idComune, IdGiro = idGiro }, commandType: CommandType.StoredProcedure);
-    // NB: Geo_GetVertici restituisce le colonne con casing diverso tra comune
-    // (Latitude/Longitude) e giro (latitude/longitude); il lookup di Dapper e'
-    // case-sensitive -> leggo i valori in modo case-insensitive.
-    static object? Cerca(IDictionary<string, object> r, string nome)
-    {
-        foreach (var kv in r)
-            if (string.Equals(kv.Key, nome, StringComparison.OrdinalIgnoreCase)) return kv.Value;
-        return null;
-    }
-    return Results.Ok(v.Cast<IDictionary<string, object>>()
-        .Select(r => new { lat = Cerca(r, "Latitude"), lng = Cerca(r, "Longitude") }));
-}).RequireAuthorization();
-
-// Spedizioni geolocalizzate da consegnare (V_ElencoGeoSped), filtrabili per giro/cap
-app.MapGet("/api/giri/spedizioni", async (int? idGiro, string? cap, ClaimsPrincipal user) =>
-{
-    if (!int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale))
-        return Results.BadRequest(new { errore = "Filiale non disponibile" });
-    var par = new DynamicParameters();
-    par.Add("id", idFiliale);
-    var where = " WHERE idFiliale = @id AND latitude IS NOT NULL";
-    if (idGiro is int g) { where += " AND IdGiro = @g"; par.Add("g", g); }
-    if (!string.IsNullOrWhiteSpace(cap) && cap.Length == 5) { where += " AND destinazionecap = @cap"; par.Add("cap", cap); }
-    await using var cn = new SqlConnection(ConnString());
-    var s = await cn.QueryAsync($@"
-        SELECT idspedizione AS idSpedizione, barcode, latitude AS lat, longitude AS lng,
-               destinazioneindirizzo AS indirizzo, DestinazioneLocalita AS localita,
-               destinazionecap AS cap, giro, IdGiro AS idGiro, colore
-        FROM V_ElencoGeoSped{where}", par);
-    return Results.Ok(s);
-}).RequireAuthorization();
-
-// Geometria (WKT) di un giro o di un comune: rendering unificato che gestisce
-// anche i MULTIPOLYGON (es. giri creati come unione di comuni non adiacenti)
-app.MapGet("/api/giri/shape", async (int? idGiro, int? idComune) =>
-{
-    await using var cn = new SqlConnection(ConnString());
-    string? wkt = (idGiro, idComune) switch
-    {
-        (int g, _) => await cn.ExecuteScalarAsync<string>(
-            "SELECT SHAPE.STAsText() FROM GEO_GIRI WHERE IdGiro = @id AND SHAPE IS NOT NULL", new { id = g }),
-        (_, int c) => await cn.ExecuteScalarAsync<string>(
-            "SELECT SHAPE.STAsText() FROM GEO_COMUNE WHERE IdComune = @id AND SHAPE IS NOT NULL", new { id = c }),
-        _ => null
-    };
-    return Results.Ok(new { wkt });
-}).RequireAuthorization();
-
-// Crea un giro come unione delle geometrie dei comuni selezionati
-app.MapPost("/api/giri/da-comuni", async (CreaGiroComuniRequest req, ClaimsPrincipal user) =>
-{
-    if (!int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale))
-        return Results.BadRequest(new { errore = "Filiale non disponibile" });
-    if (req.IdComuni is null || req.IdComuni.Count == 0)
-        return Results.BadRequest(new { errore = "Seleziona almeno un comune" });
-
-    var json = JsonSerializer.Serialize(req.IdComuni);
-    await using var cn = new SqlConnection(ConnString());
-    try
-    {
-        var id = await cn.QueryFirstOrDefaultAsync<int?>("dbo.AI_GEO_CreaGiroDaComuni",
-            new { Giro = req.Nome, IdFiliale = idFiliale, Colore = req.Colore, IdComuni = json },
-            commandType: CommandType.StoredProcedure);
-        return Results.Ok(new { idGiro = id });
-    }
-    catch (SqlException ex)
-    {
-        return Results.Json(new { errore = ex.Message }, statusCode: StatusCodes.Status400BadRequest);
-    }
-}).RequireAuthorization();
-
-// Crea un nuovo giro con i vertici disegnati (AI_GEO_CreaGiro, atomico)
-app.MapPost("/api/giri", async (CreaGiroRequest req, ClaimsPrincipal user) =>
-{
-    if (!int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale))
-        return Results.BadRequest(new { errore = "Filiale non disponibile" });
-    if (req.Vertici is null || req.Vertici.Count < 3)
-        return Results.BadRequest(new { errore = "Servono almeno 3 punti per definire il giro" });
-
-    var json = JsonSerializer.Serialize(req.Vertici.Select(v => new { lat = v.Lat, lng = v.Lng }));
-    await using var cn = new SqlConnection(ConnString());
-    try
-    {
-        var id = await cn.QueryFirstOrDefaultAsync<int?>("dbo.AI_GEO_CreaGiro",
-            new { Giro = req.Nome, IdFiliale = idFiliale, Colore = req.Colore, Vertici = json },
-            commandType: CommandType.StoredProcedure);
-        return Results.Ok(new { idGiro = id });
-    }
-    catch (SqlException ex)
-    {
-        return Results.Json(new { errore = ex.Message }, statusCode: StatusCodes.Status400BadRequest);
-    }
-}).RequireAuthorization();
-
-// Aggiorna i giri alle spedizioni (GEO_AssegnaGIRI per ogni giro selezionato)
-app.MapPost("/api/giri/assegna", async (AssegnaGiriRequest req, ClaimsPrincipal user) =>
-{
-    if (!int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale))
-        return Results.BadRequest(new { errore = "Filiale non disponibile" });
-    if (req.IdGiri is null || req.IdGiri.Count == 0)
-        return Results.BadRequest(new { errore = "Nessun giro selezionato" });
-    await using var cn = new SqlConnection(ConnString());
-    try
-    {
-        foreach (var idGiro in req.IdGiri)
-            await cn.ExecuteAsync("dbo.GEO_AssegnaGIRI",
-                new { idgiro = idGiro, forza = 1, IdFiliale = idFiliale },
-                commandType: CommandType.StoredProcedure);
-        return Results.Ok(new { ok = true });
-    }
-    catch (SqlException ex)
-    {
-        return Results.Json(new { errore = ex.Message }, statusCode: StatusCodes.Status400BadRequest);
     }
 }).RequireAuthorization();
 
@@ -4781,10 +4612,6 @@ record EsitiVerificaRequest(string Barcode, int IdAzione, int IdProcesso, string
 record UnilavParseRequest(string? Testo, string? TracciatoJson, string? PdfBase64);
 record UnilavApplicaRequest(int IdUtente, Dictionary<string, string?> Valori, bool NuovaScheda = false);
 record EsitiConfermaRequest(int IdAzione, int IdProcesso, string ElencoBarcode, string ElencoParametri1, string? Comune, string? Operatore, string? Data);
-record VerticeGiro(double Lat, double Lng);
-record CreaGiroRequest(string Nome, string? Colore, List<VerticeGiro> Vertici);
-record CreaGiroComuniRequest(string Nome, string? Colore, List<int> IdComuni);
-record AssegnaGiriRequest(List<int> IdGiri);
 record ComandoEsitiRequest(int IdAzione, string? Barcodes, string? Nota);
 record CreaDdtRequest(int IdFilialeMittente, int IdFilialeDestinazione, string? NotaConsegna,
     int? IdDriver, string? Driver, int? IdMezzo, string? Targa, string? Sigillo1, string? Sigillo2, string? Sigillo3);
