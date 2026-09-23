@@ -308,16 +308,31 @@ app.MapGet("/api/dashboard/punteggi", async (ClaimsPrincipal user) =>
     {
         await using var cn = new SqlConnection(ConnString());
 
-        var mese = await cn.QueryAsync(
-            @"SELECT mese, Punteggio AS punteggio, Media AS media, Giornate AS giornate
-              FROM V_DW_punteggiMese WHERE IDFILIALE = @id ORDER BY mese",
-            new { id = idFiliale });
+        // Stessa logica delle viste legacy V_DW_punteggiMese / V_DW_punteggiGiorno (giornata = riga driver/giorno
+        // con punteggio > 0, media = punteggio / giornate), piu' i PEZZI: la somma di tutto cio' che il driver ha
+        // lavorato (parcel di ogni cliente, raccomandate, M1, M2, AG, bancario), cioe' gli stessi conteggi che
+        // entrano nel punteggio. Medie: pezzi per giornata di driver e, in azienda, pezzi per filiale.
+        const string PEZZI = @"(ISNULL(Parcel_Poste,0)+ISNULL(Parcel_Hermes,0)+ISNULL(Parcel_InPost,0)+ISNULL(Parcel_iMile,0)+ISNULL(Parcel_Folletto,0)+ISNULL(Parcel_Altri,0)+ISNULL(Parcel_Speedy,0)+ISNULL(SDA_Bancario,0)+ISNULL(Parcel_Gofo,0)
+                                +ISNULL(RAC140_AvvSco,0)+ISNULL(RAC140_Cons,0)+ISNULL(M1_Cons,0)+ISNULL(M1_Ass,0)+ISNULL(M1_Sco,0)+ISNULL(M2_Cons,0)+ISNULL(AG,0)+ISNULL(M2_Ass,0)+ISNULL(M2_Sco,0))";
+        const string MESE = "RIGHT(CONVERT(varchar(4), Anno), 2) + '-' + RIGHT('00' + CONVERT(varchar(3), Mese), 2)";
 
-        var giorno = await cn.QueryAsync(
-            @"SELECT CONVERT(varchar(10), Data, 23) AS data, Punteggio AS punteggio,
-                     Media AS media, Giornate AS giornate
-              FROM V_DW_punteggiGiorno WHERE IDFILIALE = @id ORDER BY Data",
-            new { id = idFiliale });
+        var mese = await cn.QueryAsync($@"
+            SELECT {MESE} AS mese, SUM(Punteggio) AS punteggio,
+                   SUM(CASE WHEN Punteggio > 0 THEN 1 ELSE 0 END) AS giornate,
+                   CONVERT(int, SUM(Punteggio) / NULLIF(SUM(CASE WHEN Punteggio > 0 THEN 1 ELSE 0 END), 0)) AS media,
+                   SUM({PEZZI}) AS pezzi, COUNT(DISTINCT Driver) AS driver,
+                   CONVERT(int, ROUND(1.0 * SUM({PEZZI}) / NULLIF(SUM(CASE WHEN Punteggio > 0 THEN 1 ELSE 0 END), 0), 0)) AS pezziGiornata
+            FROM V_UtentiAttivita2024
+            WHERE IDFILIALE = @id AND Data >= DATEADD(month, -10, GETDATE())
+            GROUP BY Anno, Mese ORDER BY Anno, Mese", new { id = idFiliale }, commandTimeout: 120);
+
+        var giorno = await cn.QueryAsync($@"
+            SELECT CONVERT(varchar(10), Data, 23) AS data, SUM(Punteggio) AS punteggio, COUNT(*) AS giornate,
+                   CONVERT(int, SUM(Punteggio) / COUNT(*)) AS media,
+                   SUM({PEZZI}) AS pezzi, CONVERT(int, ROUND(1.0 * SUM({PEZZI}) / COUNT(*), 0)) AS pezziGiornata
+            FROM V_UtentiAttivita2024
+            WHERE IDFILIALE = @id AND Punteggio > 0 AND Data >= DATEADD(day, -15, GETDATE())
+            GROUP BY Data ORDER BY Data", new { id = idFiliale }, commandTimeout: 120);
 
         // azienda della filiale corrente
         var idAzienda = await cn.ExecuteScalarAsync<int?>(
@@ -325,33 +340,44 @@ app.MapGet("/api/dashboard/punteggi", async (ClaimsPrincipal user) =>
         var aziendaNome = await cn.ExecuteScalarAsync<string>(
             "SELECT Azienda FROM AZIENDE WHERE IdAzienda = @a", new { a = idAzienda });
 
-        // aggregato AZIENDA: somma punteggi e giornate su tutte le filiali attive,
-        // media pesata = somma punteggi / somma giornate (NON media delle medie)
-        var meseAzienda = await cn.QueryAsync(
-            @"SELECT m.mese, SUM(m.Punteggio) AS punteggio, SUM(m.Giornate) AS giornate,
-                     CASE WHEN SUM(m.Giornate) > 0 THEN CONVERT(int, SUM(m.Punteggio)/SUM(m.Giornate)) ELSE 0 END AS media
-              FROM V_DW_punteggiMese m
-              JOIN FILIALI f ON f.IDFILIALE = m.IDFILIALE
-              WHERE f.IdAzienda = @a AND f.DataChiusura IS NULL
-              GROUP BY m.mese ORDER BY m.mese", new { a = idAzienda });
+        // aggregato AZIENDA: somma punteggi, pezzi e giornate su tutte le filiali attive; media pesata =
+        // somma punteggi / somma giornate (NON media delle medie); pezzi per filiale = pezzi / filiali con attivita'
+        var meseAzienda = await cn.QueryAsync($@"
+            SELECT {MESE} AS mese, SUM(v.Punteggio) AS punteggio,
+                   SUM(CASE WHEN v.Punteggio > 0 THEN 1 ELSE 0 END) AS giornate,
+                   CONVERT(int, SUM(v.Punteggio) / NULLIF(SUM(CASE WHEN v.Punteggio > 0 THEN 1 ELSE 0 END), 0)) AS media,
+                   SUM({PEZZI}) AS pezzi, COUNT(DISTINCT v.IDFILIALE) AS filiali, COUNT(DISTINCT v.Driver) AS driver,
+                   CONVERT(int, ROUND(1.0 * SUM({PEZZI}) / NULLIF(SUM(CASE WHEN v.Punteggio > 0 THEN 1 ELSE 0 END), 0), 0)) AS pezziGiornata,
+                   CONVERT(int, ROUND(1.0 * SUM({PEZZI}) / NULLIF(COUNT(DISTINCT v.IDFILIALE), 0), 0)) AS pezziFiliale
+            FROM V_UtentiAttivita2024 v
+            JOIN FILIALI f ON f.IDFILIALE = v.IDFILIALE
+            WHERE f.IdAzienda = @a AND f.DataChiusura IS NULL AND v.Data >= DATEADD(month, -10, GETDATE())
+            GROUP BY v.Anno, v.Mese ORDER BY v.Anno, v.Mese", new { a = idAzienda }, commandTimeout: 120);
 
-        var giornoAzienda = await cn.QueryAsync(
-            @"SELECT CONVERT(varchar(10), g.Data, 23) AS data, SUM(g.Punteggio) AS punteggio, SUM(g.Giornate) AS giornate,
-                     CASE WHEN SUM(g.Giornate) > 0 THEN CONVERT(int, SUM(g.Punteggio)/SUM(g.Giornate)) ELSE 0 END AS media
-              FROM V_DW_punteggiGiorno g
-              JOIN FILIALI f ON f.IDFILIALE = g.IDFILIALE
-              WHERE f.IdAzienda = @a AND f.DataChiusura IS NULL
-              GROUP BY g.Data ORDER BY g.Data", new { a = idAzienda });
+        var giornoAzienda = await cn.QueryAsync($@"
+            SELECT CONVERT(varchar(10), v.Data, 23) AS data, SUM(v.Punteggio) AS punteggio, COUNT(*) AS giornate,
+                   CONVERT(int, SUM(v.Punteggio) / COUNT(*)) AS media,
+                   SUM({PEZZI}) AS pezzi, COUNT(DISTINCT v.IDFILIALE) AS filiali,
+                   CONVERT(int, ROUND(1.0 * SUM({PEZZI}) / COUNT(*), 0)) AS pezziGiornata,
+                   CONVERT(int, ROUND(1.0 * SUM({PEZZI}) / NULLIF(COUNT(DISTINCT v.IDFILIALE), 0), 0)) AS pezziFiliale
+            FROM V_UtentiAttivita2024 v
+            JOIN FILIALI f ON f.IDFILIALE = v.IDFILIALE
+            WHERE f.IdAzienda = @a AND f.DataChiusura IS NULL AND v.Punteggio > 0 AND v.Data >= DATEADD(day, -15, GETDATE())
+            GROUP BY v.Data ORDER BY v.Data", new { a = idAzienda }, commandTimeout: 120);
 
         // confronto filiali attive dell'azienda sull'ultimo mese disponibile
-        var meseLabel = await cn.ExecuteScalarAsync<string>("SELECT MAX(mese) FROM V_DW_punteggiMese");
-        var confrontoFiliali = await cn.QueryAsync(
-            @"SELECT m.IDFILIALE AS idFiliale, f.FILIALE AS filiale, m.Punteggio AS punteggio,
-                     m.Media AS media, m.Giornate AS giornate
-              FROM V_DW_punteggiMese m
-              JOIN FILIALI f ON f.IDFILIALE = m.IDFILIALE
-              WHERE f.IdAzienda = @a AND f.DataChiusura IS NULL AND m.mese = @mese
-              ORDER BY m.Punteggio DESC", new { a = idAzienda, mese = meseLabel });
+        var meseLabel = await cn.ExecuteScalarAsync<string>($"SELECT MAX({MESE}) FROM V_UtentiAttivita2024 WHERE Data >= DATEADD(month, -10, GETDATE())");
+        var confrontoFiliali = await cn.QueryAsync($@"
+            SELECT v.IDFILIALE AS idFiliale, f.FILIALE AS filiale, SUM(v.Punteggio) AS punteggio,
+                   CONVERT(int, SUM(v.Punteggio) / NULLIF(SUM(CASE WHEN v.Punteggio > 0 THEN 1 ELSE 0 END), 0)) AS media,
+                   SUM(CASE WHEN v.Punteggio > 0 THEN 1 ELSE 0 END) AS giornate,
+                   SUM({PEZZI}) AS pezzi, COUNT(DISTINCT v.Driver) AS driver,
+                   CONVERT(int, ROUND(1.0 * SUM({PEZZI}) / NULLIF(SUM(CASE WHEN v.Punteggio > 0 THEN 1 ELSE 0 END), 0), 0)) AS pezziGiornata
+            FROM V_UtentiAttivita2024 v
+            JOIN FILIALI f ON f.IDFILIALE = v.IDFILIALE
+            WHERE f.IdAzienda = @a AND f.DataChiusura IS NULL AND {MESE} = @mese
+            GROUP BY v.IDFILIALE, f.FILIALE
+            ORDER BY SUM(v.Punteggio) DESC", new { a = idAzienda, mese = meseLabel }, commandTimeout: 120);
 
         return Results.Ok(new
         {
