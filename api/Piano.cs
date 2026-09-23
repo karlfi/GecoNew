@@ -1,17 +1,20 @@
 using System.Data;
+using System.Globalization;
 using System.Security.Claims;
 using System.Text.Json;
 using Dapper;
 using Microsoft.Data.SqlClient;
 
 // === Piano della giornata (pagina "Piano della giornata") ===
-// Per un giorno e una filiale: i giri con le spedizioni caricate, il driver assegnato (GIRI_PIANO, con
-// il predefinito del giro) e l'ottimizzazione del percorso con HERE: la pagina chiede (AI_HERE_Richiesta
-// crea la testata e i punti in GEO_HereW/GEO_HereWReq) e mette in coda il workflow GEO-01_HERE, lo
-// script here_sequenza.py chiama HERE e scrive la risposta; qui si legge il percorso ordinato.
+// Per un giorno e una filiale: i giri con le spedizioni caricate, il driver che li fa (GIRI_PIANO.IdDriver),
+// e per ogni driver il percorso ottimizzato con HERE su tutte le consegne dei suoi giri (PIANO_DRIVER:
+// partenza e ritorno da casa o dalla filiale, richiesta in GEO_HereW/GEO_HereWReq, risposta scritta dallo
+// script here_sequenza.py del workflow GEO-01_HERE con la polilinea stradale). La casa del driver sta in
+// UTENTI_GEO, geocodificata qui con HERE quando la si imposta.
 static class Piano
 {
     const string WorkflowHere = "GEO-01_HERE";
+    static readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(30) };
 
     class ErrorePiano : Exception { public ErrorePiano(string m) : base(m) { } }
 
@@ -24,7 +27,7 @@ static class Piano
 
     public static void Map(WebApplication app, Func<string> connString)
     {
-        // i giri del giorno: spedizioni (totali, con coordinate, con sequenza), driver, stato dell'ottimizzazione
+        // i giri del giorno (spedizioni, driver) e i driver della filiale (opzioni, casa, percorso)
         app.MapGet("/api/piano", (string? data, ClaimsPrincipal user) => Prova(async () =>
         {
             var idFiliale = Filiale(user);
@@ -35,9 +38,7 @@ static class Piano
                 SELECT g.IdGiro AS idGiro, g.Giro AS giro, g.Colore AS colore, g.IdDriverDefault AS idDriverDefault, ud.Nome AS driverDefault,
                        CASE WHEN g.DataFine IS NULL THEN 1 ELSE 0 END AS attivo,
                        ISNULL(s.n, 0) AS nSped, ISNULL(s.geo, 0) AS nGeo, ISNULL(s.seq, 0) AS nSequenza,
-                       p.IdPiano AS idPiano, p.IdDriver AS idDriver, u.Nome AS driver, p.Stato AS stato, p.NPunti AS nPunti, p.NSenzaCoordinate AS nSenzaCoordinate,
-                       p.DistanzaM AS distanzaM, p.TempoS AS tempoS, p.Errore AS errore, p.IdGeoHereW AS idGeoHereW,
-                       CONVERT(varchar(19), p.DataRichiesta, 126) AS dataRichiesta, CONVERT(varchar(19), p.DataRisposta, 126) AS dataRisposta
+                       p.IdPiano AS idPiano, p.IdDriver AS idDriver, u.Nome AS driver
                 FROM GEO_GIRI g
                 LEFT JOIN (SELECT IdGiro, COUNT(*) AS n, SUM(CASE WHEN DestinazioneLatitude IS NOT NULL THEN 1 ELSE 0 END) AS geo,
                                   SUM(CASE WHEN Sequenza IS NOT NULL THEN 1 ELSE 0 END) AS seq
@@ -47,26 +48,34 @@ static class Piano
                 LEFT JOIN UTENTI ud ON ud.IdUtente = g.IdDriverDefault
                 WHERE g.IdFiliale = @id AND (g.DataFine IS NULL OR p.IdPiano IS NOT NULL)
                 ORDER BY g.Giro", new { id = idFiliale, data = giorno, dal = giorno, al = giorno.AddDays(1) });
-            var senzaGiro = await cn.QueryFirstAsync(@"
-                SELECT COUNT(*) AS n, SUM(CASE WHEN DestinazioneLatitude IS NOT NULL THEN 1 ELSE 0 END) AS geo
-                FROM SPED_ATTIVITA WHERE IdFiliale = @id AND DataCarico >= @dal AND DataCarico < @al AND IdGiro IS NULL",
-                new { id = idFiliale, dal = giorno, al = giorno.AddDays(1) });
             var driver = await cn.QueryAsync(@"
-                SELECT u.IdUtente AS idUtente, u.Nome AS nome
+                SELECT u.IdUtente AS idUtente, u.Nome AS nome,
+                       pd.IdPianoDriver AS idPianoDriver, ISNULL(pd.PartenzaCasa, 0) AS partenzaCasa, ISNULL(pd.RitornoCasa, 0) AS ritornoCasa,
+                       pd.Stato AS stato, ISNULL(pd.DaRifare, 0) AS daRifare, pd.NPunti AS nPunti, pd.NSenzaCoordinate AS nSenzaCoordinate,
+                       pd.DistanzaM AS distanzaM, pd.TempoS AS tempoS, pd.Errore AS errore, CONVERT(varchar(19), pd.DataRisposta, 126) AS dataRisposta,
+                       CASE WHEN pd.Polilinea IS NULL THEN 0 ELSE 1 END AS conPolilinea,
+                       geo.Indirizzo AS casaIndirizzo, geo.Lat AS casaLat, geo.Lng AS casaLng,
+                       NULLIF(LTRIM(RTRIM(ISNULL(u.IndirizzoRes, '') + ISNULL(', ' + u.CapRes, '') + ISNULL(' ' + u.ComuneRes, '') + ISNULL(' ' + u.ProvRes, ''))), '') AS residenza
                 FROM UTENTI u
+                LEFT JOIN PIANO_DRIVER pd ON pd.IdDriver = u.IdUtente AND pd.Data = @data
+                LEFT JOIN UTENTI_GEO geo ON geo.IdUtente = u.IdUtente
                 WHERE ISNULL(u.DataFine, '2079-01-01') > GETDATE()
                   AND ((u.IdRuolo IN (40, 41) AND u.IdFiliale = @id)
                        OR u.IdUtente IN (SELECT IdDriverDefault FROM GEO_GIRI WHERE IdFiliale = @id AND IdDriverDefault IS NOT NULL)
                        OR u.IdUtente IN (SELECT IdDriver FROM GIRI_PIANO WHERE IdFiliale = @id AND Data = @data AND IdDriver IS NOT NULL))
                 ORDER BY u.Nome", new { id = idFiliale, data = giorno });
+            var senzaGiro = await cn.QueryFirstAsync(@"
+                SELECT COUNT(*) AS n, ISNULL(SUM(CASE WHEN DestinazioneLatitude IS NOT NULL THEN 1 ELSE 0 END), 0) AS geo
+                FROM SPED_ATTIVITA WHERE IdFiliale = @id AND DataCarico >= @dal AND DataCarico < @al AND IdGiro IS NULL",
+                new { id = idFiliale, dal = giorno, al = giorno.AddDays(1) });
             return Results.Ok(new
             {
                 filiale = (string?)f?.filiale, lat = (double?)f?.lat, lng = (double?)f?.lng, data = giorno.ToString("yyyy-MM-dd"),
-                giri, senzaGiro = new { n = (int)senzaGiro.n, geo = (int)(senzaGiro.geo ?? 0) }, driver,
+                giri, driver, senzaGiro = new { n = (int)senzaGiro.n, geo = (int)senzaGiro.geo },
             });
         })).RequireAuthorization();
 
-        // driver di un giro per il giorno: { data, idGiro, idDriver | null }
+        // giro -> driver: { data, idGiro, idDriver | null }
         app.MapPost("/api/piano/driver", (JsonElement b, ClaimsPrincipal user) => Prova(async () =>
         {
             await using var cn = new SqlConnection(connString());
@@ -85,129 +94,182 @@ static class Piano
             return Results.Ok(new { assegnati = n });
         })).RequireAuthorization();
 
-        // ottimizzazione di un giro: { data, idGiro } -> richiesta HERE + esecuzione del workflow in coda
+        // partenza/ritorno da casa o dalla filiale: { data, idDriver, partenzaCasa, ritornoCasa }
+        app.MapPost("/api/piano/driver/opzioni", (JsonElement b, ClaimsPrincipal user) => Prova(async () =>
+        {
+            await using var cn = new SqlConnection(connString());
+            var r = await cn.QueryFirstAsync("dbo.AI_PIANO_DriverOpzioni", new
+            {
+                IdFiliale = Filiale(user), Data = Giorno(Testo(b, "data")), IdDriver = Intero(b, "idDriver") ?? throw new ErrorePiano("Driver mancante"),
+                PartenzaCasa = Vero(b, "partenzaCasa"), RitornoCasa = Vero(b, "ritornoCasa"), Utente = user.Identity?.Name,
+            }, commandType: CommandType.StoredProcedure);
+            return Results.Ok(r);
+        })).RequireAuthorization();
+
+        // casa del driver: { indirizzo } -> geocodifica HERE e salva in UTENTI_GEO
+        app.MapPost("/api/piano/driver/{idUtente:int}/casa", (int idUtente, JsonElement b, ClaimsPrincipal user) => Prova(async () =>
+        {
+            var indirizzo = (Testo(b, "indirizzo") ?? "").Trim();
+            if (indirizzo.Length < 5) throw new ErrorePiano("Indirizzo mancante");
+            await using var cn = new SqlConnection(connString());
+            var token = await cn.ExecuteScalarAsync<string?>("SELECT Codice FROM dbo.LISTA_VALORI WHERE Lista = 'HERE' AND Valore = 'token'");
+            if (string.IsNullOrWhiteSpace(token)) throw new ErrorePiano("In Lista Valori (lista HERE) manca la riga token");
+            var (lat, lng, trovato) = await Geocodifica(token.Trim(), indirizzo);
+            await cn.ExecuteAsync("dbo.AI_UTENTI_GEO_Save", new { IdUtente = idUtente, Indirizzo = indirizzo, Lat = lat, Lng = lng, Origine = "HERE", Utente = user.Identity?.Name },
+                commandType: CommandType.StoredProcedure);
+            return Results.Ok(new { indirizzo, lat, lng, trovato });
+        })).RequireAuthorization();
+
+        // ottimizzazione del percorso di un driver: { data, idDriver } -> richiesta HERE + workflow in coda
         app.MapPost("/api/piano/ottimizza", (JsonElement b, ClaimsPrincipal user) => Prova(async () =>
         {
             var idFiliale = Filiale(user);
-            var giorno = Giorno(Testo(b, "data"));
-            var idGiro = Intero(b, "idGiro") ?? throw new ErrorePiano("Giro mancante");
             await using var cn = new SqlConnection(connString());
-            var r = await cn.QueryFirstAsync("dbo.AI_HERE_Richiesta",
-                new { IdFiliale = idFiliale, Data = giorno, IdGiro = idGiro, IdUtente = IdUtente(user), Utente = user.Identity?.Name }, commandType: CommandType.StoredProcedure);
+            var r = await cn.QueryFirstAsync("dbo.AI_HERE_RichiestaDriver",
+                new { IdFiliale = idFiliale, Data = Giorno(Testo(b, "data")), IdDriver = Intero(b, "idDriver") ?? throw new ErrorePiano("Driver mancante"), IdUtente = IdUtente(user), Utente = user.Identity?.Name },
+                commandType: CommandType.StoredProcedure);
             var idEsecuzione = await Accoda(cn, user.Identity?.Name, JsonSerializer.Serialize(new { IdGeoHereW = (int)r.IdGeoHereW }));
-            return Results.Ok(new { idPiano = (int)r.IdPiano, idGeoHereW = (int)r.IdGeoHereW, nPunti = (int)r.NPunti, nSenzaCoordinate = (int)r.NSenzaCoordinate, idEsecuzione });
+            return Results.Ok(new { idPianoDriver = (int)r.IdPianoDriver, idGeoHereW = (int)r.IdGeoHereW, nPunti = (int)r.NPunti, nSenzaCoordinate = (int)r.NSenzaCoordinate, idEsecuzione });
         })).RequireAuthorization();
 
-        // ottimizzazione di tutti i giri del giorno con spedizioni geolocalizzate: { data, soloDaFare }
+        // tutti i driver con consegne geolocalizzate: { data, soloDaFare }
         app.MapPost("/api/piano/ottimizza-tutti", (JsonElement b, ClaimsPrincipal user) => Prova(async () =>
         {
             var idFiliale = Filiale(user);
             var giorno = Giorno(Testo(b, "data"));
             var soloDaFare = !(b.TryGetProperty("soloDaFare", out var s) && s.ValueKind == JsonValueKind.False);
             await using var cn = new SqlConnection(connString());
-            var giri = await cn.QueryAsync<int>(@"
-                SELECT s.IdGiro FROM SPED_ATTIVITA s
-                JOIN GEO_GIRI g ON g.IdGiro = s.IdGiro AND g.DataFine IS NULL
-                LEFT JOIN GIRI_PIANO p ON p.IdGiro = s.IdGiro AND p.Data = @data
-                WHERE s.IdFiliale = @id AND s.DataCarico >= @dal AND s.DataCarico < @al AND s.DestinazioneLatitude IS NOT NULL
-                  AND (@solo = 0 OR ISNULL(p.Stato, '') NOT IN ('FATTA', 'RICHIESTA', 'IN_CORSO'))
-                GROUP BY s.IdGiro", new { id = idFiliale, data = giorno, dal = giorno, al = giorno.AddDays(1), solo = soloDaFare ? 1 : 0 });
+            var driver = await cn.QueryAsync<int>(@"
+                SELECT p.IdDriver FROM GIRI_PIANO p
+                JOIN SPED_ATTIVITA s ON s.IdGiro = p.IdGiro AND s.IdFiliale = @id AND s.DataCarico >= @dal AND s.DataCarico < @al AND s.DestinazioneLatitude IS NOT NULL
+                LEFT JOIN PIANO_DRIVER pd ON pd.IdDriver = p.IdDriver AND pd.Data = @data
+                WHERE p.Data = @data AND p.IdDriver IS NOT NULL
+                  AND (@solo = 0 OR ISNULL(pd.Stato, '') NOT IN ('RICHIESTA', 'IN_CORSO') AND (ISNULL(pd.Stato, '') <> 'FATTA' OR pd.DaRifare = 1))
+                GROUP BY p.IdDriver", new { id = idFiliale, data = giorno, dal = giorno, al = giorno.AddDays(1), solo = soloDaFare ? 1 : 0 });
             var richieste = 0; var saltati = new List<string>();
-            foreach (var idGiro in giri)
+            foreach (var idDriver in driver)
             {
                 try
                 {
-                    await cn.ExecuteAsync("dbo.AI_HERE_Richiesta", new { IdFiliale = idFiliale, Data = giorno, IdGiro = idGiro, IdUtente = IdUtente(user), Utente = user.Identity?.Name }, commandType: CommandType.StoredProcedure);
+                    await cn.ExecuteAsync("dbo.AI_HERE_RichiestaDriver", new { IdFiliale = idFiliale, Data = giorno, IdDriver = idDriver, IdUtente = IdUtente(user), Utente = user.Identity?.Name }, commandType: CommandType.StoredProcedure);
                     richieste++;
                 }
-                catch (SqlException ex) { saltati.Add($"giro {idGiro}: {ex.Message}"); }
+                catch (SqlException ex) { saltati.Add(ex.Message); }
             }
             int? idEsecuzione = richieste > 0 ? await Accoda(cn, user.Identity?.Name, null) : null;
             return Results.Ok(new { richieste, saltati, idEsecuzione });
         })).RequireAuthorization();
 
-        // il percorso di un piano: i punti nell'ordine di HERE (o, senza ottimizzazione, le spedizioni del giro)
-        app.MapGet("/api/piano/{id:int}/percorso", (int id, ClaimsPrincipal user) => Prova(async () =>
+        // punti "sciolti" (senza giro o in giri non assegnati) presi con il rettangolo: vanno nel giro del driver piu' vicino
+        app.MapPost("/api/piano/punti", (JsonElement b, ClaimsPrincipal user) => Prova(async () =>
+        {
+            var idFiliale = Filiale(user);
+            var giorno = Giorno(Testo(b, "data"));
+            var idDriver = Intero(b, "idDriver") ?? throw new ErrorePiano("Driver mancante");
+            var ids = b.TryGetProperty("idSpedizioni", out var v) && v.ValueKind == JsonValueKind.Array ? v.EnumerateArray().Select(x => x.GetInt32()).ToList() : new List<int>();
+            if (ids.Count == 0) throw new ErrorePiano("Nessuna spedizione nel rettangolo");
+            await using var cn = new SqlConnection(connString());
+            var giri = (await cn.QueryAsync(@"
+                SELECT g.IdGiro AS idGiro, g.Giro AS giro, g.SHAPE.STCentroid().STY AS lat, g.SHAPE.STCentroid().STX AS lng
+                FROM GIRI_PIANO p JOIN GEO_GIRI g ON g.IdGiro = p.IdGiro
+                WHERE p.Data = @data AND p.IdDriver = @idDriver AND p.IdFiliale = @id", new { id = idFiliale, data = giorno, idDriver })).ToList();
+            if (giri.Count == 0) throw new ErrorePiano("Il driver non ha ancora un giro: assegnagli prima un'area, poi i punti sciolti");
+            var centro = await cn.QueryFirstAsync("SELECT AVG(DestinazioneLatitude) AS lat, AVG(DestinazioneLongitude) AS lng FROM SPED_ATTIVITA WHERE IdSpedizione IN @ids", new { ids });
+            double clat = (double?)centro.lat ?? 0, clng = (double?)centro.lng ?? 0;
+            var giro = giri.OrderBy(g => g.lat is null ? double.MaxValue : Math.Pow((double)g.lat - clat, 2) + Math.Pow((double)g.lng - clng, 2)).First();
+            var cambiate = await cn.ExecuteScalarAsync<int>("dbo.AI_SPED_Giro",
+                new { IdFiliale = idFiliale, IdSpedizioni = JsonSerializer.Serialize(ids), IdGiro = (int)giro.idGiro, Utente = user.Identity?.Name }, commandType: CommandType.StoredProcedure);
+            await cn.ExecuteAsync("UPDATE PIANO_DRIVER SET DaRifare = 1 WHERE Data = @data AND IdDriver = @idDriver AND Stato = 'FATTA'", new { data = giorno, idDriver });
+            return Results.Ok(new { cambiate, giro = (string)giro.giro });
+        })).RequireAuthorization();
+
+        // il percorso di un driver: tappe nell'ordine di HERE (o le consegne senza ordine), partenza, ritorno, polilinea
+        app.MapGet("/api/piano/driver/{id:int}/percorso", (int id, ClaimsPrincipal user) => Prova(async () =>
         {
             await using var cn = new SqlConnection(connString());
-            var p = await PianoDi(cn, id, Filiale(user));
-            var punti = await Percorso(cn, p);
+            var p = await PianoDriverDi(cn, id, Filiale(user));
+            List<IDictionary<string, object?>> punti = (await Percorso(cn, (object)p)).Cast<IDictionary<string, object?>>().ToList();
+            var partenza = punti.FirstOrDefault(x => (string?)x["tipo"] == "partenza");
+            var ritorno = punti.FirstOrDefault(x => (string?)x["tipo"] == "ritorno");
+            List<double[]>? polilinea = null;
+            if (p.Polilinea is string pl && pl.Length > 2)
+                try { polilinea = JsonSerializer.Deserialize<List<double[]>>(pl); } catch { polilinea = null; }
             return Results.Ok(new
             {
-                piano = new { idPiano = (int)p.IdPiano, idGiro = (int)p.IdGiro, giro = (string)p.Giro, colore = (string?)p.Colore, data = ((DateTime)p.Data).ToString("yyyy-MM-dd"),
-                              stato = (string?)p.Stato, distanzaM = (int?)p.DistanzaM, tempoS = (int?)p.TempoS, driver = (string?)p.Driver, errore = (string?)p.Errore },
-                filiale = new { lat = (double?)p.FLat, lng = (double?)p.FLng, nome = (string?)p.Filiale },
-                punti,
+                piano = new { idPianoDriver = (int)p.IdPianoDriver, idDriver = (int)p.IdDriver, driver = (string?)p.Driver, data = ((DateTime)p.Data).ToString("yyyy-MM-dd"),
+                              stato = (string?)p.Stato, daRifare = (bool)p.DaRifare, distanzaM = (int?)p.DistanzaM, tempoS = (int?)p.TempoS, errore = (string?)p.Errore,
+                              partenzaCasa = (bool)p.PartenzaCasa, ritornoCasa = (bool)p.RitornoCasa, filiale = (string?)p.Filiale,
+                              giri = ((string?)p.Giri ?? "").Split(" | ", StringSplitOptions.RemoveEmptyEntries) },
+                partenza, ritorno, punti = punti.Where(x => (string?)x["tipo"] == "consegna").ToList(), polilinea,
             });
         })).RequireAuthorization();
 
         // il percorso in Excel, nell'ordine di consegna
-        app.MapGet("/api/piano/{id:int}/export", async (int id, ClaimsPrincipal user) =>
+        app.MapGet("/api/piano/driver/{id:int}/export", async (int id, ClaimsPrincipal user) =>
         {
             await using var cn = new SqlConnection(connString());
-            var p = await PianoDi(cn, id, Filiale(user));
-            var punti = await Percorso(cn, p);
-            return Esporta.Xlsx(punti, "Percorso", $"percorso_{((string)p.Giro).Replace(' ', '_')}_{((DateTime)p.Data):yyyyMMdd}", new[] {
-                ("Sequenza", "sequenza"), ("Barcode", "barcode"), ("Destinatario", "destinatario"), ("Indirizzo", "indirizzo"), ("CAP", "cap"), ("Località", "localita"),
+            var p = await PianoDriverDi(cn, id, Filiale(user));
+            List<dynamic> punti = await Percorso(cn, (object)p);
+            var nome = ((string?)p.Driver ?? "driver").Replace(' ', '_');
+            return Esporta.Xlsx(punti, "Percorso", $"percorso_{nome}_{((DateTime)p.Data):yyyyMMdd}", new[] {
+                ("Sequenza", "sequenza"), ("Giro", "giro"), ("Barcode", "barcode"), ("Destinatario", "destinatario"), ("Indirizzo", "indirizzo"), ("CAP", "cap"), ("Località", "localita"),
                 ("Arrivo stimato", "arrivo"), ("Km dal punto prima", "km"), ("Minuti dal punto prima", "minuti"), ("Km progressivi", "kmProgressivi") });
         }).RequireAuthorization();
 
-        // lo storico di un piano (driver e ottimizzazioni)
-        app.MapGet("/api/piano/{id:int}/storico", (int id) => Prova(async () =>
+        // storico di un driver nel giorno (giri presi e tolti, opzioni, ottimizzazioni)
+        app.MapGet("/api/piano/driver/{id:int}/storico", (int id) => Prova(async () =>
         {
             await using var cn = new SqlConnection(connString());
             var righe = await cn.QueryAsync(@"
-                SELECT CONVERT(varchar(19), v.DataOra, 126) AS dataOra, v.Utente AS utente, v.Campo AS campo,
-                       CASE WHEN v.Campo = 'Driver' THEN ISNULL(up.Nome, v.Prima) ELSE v.Prima END AS prima,
-                       CASE WHEN v.Campo = 'Driver' THEN ISNULL(ud.Nome, v.Dopo) ELSE v.Dopo END AS dopo
-                FROM GIRI_PIANO_VARIAZIONI v
-                LEFT JOIN UTENTI up ON v.Campo = 'Driver' AND TRY_CAST(v.Prima AS int) = up.IdUtente
-                LEFT JOIN UTENTI ud ON v.Campo = 'Driver' AND TRY_CAST(v.Dopo AS int) = ud.IdUtente
-                WHERE v.IdPiano = @id ORDER BY v.IdVariazione DESC", new { id });
+                SELECT CONVERT(varchar(19), DataOra, 126) AS dataOra, Utente AS utente, Campo AS campo, Prima AS prima, Dopo AS dopo
+                FROM PIANO_DRIVER_VARIAZIONI WHERE IdPianoDriver = @id ORDER BY IdVariazione DESC", new { id });
             return Results.Ok(righe);
         })).RequireAuthorization();
     }
 
-    static async Task<dynamic> PianoDi(SqlConnection cn, int id, int idFiliale)
+    static async Task<dynamic> PianoDriverDi(SqlConnection cn, int id, int idFiliale)
     {
         var p = await cn.QueryFirstOrDefaultAsync(@"
-            SELECT p.IdPiano, p.Data, p.IdFiliale, p.IdGiro, g.Giro, g.Colore, p.Stato, p.DistanzaM, p.TempoS, p.IdGeoHereW, p.Errore, u.Nome AS Driver,
-                   f.FILIALE AS Filiale, f.Latitude AS FLat, f.Longitude AS FLng
-            FROM GIRI_PIANO p JOIN GEO_GIRI g ON g.IdGiro = p.IdGiro
+            SELECT p.IdPianoDriver, p.Data, p.IdFiliale, p.IdDriver, u.Nome AS Driver, p.PartenzaCasa, p.RitornoCasa, p.Stato, p.DaRifare, p.DistanzaM, p.TempoS,
+                   p.IdGeoHereW, p.Errore, p.Polilinea, f.FILIALE AS Filiale, f.Latitude AS FLat, f.Longitude AS FLng, geo.Lat AS CLat, geo.Lng AS CLng, geo.Indirizzo AS Casa,
+                   (SELECT STRING_AGG(g.Giro, ' | ') FROM GIRI_PIANO gp JOIN GEO_GIRI g ON g.IdGiro = gp.IdGiro WHERE gp.Data = p.Data AND gp.IdDriver = p.IdDriver) AS Giri
+            FROM PIANO_DRIVER p
             LEFT JOIN UTENTI u ON u.IdUtente = p.IdDriver
             LEFT JOIN FILIALI f ON f.IDFILIALE = p.IdFiliale
-            WHERE p.IdPiano = @id", new { id }) ?? throw new ErrorePiano("Piano non trovato");
+            LEFT JOIN UTENTI_GEO geo ON geo.IdUtente = p.IdDriver
+            WHERE p.IdPianoDriver = @id", new { id }) ?? throw new ErrorePiano("Piano non trovato");
         if ((int)p.IdFiliale != idFiliale) throw new ErrorePiano("Il piano e' di un'altra filiale");
         return p;
     }
 
-    // i punti del percorso: con l'ottimizzazione fatta, nell'ordine di HERE con tempi e distanze; altrimenti le spedizioni
-    // del giro con coordinate, senza ordine. km/minuti dal punto precedente, km progressivi (soste escluse dai tempi)
+    // le tappe: con l'ottimizzazione fatta nell'ordine di HERE con tempi e distanze (partenza e ritorno compresi);
+    // altrimenti le consegne dei giri del driver senza ordine. km/minuti dal punto precedente, km progressivi.
     static async Task<List<dynamic>> Percorso(SqlConnection cn, dynamic p)
     {
         IEnumerable<dynamic> righe;
+        DateTime giorno = p.Data;
         if (p.IdGeoHereW is int idHere && (string?)p.Stato == "FATTA")
             righe = await cn.QueryAsync(@"
                 SELECT w.Sequenza AS seq, r.IdSpedizione AS idSpedizione, r.IdAttivita AS idAttivita, r.Latitude AS lat, r.Longitude AS lng,
                        CASE WHEN s.IdSpedizione IS NULL THEN r.Indirizzo ELSE ISNULL(s.DestinazioneIndirizzo, '') + ISNULL(' ' + s.DestinazioneNumeroCivico, '') END AS indirizzo,
                        w.TempoViaggio AS tempo, w.Distanza AS distanza, CONVERT(varchar(19), w.DataArrivo, 126) AS arrivo,
-                       s.Barcode AS barcode, s.DestinazioneRagioneSociale AS destinatario, s.DestinazioneCap AS cap, s.DestinazioneLocalita AS localita
+                       s.Barcode AS barcode, s.DestinazioneRagioneSociale AS destinatario, s.DestinazioneCap AS cap, s.DestinazioneLocalita AS localita, g.Giro AS giro
                 FROM GEO_HereWReq r
                 JOIN GEO_HereWaypoint w ON w.IdHereReq = CAST(r.IdGeoHereW AS varchar(50)) AND w.IdApi = r.IdGeoHereReq
                 LEFT JOIN SPED_ATTIVITA s ON s.IdSpedizione = r.IdSpedizione
+                LEFT JOIN GEO_GIRI g ON g.IdGiro = s.IdGiro
                 WHERE r.IdGeoHereW = @id ORDER BY w.Sequenza", new { id = idHere });
         else
-        {
-            DateTime giorno = p.Data;
             righe = await cn.QueryAsync(@"
                 SELECT CAST(NULL AS int) AS seq, s.IdSpedizione AS idSpedizione, CAST(NULL AS int) AS idAttivita, s.DestinazioneLatitude AS lat, s.DestinazioneLongitude AS lng,
                        ISNULL(s.DestinazioneIndirizzo, '') + ISNULL(' ' + s.DestinazioneNumeroCivico, '') AS indirizzo,
                        CAST(NULL AS int) AS tempo, CAST(NULL AS int) AS distanza, CAST(NULL AS varchar(19)) AS arrivo,
-                       s.Barcode AS barcode, s.DestinazioneRagioneSociale AS destinatario, s.DestinazioneCap AS cap, s.DestinazioneLocalita AS localita
-                FROM SPED_ATTIVITA s
-                WHERE s.IdFiliale = @idFiliale AND s.IdGiro = @idGiro AND s.DataCarico >= @dal AND s.DataCarico < @al AND s.DestinazioneLatitude IS NOT NULL
-                ORDER BY s.Sequenza, s.DestinazioneCap, s.DestinazioneIndirizzo", new { idFiliale = (int)p.IdFiliale, idGiro = (int)p.IdGiro, dal = giorno, al = giorno.AddDays(1) });
-        }
+                       s.Barcode AS barcode, s.DestinazioneRagioneSociale AS destinatario, s.DestinazioneCap AS cap, s.DestinazioneLocalita AS localita, g.Giro AS giro
+                FROM SPED_ATTIVITA s JOIN GEO_GIRI g ON g.IdGiro = s.IdGiro
+                WHERE s.IdFiliale = @idFiliale AND s.DataCarico >= @dal AND s.DataCarico < @al AND s.DestinazioneLatitude IS NOT NULL
+                  AND s.IdGiro IN (SELECT IdGiro FROM GIRI_PIANO WHERE Data = @data AND IdDriver = @idDriver)
+                ORDER BY g.Giro, s.Sequenza, s.DestinazioneCap, s.DestinazioneIndirizzo",
+                new { idFiliale = (int)p.IdFiliale, idDriver = (int)p.IdDriver, data = giorno, dal = giorno, al = giorno.AddDays(1) });
         var lista = new List<dynamic>();
         var progressivi = 0.0; var consegna = 0;
         foreach (IDictionary<string, object?> r in righe)
@@ -224,6 +286,22 @@ static class Piano
             lista.Add(r);
         }
         return lista;
+    }
+
+    // HERE Geocoding: indirizzo -> (lat, lng, etichetta trovata)
+    static async Task<(double lat, double lng, string trovato)> Geocodifica(string token, string indirizzo)
+    {
+        var url = "https://geocode.search.hereapi.com/v1/geocode?q=" + Uri.EscapeDataString(indirizzo) + "&in=countryCode:ITA&lang=it&apiKey=" + Uri.EscapeDataString(token);
+        using var risp = await http.GetAsync(url);
+        var testo = await risp.Content.ReadAsStringAsync();
+        if (!risp.IsSuccessStatusCode) throw new ErrorePiano($"HERE Geocoding: HTTP {(int)risp.StatusCode}");
+        using var doc = JsonDocument.Parse(testo);
+        var items = doc.RootElement.TryGetProperty("items", out var it) ? it : default;
+        if (items.ValueKind != JsonValueKind.Array || items.GetArrayLength() == 0) throw new ErrorePiano("HERE non trova questo indirizzo: prova con via, numero, CAP e comune");
+        var primo = items[0];
+        var pos = primo.GetProperty("position");
+        var etichetta = primo.TryGetProperty("address", out var a) && a.TryGetProperty("label", out var l) ? l.GetString() ?? indirizzo : indirizzo;
+        return (pos.GetProperty("lat").GetDouble(), pos.GetProperty("lng").GetDouble(), etichetta);
     }
 
     static async Task<int> Accoda(SqlConnection cn, string? utente, string? parametri)
@@ -249,10 +327,15 @@ static class Piano
     static int? Intero(JsonElement b, string nome) =>
         b.ValueKind == JsonValueKind.Object && b.TryGetProperty(nome, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : null;
 
+    static bool Vero(JsonElement b, string nome) =>
+        b.ValueKind == JsonValueKind.Object && b.TryGetProperty(nome, out var v) && v.ValueKind == JsonValueKind.True;
+
     static async Task<IResult> Prova(Func<Task<IResult>> f)
     {
         try { return await f(); }
         catch (ErrorePiano ex) { return Results.BadRequest(new { errore = ex.Message }); }
         catch (SqlException ex) { return Results.BadRequest(new { errore = ex.Message }); }
+        catch (HttpRequestException ex) { return Results.BadRequest(new { errore = "HERE non raggiungibile: " + ex.Message }); }
+        catch (TaskCanceledException) { return Results.BadRequest(new { errore = "HERE non risponde (timeout)" }); }
     }
 }

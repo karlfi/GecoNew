@@ -30,9 +30,90 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 import speedy  # noqa: E402
 
 URL = 'https://wps.hereapi.com/v8/findsequence2'
+ROUTING = 'https://router.hereapi.com/v8/routes'
 MAX_DEST = 100
+MAX_VIA = 40        # punti intermedi per chiamata a Routing (il tracciato stradale)
 SOSTA = 60
 PARTENZA, RITORNO = 0, 999999999
+
+# ---- polilinea flessibile di HERE (https://github.com/heremaps/flexible-polyline) ----
+_TAVOLA = [62, -1, -1, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+           10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1, 63, -1, 26, 27, 28, 29, 30, 31,
+           32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+
+
+def _valori(testo):
+    n, shift = 0, 0
+    for ch in testo:
+        v = _TAVOLA[ord(ch) - 45]
+        n |= (v & 0x1F) << shift
+        if v & 0x20:
+            shift += 5
+        else:
+            yield n
+            n, shift = 0, 0
+
+
+def decodifica_polilinea(testo):
+    """-> [(lat, lng), ...]"""
+    it = _valori(testo)
+    versione = next(it)
+    if versione != 1:
+        raise RuntimeError(f"polilinea versione {versione} non gestita")
+    testata = next(it)
+    precisione, terza = testata & 15, (testata >> 4) & 7
+    fattore = 10 ** precisione
+    segno = lambda v: ~(v >> 1) if v & 1 else v >> 1
+    lat = lng = 0
+    punti = []
+    while True:
+        try:
+            dlat = segno(next(it))
+        except StopIteration:
+            return punti
+        dlng = segno(next(it))
+        if terza:
+            next(it)
+        lat += dlat
+        lng += dlng
+        punti.append((lat / fattore, lng / fattore))
+
+
+def tracciato(token, tappe):
+    """Il tracciato stradale che passa per le tappe (lat, lng) nell'ordine, a spezzoni di MAX_VIA punti intermedi.
+    -> [[lat, lng], ...] arrotondati; None se Routing non risponde (il percorso resta valido lo stesso)."""
+    coords = []
+    i = 0
+    while i < len(tappe) - 1:
+        tratto = tappe[i:i + MAX_VIA + 2]
+        params = [('transportMode', 'car'), ('origin', f"{tratto[0][0]},{tratto[0][1]}"), ('destination', f"{tratto[-1][0]},{tratto[-1][1]}"),
+                  ('return', 'polyline'), ('apiKey', token)]
+        params += [('via', f"{v[0]},{v[1]}") for v in tratto[1:-1]]
+        req = urllib.request.Request(ROUTING + '?' + urllib.parse.urlencode(params), headers={'User-Agent': 'SpeedyWeb'})
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                js = json.loads(r.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            print(f"  tracciato: Routing HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:200]}")
+            return None
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            print(f"  tracciato: Routing non raggiungibile: {e}")
+            return None
+        rotte = js.get('routes') or []
+        if not rotte:
+            print("  tracciato: Routing senza percorso:", json.dumps(js)[:200])
+            return None
+        for sez in rotte[0].get('sections') or []:
+            if sez.get('polyline'):
+                coords.extend(decodifica_polilinea(sez['polyline']))
+        i += len(tratto) - 1
+    # tolgo i punti doppi consecutivi e arrotondo
+    out = []
+    for lat, lng in coords:
+        p = [round(lat, 5), round(lng, 5)]
+        if not out or out[-1] != p:
+            out.append(p)
+    return out
 
 
 def arg(nome, predefinito=None):
@@ -180,7 +261,7 @@ def elabora(cn, cur, token, sosta, id_here, prova):
     dest = [(r[0], r[3], r[4]) for r in righe if r[2] not in (PARTENZA, RITORNO) and r[3] is not None and r[4] is not None]
     if not start or not dest:
         raise RuntimeError(f"richiesta {id_here}: manca la partenza o non ci sono punti")
-    giorno = cur.execute("SELECT TOP 1 Data FROM dbo.GIRI_PIANO WHERE IdGeoHereW = ?", id_here).fetchone()
+    giorno = cur.execute("SELECT TOP 1 Data FROM dbo.PIANO_DRIVER WHERE IdGeoHereW = ? UNION ALL SELECT TOP 1 Data FROM dbo.GIRI_PIANO WHERE IdGeoHereW = ?", id_here, id_here).fetchone()
     partenza = partenza_iso(giorno[0] if giorno else datetime.date.today())
     print(f"richiesta {id_here}: {len(dest)} punti" + (f" in {math.ceil(len(dest) / MAX_DEST)} gruppi" if len(dest) > MAX_DEST else "") + f", partenza {partenza}")
     ordine, dist, tempo, ritorno = ottimizza(token, sosta, (start[3], start[4]), dest, (end[3], end[4]) if end else None, partenza)
@@ -190,10 +271,16 @@ def elabora(cn, cur, token, sosta, id_here, prova):
     if end:
         waypoints.append({'idReq': end[0], 'seq': len(ordine) + 1, 'tempo': ritorno[0], 'distanza': ritorno[1], 'arrivo': ritorno[2], 'partenza': None})
     print(f"  percorso: {dist / 1000:.1f} km, {tempo // 60} min con le soste, {len(ordine)} consegne")
+    # il tracciato stradale nell'ordine trovato (partenza, consegne, ritorno)
+    per_id = {r[0]: (r[3], r[4]) for r in righe}
+    tappe = [(start[3], start[4])] + [per_id[idr] for idr, *_ in ordine if idr in per_id] + ([(end[3], end[4])] if end else [])
+    linea = tracciato(token, tappe)
+    print(f"  tracciato stradale: {len(linea)} punti" if linea else "  tracciato stradale: non disponibile")
     if prova:
         print("  [PROVA] non scrivo:", [w['idReq'] for w in waypoints][:12], '...')
         return
-    cur.execute("EXEC dbo.AI_HERE_Risposta @IdGeoHereW=?, @Waypoints=?, @DistanzaM=?, @TempoS=?", id_here, json.dumps(waypoints), dist, tempo)
+    cur.execute("EXEC dbo.AI_HERE_Risposta @IdGeoHereW=?, @Waypoints=?, @DistanzaM=?, @TempoS=?, @Polilinea=?",
+                id_here, json.dumps(waypoints), dist, tempo, json.dumps(linea) if linea else None)
     while cur.nextset():
         pass
     cn.commit()
@@ -220,8 +307,11 @@ def main():
             pass
     if not ids:
         ids = [r[0] for r in cur.execute("""
-            SELECT w.IdGeoHereW FROM dbo.GEO_HereW w JOIN dbo.GIRI_PIANO p ON p.IdGeoHereW = w.IdGeoHereW
-            WHERE w.DataRisposta IS NULL AND p.Stato = 'RICHIESTA' ORDER BY w.IdGeoHereW""").fetchall()]
+            SELECT w.IdGeoHereW FROM dbo.GEO_HereW w
+            WHERE w.DataRisposta IS NULL
+              AND (EXISTS (SELECT 1 FROM dbo.PIANO_DRIVER p WHERE p.IdGeoHereW = w.IdGeoHereW AND p.Stato = 'RICHIESTA')
+                   OR EXISTS (SELECT 1 FROM dbo.GIRI_PIANO p WHERE p.IdGeoHereW = w.IdGeoHereW AND p.Stato = 'RICHIESTA'))
+            ORDER BY w.IdGeoHereW""").fetchall()]
     print(f"HERE Waypoints Sequencing: {len(ids)} richieste da elaborare" + ("  [PROVA]" if prova else ""))
     ok, errori = 0, 0
     for id_here in ids:
