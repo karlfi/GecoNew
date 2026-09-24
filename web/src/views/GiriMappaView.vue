@@ -66,6 +66,9 @@ const giriFiltrati = computed(() => {
   return giri.value
     .filter(g => filtroStato.value === 'tutti' || (filtroStato.value === 'attivi') === !!g.attivo)
     .filter(g => !q || `${g.giro} ${g.cap ?? ''} ${g.comune ?? ''} ${g.driverDefault ?? ''}`.toLowerCase().includes(q))
+    // in ordine di nome, attivi e non attivi insieme: un giro spento resta dov'era (prima finiva in fondo
+    // e sembrava sparito)
+    .sort((a, b) => (a.giro ?? '').localeCompare(b.giro ?? '', 'it', { numeric: true, sensitivity: 'base' }))
 })
 const nAttivi = computed(() => giri.value.filter(g => g.attivo).length)
 
@@ -196,7 +199,7 @@ async function toggleGiri() {
 async function disegnaGiro(g) {
   try {
     const { data } = await api.get('/giri/shape', { params: { idGiro: g.idGiro } })
-    const grp = disegnaShape(data.wkt, g.colore || '#3388ff', g.attivo ? 0.25 : 0.06,
+    const grp = disegnaShape(data.wkt, g.colore || '#3388ff', g.attivo ? 0.25 : 0.12,
       `${g.giro}${g.attivo ? '' : ' · non attivo'}${g.nSped ? ' · ' + g.nSped + ' sped.' : ''}`, !g.attivo)
     if (grp) { giriLayer.addLayer(grp); giriDisegnati.set(g.idGiro, grp) }
     return grp
@@ -423,7 +426,7 @@ function chiudiConfine() {
   attivoDisegno.value = false
   if (confineInModifica.value && dettaglio.value) {
     const grp = giriDisegnati.get(dettaglio.value.idGiro)
-    if (grp) grp.setStyle({ fillOpacity: dettaglio.value.attivo ? 0.25 : 0.06, dashArray: dettaglio.value.attivo ? null : '6,6' })
+    if (grp) grp.setStyle({ fillOpacity: dettaglio.value.attivo ? 0.25 : 0.12, dashArray: dettaglio.value.attivo ? null : '6,6' })
   }
   confineInModifica.value = false
   semplificato.value = null
@@ -667,12 +670,21 @@ const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfi
             <Button label="Nessuno" size="small" text @click="nascondiTutti" title="Togli tutti i giri dalla mappa" />
           </span>
         </div>
+        <div v-if="giri.length > nAttivi" class="aiuto-attivi">
+          {{ giri.length - nAttivi }} {{ giri.length - nAttivi === 1 ? 'giro non attivo' : 'giri non attivi' }}: restano qui
+          (tratteggiati sulla mappa) e si riattivano con l'interruttore "Attivo"; nelle pagine di assegnazione non compaiono.
+        </div>
         <DataTable :value="giriFiltrati" v-model:selection="giriSel" dataKey="idGiro"
-          selectionMode="multiple" :metaKeySelection="false" :rowClass="d => d.idGiro === form.idGiro ? 'riga-in-modifica' : ''"
+          selectionMode="multiple" :metaKeySelection="false" :rowClass="d => [d.idGiro === form.idGiro ? 'riga-in-modifica' : '', d.attivo ? '' : 'riga-spenta']"
           @update:selection="toggleGiri" scrollable scrollHeight="240px" size="small" stripedRows>
           <Column selectionMode="multiple" style="width: 3rem" />
           <Column header="" style="width: 2.2rem">
             <template #body="{ data }"><span class="pallino" :style="{ background: data.colore || '#ccc' }" /></template>
+          </Column>
+          <Column header="Attivo" style="width: 4.5rem" headerClass="col-attivo">
+            <template #body="{ data }">
+              <span @click.stop><ToggleSwitch :modelValue="!!data.attivo" @update:modelValue="v => cambiaAttivo(data, v)" /></span>
+            </template>
           </Column>
           <Column field="giro" header="Giro">
             <template #body="{ data }"><span :class="{ 'giro-spento': !data.attivo }">{{ data.giro }}</span> <Tag v-if="!data.attivo" value="non attivo" severity="secondary" /></template>
@@ -681,11 +693,6 @@ const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfi
           <Column field="comune" header="Comune fisso" style="width: 9rem" />
           <Column field="driverDefault" header="Driver" style="width: 11rem" />
           <Column field="nSped" header="Sped. oggi" style="width: 5.5rem" class="num-col" />
-          <Column header="Attivo" style="width: 4.5rem">
-            <template #body="{ data }">
-              <span @click.stop><ToggleSwitch :modelValue="!!data.attivo" @update:modelValue="v => cambiaAttivo(data, v)" /></span>
-            </template>
-          </Column>
           <Column header="" style="width: 5.5rem">
             <template #body="{ data }">
               <Button icon="pi pi-search" text rounded size="small" title="Inquadra sulla mappa" @click="inquadra(data)" />
@@ -717,6 +724,8 @@ const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfi
 .chk { display: inline-flex; align-items: center; gap: .4rem; cursor: pointer; }
 .attivo-form { font-size: .85rem; }
 .giro-spento { color: #9aa4ad; }
+.aiuto-attivi { font-size: .78rem; color: #6b7785; padding: .3rem .75rem; background: var(--p-surface-50); border-bottom: 1px solid var(--p-surface-200); }
+:deep(.riga-spenta) > td { background: repeating-linear-gradient(135deg, transparent 0 6px, rgba(0, 0, 0, .025) 6px 12px); }
 .nota { color: var(--p-text-muted-color); font-size: .85rem; }
 .attenzione { color: var(--p-orange-600); font-size: .85rem; }
 .sel-giro { width: 15rem; margin-left: .3rem; }

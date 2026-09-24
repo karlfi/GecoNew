@@ -53,7 +53,7 @@ static class Giri
                 OUTER APPLY (SELECT TOP 1 DENOMINAZIONE FROM GEO_COMUNE WHERE BELFIORE = g.Belfiore) c
                 LEFT JOIN (SELECT IdGiro, COUNT(*) AS n FROM V_ElencoGeoSped WHERE IdFiliale = @id GROUP BY IdGiro) s ON s.IdGiro = g.IdGiro
                 WHERE g.IdFiliale = @id AND (@tutti = 1 OR g.DataFine IS NULL)
-                ORDER BY CASE WHEN g.DataFine IS NULL THEN 0 ELSE 1 END, g.Giro",
+                ORDER BY g.Giro",
                 new { id = idFiliale, tutti = tutti == true ? 1 : 0 });
             return Results.Ok(g);
         })).RequireAuthorization();
