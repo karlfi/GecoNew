@@ -46,7 +46,8 @@ static class Piano
                 LEFT JOIN GIRI_PIANO p ON p.IdGiro = g.IdGiro AND p.Data = @data
                 LEFT JOIN UTENTI u ON u.IdUtente = p.IdDriver
                 LEFT JOIN UTENTI ud ON ud.IdUtente = g.IdDriverDefault
-                WHERE g.IdFiliale = @id AND (g.DataFine IS NULL OR p.IdPiano IS NOT NULL)
+                -- solo i giri attivi; nei giorni passati anche quelli poi disattivati che erano nel piano (storico)
+                WHERE g.IdFiliale = @id AND (g.DataFine IS NULL OR (p.IdPiano IS NOT NULL AND @data < CONVERT(date, GETDATE())))
                 ORDER BY g.Giro", new { id = idFiliale, data = giorno, dal = giorno, al = giorno.AddDays(1) });
             var driver = await cn.QueryAsync(@"
                 SELECT u.IdUtente AS idUtente, u.Nome AS nome,

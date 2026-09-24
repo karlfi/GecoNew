@@ -3,8 +3,11 @@
 // Sulla mappa (Leaflet, OSM o satellite) si vedono i giri esistenti, i confini dei comuni, le
 // spedizioni geolocalizzate del giorno colorate per giro; un giro nuovo si disegna a mano (pin
 // numerati, trascinabili, con i punti intermedi cliccabili) o si crea come unione di comuni; un giro
-// esistente si modifica da qui (nome, colore, CAP e comune fissi, driver predefinito, chiusura) e il
+// esistente si modifica da qui (nome, colore, CAP e comune fissi, driver predefinito, attivo) e il
 // suo confine si ritocca trascinando i vertici o si rifa' dai comuni. Ogni modifica resta nello storico.
+// Flag "Attivo" (interruttore nell'elenco e nell'editor, DataFine vuota in GEO_GIRI): qui si vedono
+// tutti i giri, con il filtro; le pagine di assegnazione (Spedizioni del giorno, Piano della giornata)
+// e le stored vedono solo quelli attivi. Disattivare toglie il giro dai piani di oggi e dei giorni dopo.
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import api from '../api'
@@ -22,6 +25,8 @@ import ColorPicker from 'primevue/colorpicker'
 import Select from 'primevue/select'
 import Dialog from 'primevue/dialog'
 import Tag from 'primevue/tag'
+import ToggleSwitch from 'primevue/toggleswitch'
+import SelectButton from 'primevue/selectbutton'
 import Message from 'primevue/message'
 
 const toast = useToast()
@@ -48,7 +53,8 @@ const comuniSel = ref([])
 const giriSel = ref([])
 const filtroComuni = ref('')
 const filtroGiri = ref('')
-const mostraChiusi = ref(false)
+const filtroStato = ref('tutti')      // tutti | attivi | nonattivi
+const OPZIONI_STATO = [{ label: 'Tutti', value: 'tutti' }, { label: 'Attivi', value: 'attivi' }, { label: 'Non attivi', value: 'nonattivi' }]
 const caricamento = ref(false)
 
 const comuniFiltrati = computed(() => {
@@ -57,8 +63,11 @@ const comuniFiltrati = computed(() => {
 })
 const giriFiltrati = computed(() => {
   const q = filtroGiri.value.trim().toLowerCase()
-  return q ? giri.value.filter(g => `${g.giro} ${g.cap ?? ''} ${g.comune ?? ''} ${g.driverDefault ?? ''}`.toLowerCase().includes(q)) : giri.value
+  return giri.value
+    .filter(g => filtroStato.value === 'tutti' || (filtroStato.value === 'attivi') === !!g.attivo)
+    .filter(g => !q || `${g.giro} ${g.cap ?? ''} ${g.comune ?? ''} ${g.driverDefault ?? ''}`.toLowerCase().includes(q))
 })
+const nAttivi = computed(() => giri.value.filter(g => g.attivo).length)
 
 // --- spedizioni del giorno ---
 const visualizza = ref(false)
@@ -143,14 +152,14 @@ onBeforeUnmount(() => {
 async function carica() {
   caricamento.value = true
   try {
-    const [{ data: lk }, { data: g }] = await Promise.all([api.get('/giri/lookup'), api.get('/giri/elenco', { params: { tutti: mostraChiusi.value } })])
+    const [{ data: lk }, { data: g }] = await Promise.all([api.get('/giri/lookup'), api.get('/giri/elenco', { params: { tutti: true } })])
     comuni.value = lk.comuni; driver.value = lk.driver; contatori.value = lk.spedizioni
     giri.value = g
     if (visualizza.value) await aggiornaSpedizioni()
   } catch (e) { avviso('error', 'Giri', messaggio(e)) } finally { caricamento.value = false }
 }
 async function ricaricaGiri() {
-  const { data } = await api.get('/giri/elenco', { params: { tutti: mostraChiusi.value } })
+  const { data } = await api.get('/giri/elenco', { params: { tutti: true } })
   giri.value = data
   // le righe selezionate (mostrate sulla mappa) seguono i dati nuovi
   const ids = new Set(giriSel.value.map(g => g.idGiro))
@@ -187,7 +196,8 @@ async function toggleGiri() {
 async function disegnaGiro(g) {
   try {
     const { data } = await api.get('/giri/shape', { params: { idGiro: g.idGiro } })
-    const grp = disegnaShape(data.wkt, g.colore || '#3388ff', 0.25, `${g.giro}${g.nSped ? ' · ' + g.nSped + ' sped.' : ''}`)
+    const grp = disegnaShape(data.wkt, g.colore || '#3388ff', g.attivo ? 0.25 : 0.06,
+      `${g.giro}${g.attivo ? '' : ' · non attivo'}${g.nSped ? ' · ' + g.nSped + ' sped.' : ''}`, !g.attivo)
     if (grp) { giriLayer.addLayer(grp); giriDisegnati.set(g.idGiro, grp) }
     return grp
   } catch { return null }
@@ -198,12 +208,12 @@ async function ridisegnaGiro(idGiro) {
   const g = giri.value.find(x => x.idGiro === idGiro)
   if (g && giriSel.value.some(x => x.idGiro === idGiro)) await disegnaGiro(g)
 }
-function disegnaShape(wkt, col, opacity, tooltip) {
+function disegnaShape(wkt, col, opacity, tooltip, tratteggio = false) {
   const rings = wktToRings(wkt)
   if (!rings.length) return null
   const grp = L.featureGroup()
   for (const ring of rings) {
-    L.polygon(ring, { color: col, weight: 2, fillColor: col, fillOpacity: opacity })
+    L.polygon(ring, { color: col, weight: 2, fillColor: col, fillOpacity: opacity, dashArray: tratteggio ? '6,6' : null })
       .bindTooltip(tooltip).on('click', onRefClick).addTo(grp)
   }
   return grp
@@ -413,7 +423,7 @@ function chiudiConfine() {
   attivoDisegno.value = false
   if (confineInModifica.value && dettaglio.value) {
     const grp = giriDisegnati.get(dettaglio.value.idGiro)
-    if (grp) grp.setStyle({ fillOpacity: 0.25, dashArray: null })
+    if (grp) grp.setStyle({ fillOpacity: dettaglio.value.attivo ? 0.25 : 0.06, dashArray: dettaglio.value.attivo ? null : '6,6' })
   }
   confineInModifica.value = false
   semplificato.value = null
@@ -476,11 +486,26 @@ async function sostituisciDaComuni() {
     if (g) await apriModifica(g)
   } catch (e) { avviso('error', 'Confine', messaggio(e), 5000) } finally { salvataggio.value = false }
 }
-function chiediChiusura() {
-  const riapre = !form.value.attivo
-  chiedi(riapre ? 'Riapri giro' : 'Chiudi giro',
-    riapre ? `Il giro "${form.value.giro}" torna attivo e assegnabile.` : `Il giro "${form.value.giro}" viene chiuso (DataFine di oggi): non riceve piu' spedizioni e sparisce dagli elenchi. Lo storico resta.`,
-    async () => { form.value.attivo = riapre; await salvaModifica() })
+// flag Attivo dall'elenco: attivare e' immediato, disattivare chiede conferma (il giro esce dalle
+// pagine di assegnazione e dai piani di oggi e dei giorni dopo)
+const testoDisattiva = g => `Il giro "${g.giro}" non sara' piu' assegnabile: sparisce dalle pagine di assegnazione ` +
+  `(Spedizioni del giorno, Piano della giornata) e non riceve spedizioni. Se e' nel piano di oggi o dei prossimi giorni, ` +
+  `viene tolto al driver.` + (g.nSped ? ` Le ${g.nSped} spedizioni di oggi restano sul giro finche' non le riassegni con "Aggiorna giri di sped".` : '') +
+  ` Si riattiva quando vuoi.`
+function cambiaAttivo(g, attivo) {
+  if (attivo) return salvaAttivo(g, true)
+  chiedi('Disattiva giro', testoDisattiva(g), () => salvaAttivo(g, false))
+}
+async function salvaAttivo(g, attivo) {
+  try {
+    const { data } = await api.put(`/giri/${g.idGiro}/attivo`, { attivo })
+    avviso('success', attivo ? 'Giro attivo' : 'Giro non attivo',
+      g.giro + (data.toltoDaiPiani ? ` · tolto dal piano di ${data.toltoDaiPiani} ${data.toltoDaiPiani === 1 ? 'giorno' : 'giorni'}` : ''))
+    await ricaricaGiri()
+    await ridisegnaGiro(g.idGiro)
+    if (form.value.idGiro === g.idGiro) form.value.attivo = attivo
+    if (dettaglio.value?.idGiro === g.idGiro) dettaglio.value.attivo = attivo
+  } catch (e) { avviso('error', 'Giro', messaggio(e), 5000) }
 }
 
 // --- assegnazione delle spedizioni del giorno ai giri ---
@@ -527,7 +552,7 @@ const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfi
       </label>
       <label>CAP <InputText v-model="filtroCap" maxlength="5" size="small" class="cap" @update:modelValue="visualizza && aggiornaSpedizioni()" /></label>
       <span class="spazio"></span>
-      <label class="chk"><Checkbox v-model="mostraChiusi" binary @change="ricaricaGiri" /> Mostra i giri chiusi</label>
+      <label>Giri <SelectButton v-model="filtroStato" :options="OPZIONI_STATO" optionLabel="label" optionValue="value" :allowEmpty="false" size="small" /></label>
     </div>
 
     <div class="corpo">
@@ -582,7 +607,9 @@ const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfi
             </template>
             <Button label="Sostituisci con i comuni selezionati" icon="pi pi-clone" severity="help" size="small" :disabled="!comuniSel.length" :loading="salvataggio" @click="sostituisciDaComuni" />
             <Button label="Salva" icon="pi pi-check" size="small" :disabled="!puoSalvare" :loading="salvataggio" @click="salvaModifica" />
-            <Button :label="form.attivo ? 'Chiudi giro' : 'Riapri giro'" :icon="form.attivo ? 'pi pi-lock' : 'pi pi-lock-open'" :severity="form.attivo ? 'danger' : 'secondary'" size="small" text @click="chiediChiusura" />
+            <label class="chk attivo-form" :title="form.attivo ? '' : 'Non attivo: non compare nelle pagine di assegnazione'">
+              <ToggleSwitch v-model="form.attivo" /> {{ form.attivo ? 'Attivo' : 'Non attivo' }}
+            </label>
           </template>
           <small v-if="nDentro" class="anteprima">≈ {{ nDentro }} spedizioni di oggi in quest'area</small>
         </div>
@@ -633,7 +660,7 @@ const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfi
         </DataTable>
       </div>
       <div class="tab">
-        <div class="tab-titolo">Giri ({{ giri.length }})
+        <div class="tab-titolo">Giri ({{ nAttivi }} attivi su {{ giri.length }})
           <span class="tab-azioni">
             <InputText v-model="filtroGiri" placeholder="cerca" size="small" class="cerca" />
             <Button label="Tutti" size="small" text @click="mostraTutti" title="Mostra tutti i giri sulla mappa" />
@@ -648,12 +675,17 @@ const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfi
             <template #body="{ data }"><span class="pallino" :style="{ background: data.colore || '#ccc' }" /></template>
           </Column>
           <Column field="giro" header="Giro">
-            <template #body="{ data }">{{ data.giro }} <Tag v-if="!data.attivo" value="chiuso" severity="secondary" /></template>
+            <template #body="{ data }"><span :class="{ 'giro-spento': !data.attivo }">{{ data.giro }}</span> <Tag v-if="!data.attivo" value="non attivo" severity="secondary" /></template>
           </Column>
           <Column field="cap" header="CAP" style="width: 4.5rem" />
           <Column field="comune" header="Comune fisso" style="width: 9rem" />
           <Column field="driverDefault" header="Driver" style="width: 11rem" />
           <Column field="nSped" header="Sped. oggi" style="width: 5.5rem" class="num-col" />
+          <Column header="Attivo" style="width: 4.5rem">
+            <template #body="{ data }">
+              <span @click.stop><ToggleSwitch :modelValue="!!data.attivo" @update:modelValue="v => cambiaAttivo(data, v)" /></span>
+            </template>
+          </Column>
           <Column header="" style="width: 5.5rem">
             <template #body="{ data }">
               <Button icon="pi pi-search" text rounded size="small" title="Inquadra sulla mappa" @click="inquadra(data)" />
@@ -683,6 +715,8 @@ const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfi
 .barra { display: flex; align-items: center; gap: .5rem; }
 .controlli { display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap; font-size: .9rem; }
 .chk { display: inline-flex; align-items: center; gap: .4rem; cursor: pointer; }
+.attivo-form { font-size: .85rem; }
+.giro-spento { color: #9aa4ad; }
 .nota { color: var(--p-text-muted-color); font-size: .85rem; }
 .attenzione { color: var(--p-orange-600); font-size: .85rem; }
 .sel-giro { width: 15rem; margin-left: .3rem; }

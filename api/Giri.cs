@@ -36,7 +36,8 @@ static class Giri
         })).RequireAuthorization();
 
         // elenco giri della filiale con driver predefinito, comune fisso, tipo di area e spedizioni
-        // del giorno dentro il giro; con tutti=1 anche quelli chiusi (DataFine)
+        // del giorno dentro il giro; con tutti=1 anche quelli non attivi (flag "Attivo" della pagina
+        // Giri = DataFine vuota: disattivare scrive la data, riattivare la toglie)
         app.MapGet("/api/giri/elenco", (bool? tutti, ClaimsPrincipal user) => Prova(async () =>
         {
             var idFiliale = Filiale(user);
@@ -172,7 +173,30 @@ static class Giri
                 Attivo = !(b.TryGetProperty("attivo", out var a) && a.ValueKind == JsonValueKind.False),
                 Vertici = vertici, Utente = user.Identity?.Name,
             }, commandType: CommandType.StoredProcedure);
+            if (b.TryGetProperty("attivo", out var att) && att.ValueKind == JsonValueKind.False)
+                await ScollegaDaiPiani(cn, id, Filiale(user), user);
             return Results.Ok(r);
+        })).RequireAuthorization();
+
+        // flag "Attivo" dall'elenco dei giri: si cambia solo quello (gli altri campi restano come sono).
+        // Un giro non attivo non si assegna piu' (le pagine di assegnazione e le stored vedono solo gli
+        // attivi) e viene tolto dai piani di oggi e dei giorni dopo, cosi' non resta nel percorso di un
+        // driver senza comparire sulla lavagna
+        app.MapPut("/api/giri/{id:int}/attivo", (int id, JsonElement b, ClaimsPrincipal user) => Prova(async () =>
+        {
+            var attivo = !(b.TryGetProperty("attivo", out var a) && a.ValueKind == JsonValueKind.False);
+            var idFiliale = Filiale(user);
+            await using var cn = new SqlConnection(connString());
+            var g = await cn.QueryFirstOrDefaultAsync(
+                "SELECT Giro, Colore, CAP, Belfiore, IdDriverDefault FROM GEO_GIRI WHERE IdGiro = @id AND IdFiliale = @f",
+                new { id, f = idFiliale }) ?? throw new ErroreGiri("Giro non trovato nella filiale");
+            await cn.ExecuteAsync("dbo.AI_GEO_GIRO_Save", new
+            {
+                IdGiro = id, Giro = (string)g.Giro, Colore = (string?)g.Colore, CAP = (string?)g.CAP, Belfiore = (string?)g.Belfiore,
+                IdDriverDefault = (int?)g.IdDriverDefault, Attivo = attivo, Vertici = (string?)null, Utente = user.Identity?.Name,
+            }, commandType: CommandType.StoredProcedure);
+            var tolti = attivo ? 0 : await ScollegaDaiPiani(cn, id, idFiliale, user);
+            return Results.Ok(new { idGiro = id, attivo, toltoDaiPiani = tolti });
         })).RequireAuthorization();
 
         // confine di un giro esistente rifatto come unione dei comuni scelti
@@ -241,6 +265,21 @@ static class Giri
                 FROM GEO_GIRI WHERE IdFiliale = @id AND DataFine IS NULL AND SHAPE IS NOT NULL ORDER BY Giro", new { id = Filiale(user) });
             return Results.Ok(righe);
         })).RequireAuthorization();
+    }
+
+    // giro disattivato: fuori dai piani di oggi e dei giorni dopo (AI_PIANO_Driver senza driver segna
+    // "da rifare" il percorso del driver che lo aveva); i giorni passati restano come storico
+    static async Task<int> ScollegaDaiPiani(SqlConnection cn, int idGiro, int idFiliale, ClaimsPrincipal user)
+    {
+        var giorni = (await cn.QueryAsync<DateTime>(@"
+            SELECT Data FROM GIRI_PIANO
+            WHERE IdGiro = @idGiro AND Data >= CONVERT(date, GETDATE()) AND IdDriver IS NOT NULL",
+            new { idGiro })).ToList();
+        foreach (var giorno in giorni)
+            await cn.ExecuteAsync("dbo.AI_PIANO_Driver",
+                new { IdFiliale = idFiliale, Data = giorno, IdGiro = idGiro, IdDriver = (int?)null, Utente = user.Identity?.Name },
+                commandType: CommandType.StoredProcedure);
+        return giorni.Count;
     }
 
     // dopo la creazione: driver predefinito, CAP e comune fissi arrivano nella stessa richiesta
