@@ -830,11 +830,79 @@ const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfi
           size="small" class="sel-giro" @change="visualizza && aggiornaSpedizioni()" />
       </label>
       <label>CAP <InputText v-model="filtroCap" maxlength="5" size="small" class="cap" @update:modelValue="visualizza && aggiornaSpedizioni()" /></label>
-      <span class="spazio"></span>
-      <label>Giri <SelectButton v-model="filtroStato" :options="OPZIONI_STATO" optionLabel="label" optionValue="value" :allowEmpty="false" size="small" /></label>
     </div>
 
     <div class="corpo">
+      <!-- sinistra: i giri (su due righe: nome e stato, poi driver predefinito, CAP e comune fissi) e sotto i comuni -->
+      <div class="sinistra">
+        <div class="tab tab-giri">
+          <div class="tab-titolo">
+            <span>Giri <span class="conteggio-tab">{{ nAttivi }} attivi su {{ giri.length }}</span></span>
+            <span class="tab-azioni">
+              <Button label="Tutti" size="small" text @click="mostraTutti" title="Mostra tutti i giri sulla mappa" />
+              <Button label="Nessuno" size="small" text @click="nascondiTutti" title="Togli tutti i giri dalla mappa" />
+            </span>
+          </div>
+          <div class="tab-filtri">
+            <InputText v-model="filtroGiri" placeholder="cerca giro, CAP, comune, driver" size="small" class="cerca" />
+            <SelectButton v-model="filtroStato" :options="OPZIONI_STATO" optionLabel="label" optionValue="value" :allowEmpty="false" size="small" />
+          </div>
+          <div v-if="giri.length > nAttivi" class="aiuto-attivi">
+            {{ giri.length - nAttivi }} {{ giri.length - nAttivi === 1 ? 'giro non attivo' : 'giri non attivi' }}: restano qui
+            (tratteggiati sulla mappa) e si riattivano con l'interruttore; nelle pagine di assegnazione non compaiono.
+          </div>
+          <DataTable :value="giriFiltrati" v-model:selection="giriSel" dataKey="idGiro" class="griglia"
+            selectionMode="multiple" :metaKeySelection="false" :rowClass="d => [d.idGiro === form.idGiro ? 'riga-in-modifica' : '', d.attivo ? '' : 'riga-spenta']"
+            @update:selection="toggleGiri" scrollable scrollHeight="flex" size="small" stripedRows>
+            <Column selectionMode="multiple" style="width: 2.4rem" />
+            <Column field="giro" header="Giro">
+              <template #body="{ data }">
+                <div class="giro-cella">
+                  <div class="giro-riga1">
+                    <span class="pallino" :style="{ background: data.colore || '#ccc' }" />
+                    <b :class="{ 'giro-spento': !data.attivo }">{{ data.giro }}</b>
+                    <Tag v-if="!data.attivo" value="non attivo" severity="secondary" class="tag-piccolo" />
+                    <span class="spazio"></span>
+                    <span v-if="data.nSped" class="sped-oggi" title="Spedizioni di oggi nel giro">{{ data.nSped }} sped.</span>
+                  </div>
+                  <div class="giro-riga2">
+                    <span :class="{ 'senza-driver': !data.driverDefault }"><i class="pi pi-user"></i> {{ data.driverDefault || 'nessun driver predefinito' }}</span>
+                    <span v-if="data.cap">· CAP {{ data.cap }}</span>
+                    <span v-if="data.comune">· {{ data.comune }}</span>
+                  </div>
+                </div>
+              </template>
+            </Column>
+            <Column header="" style="width: 6.2rem">
+              <template #body="{ data }">
+                <div class="giro-azioni" @click.stop>
+                  <ToggleSwitch :modelValue="!!data.attivo" :title="data.attivo ? 'Attivo: clic per disattivarlo' : 'Non attivo: clic per riattivarlo'"
+                    @update:modelValue="v => cambiaAttivo(data, v)" />
+                  <span>
+                    <Button icon="pi pi-search" text rounded size="small" title="Inquadra sulla mappa" @click="inquadra(data)" />
+                    <Button icon="pi pi-pencil" text rounded size="small" title="Modifica" @click="apriModifica(data)" />
+                  </span>
+                </div>
+              </template>
+            </Column>
+          </DataTable>
+        </div>
+        <div class="tab tab-comuni">
+          <div class="tab-titolo">
+            <span>Comuni della filiale <span class="conteggio-tab">{{ comuni.length }}</span></span>
+            <InputText v-model="filtroComuni" placeholder="cerca" size="small" class="cerca-corto" />
+          </div>
+          <DataTable :value="comuniFiltrati" v-model:selection="comuniSel" dataKey="idComune" class="griglia"
+            selectionMode="multiple" :metaKeySelection="false"
+            @update:selection="toggleComuni" scrollable scrollHeight="flex" size="small" stripedRows>
+            <Column selectionMode="multiple" style="width: 2.4rem" />
+            <Column field="denominazione" header="Comune" />
+            <Column field="cap" header="CAP" style="width: 4.2rem" />
+            <Column field="belfiore" header="Belf." style="width: 3.8rem" />
+          </DataTable>
+        </div>
+      </div>
+
       <div ref="mapEl" class="mappa"></div>
 
       <aside class="pannello">
@@ -856,10 +924,16 @@ const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfi
               <InputText v-model="form.cap" maxlength="5" fluid size="small" placeholder="es. 50018" />
             </div>
           </div>
-          <label>Comune fisso</label>
-          <Select v-model="form.belfiore" :options="comuni" optionLabel="denominazione" optionValue="belfiore" filter showClear size="small" placeholder="nessuno" fluid />
-          <label>Driver predefinito</label>
-          <Select v-model="form.idDriverDefault" :options="driver" optionLabel="nome" optionValue="idUtente" filter showClear size="small" placeholder="nessuno" fluid />
+          <div class="due">
+            <div>
+              <label>Comune fisso</label>
+              <Select v-model="form.belfiore" :options="comuni" optionLabel="denominazione" optionValue="belfiore" filter showClear size="small" placeholder="nessuno" fluid />
+            </div>
+            <div>
+              <label>Driver predefinito</label>
+              <Select v-model="form.idDriverDefault" :options="driver" optionLabel="nome" optionValue="idUtente" filter showClear size="small" placeholder="nessuno" fluid />
+            </div>
+          </div>
           <small class="hint">CAP e comune fissi vincono sull'area: tutte le spedizioni con quel CAP o comune vanno a questo giro.</small>
 
           <!-- nuovo giro: disegno a mano o unione di comuni -->
@@ -952,60 +1026,6 @@ const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfi
       </aside>
     </div>
 
-    <div class="tabelle">
-      <div class="tab">
-        <div class="tab-titolo">Comuni della filiale ({{ comuni.length }})
-          <InputText v-model="filtroComuni" placeholder="cerca" size="small" class="cerca" /></div>
-        <DataTable :value="comuniFiltrati" v-model:selection="comuniSel" dataKey="idComune"
-          selectionMode="multiple" :metaKeySelection="false"
-          @update:selection="toggleComuni" scrollable scrollHeight="240px" size="small" stripedRows>
-          <Column selectionMode="multiple" style="width: 3rem" />
-          <Column field="denominazione" header="Comune" />
-          <Column field="belfiore" header="Belfiore" style="width: 6rem" />
-          <Column field="cap" header="CAP" style="width: 5rem" />
-        </DataTable>
-      </div>
-      <div class="tab">
-        <div class="tab-titolo">Giri ({{ nAttivi }} attivi su {{ giri.length }})
-          <span class="tab-azioni">
-            <InputText v-model="filtroGiri" placeholder="cerca" size="small" class="cerca" />
-            <Button label="Tutti" size="small" text @click="mostraTutti" title="Mostra tutti i giri sulla mappa" />
-            <Button label="Nessuno" size="small" text @click="nascondiTutti" title="Togli tutti i giri dalla mappa" />
-          </span>
-        </div>
-        <div v-if="giri.length > nAttivi" class="aiuto-attivi">
-          {{ giri.length - nAttivi }} {{ giri.length - nAttivi === 1 ? 'giro non attivo' : 'giri non attivi' }}: restano qui
-          (tratteggiati sulla mappa) e si riattivano con l'interruttore "Attivo"; nelle pagine di assegnazione non compaiono.
-        </div>
-        <DataTable :value="giriFiltrati" v-model:selection="giriSel" dataKey="idGiro"
-          selectionMode="multiple" :metaKeySelection="false" :rowClass="d => [d.idGiro === form.idGiro ? 'riga-in-modifica' : '', d.attivo ? '' : 'riga-spenta']"
-          @update:selection="toggleGiri" scrollable scrollHeight="240px" size="small" stripedRows>
-          <Column selectionMode="multiple" style="width: 3rem" />
-          <Column header="" style="width: 2.2rem">
-            <template #body="{ data }"><span class="pallino" :style="{ background: data.colore || '#ccc' }" /></template>
-          </Column>
-          <Column header="Attivo" style="width: 4.5rem" headerClass="col-attivo">
-            <template #body="{ data }">
-              <span @click.stop><ToggleSwitch :modelValue="!!data.attivo" @update:modelValue="v => cambiaAttivo(data, v)" /></span>
-            </template>
-          </Column>
-          <Column field="giro" header="Giro">
-            <template #body="{ data }"><span :class="{ 'giro-spento': !data.attivo }">{{ data.giro }}</span> <Tag v-if="!data.attivo" value="non attivo" severity="secondary" /></template>
-          </Column>
-          <Column field="cap" header="CAP" style="width: 4.5rem" />
-          <Column field="comune" header="Comune fisso" style="width: 9rem" />
-          <Column field="driverDefault" header="Driver" style="width: 11rem" />
-          <Column field="nSped" header="Sped. oggi" style="width: 5.5rem" class="num-col" />
-          <Column header="" style="width: 5.5rem">
-            <template #body="{ data }">
-              <Button icon="pi pi-search" text rounded size="small" title="Inquadra sulla mappa" @click="inquadra(data)" />
-              <Button icon="pi pi-pencil" text rounded size="small" title="Modifica" @click="apriModifica(data)" />
-            </template>
-          </Column>
-        </DataTable>
-      </div>
-    </div>
-
     <Dialog :visible="!!conferma" modal :header="conferma?.titolo" :style="{ width: '32rem' }" @update:visible="conferma = null">
       <p>{{ conferma?.testo }}</p>
       <template #footer>
@@ -1017,7 +1037,7 @@ const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfi
 </template>
 
 <style scoped>
-.pagina { display: flex; flex-direction: column; gap: .5rem; }
+.pagina { display: flex; flex-direction: column; gap: .5rem; height: calc(100vh - 7rem); min-height: 640px; }
 .testata { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .testata h2 { margin: 0; }
 .filiale { font-weight: 400; color: var(--p-text-muted-color); font-size: 1rem; margin-left: .5rem; }
@@ -1035,41 +1055,62 @@ const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfi
 .cap { width: 6rem; margin-left: .3rem; }
 .spazio { flex: 1; }
 
-.corpo { display: flex; gap: 1rem; align-items: stretch; }
-.mappa { flex: 1; height: 62vh; min-height: 440px; border: 1px solid var(--p-surface-300); border-radius: 6px; z-index: 0; }
-.pannello { flex: 0 0 320px; border: 1px solid var(--p-surface-200); border-radius: 6px; overflow: hidden; display: flex; flex-direction: column; max-height: 62vh; }
+.corpo { display: grid; grid-template-columns: 25rem minmax(0, 1fr) 31rem; gap: .75rem; flex: 1; min-height: 0; }
+.sinistra { display: flex; flex-direction: column; gap: .6rem; min-height: 0; min-width: 0; }
+.tab-giri { flex: 3 1 0; }
+.tab-comuni { flex: 2 1 0; }
+.mappa { height: 100%; min-height: 440px; border: 1px solid var(--p-surface-300); border-radius: 6px; z-index: 0; }
+.pannello { border: 1px solid var(--p-surface-200); border-radius: 6px; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
 .pannello-titolo { background: #00a5cf; color: #fff; padding: .35rem .75rem; font-weight: 600; font-size: .9rem; display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
 .pannello-titolo .chiaro { color: #fff; }
 .conteggio { font-weight: 400; opacity: .9; font-size: .8rem; }
-.form { display: flex; flex-direction: column; gap: .4rem; padding: .6rem .75rem; overflow-y: auto; }
+.form { display: flex; flex-direction: column; gap: .4rem; padding: .6rem .75rem; flex: none; }
 .form > label, .form .due label { font-size: .8rem; color: #555; }
 .form hr { width: 100%; border: none; border-top: 1px solid var(--p-surface-200); margin: .2rem 0; }
 .due { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
 .colore { display: flex; align-items: center; gap: .5rem; }
 .hint { color: #888; font-size: .75rem; }
 .anteprima { color: #1a7a1a; font-weight: 600; font-size: .8rem; }
-.bordi { padding: .4rem .75rem; overflow-y: auto; min-height: 3rem; max-height: 24vh; }
+.bordi { padding: .4rem .75rem; overflow-y: auto; min-height: 3rem; max-height: 32vh; flex: none; }
 .bordo { display: flex; align-items: center; gap: .4rem; font-size: .78rem; }
 .bordo .num { flex: 0 0 1.4rem; height: 1.4rem; line-height: 1.4rem; text-align: center; color: #fff; border-radius: 50%; font-weight: 700; }
 .bordo .coord { flex: 1; font-family: monospace; cursor: pointer; }
 .bordo .azioni { display: flex; }
 .vuoto { color: #888; font-size: .85rem; }
-.variazioni { padding: .4rem .75rem; overflow-y: auto; max-height: 20vh; font-size: .78rem; }
+.variazioni { padding: .4rem .75rem; overflow-y: auto; max-height: 24vh; font-size: .78rem; flex: none; }
 .variazione { padding: .1rem 0; border-bottom: 1px dotted var(--p-surface-200); }
 .variazione .quando { color: var(--p-text-muted-color); }
 
-.tabelle { display: grid; grid-template-columns: 1fr 1.4fr; gap: 1rem; margin-top: .5rem; }
-.tab { border: 1px solid var(--p-surface-200); border-radius: 6px; overflow: hidden; }
-.tab-titolo { background: var(--p-surface-50); padding: .3rem .75rem; font-weight: 600; font-size: .9rem; border-bottom: 1px solid var(--p-surface-200); display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
-.tab-azioni { display: flex; align-items: center; gap: .25rem; }
-.cerca { width: 10rem; }
-.pallino { display: inline-block; width: 14px; height: 14px; border-radius: 50%; border: 1px solid #999; }
+.tab { border: 1px solid var(--p-surface-200); border-radius: 6px; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+.tab-titolo { background: var(--p-surface-50); padding: .3rem .6rem; font-weight: 600; font-size: .9rem; border-bottom: 1px solid var(--p-surface-200); display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.conteggio-tab { font-weight: 400; color: var(--p-text-muted-color); font-size: .8rem; margin-left: .3rem; }
+.tab-azioni { display: flex; align-items: center; gap: .1rem; }
+.tab-filtri { display: flex; align-items: center; gap: .4rem; padding: .35rem .6rem; border-bottom: 1px solid var(--p-surface-200); flex-wrap: wrap; }
+.cerca { flex: 1; min-width: 9rem; }
+.cerca-corto { width: 9rem; }
+.griglia { flex: 1; min-height: 0; }
+.giro-cella { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
+.giro-riga1 { display: flex; align-items: center; gap: .4rem; }
+.giro-riga2 { font-size: .78rem; color: #5f6b77; display: flex; flex-wrap: wrap; gap: .3rem; padding-left: 1.3rem; }
+.giro-riga2 .pi { font-size: .7rem; }
+.senza-driver { color: #a0a8b0; font-style: italic; }
+.sped-oggi { font-size: .75rem; color: #1a7a1a; white-space: nowrap; }
+.giro-azioni { display: flex; flex-direction: column; align-items: flex-end; gap: .1rem; }
+:deep(.tag-piccolo) { font-size: .65rem; padding: .05rem .35rem; }
+.pallino { display: inline-block; width: 13px; height: 13px; border-radius: 50%; border: 1px solid #999; flex: none; }
 :deep(.num-col) { text-align: right; }
 :deep(.riga-in-modifica) { outline: 2px solid #00a5cf; outline-offset: -2px; }
+@media (max-width: 1500px) {
+  .corpo { grid-template-columns: 21rem minmax(0, 1fr) 26rem; }
+}
 @media (max-width: 1100px) {
-  .corpo { flex-direction: column; }
-  .pannello { flex: none; max-height: none; }
-  .tabelle { grid-template-columns: 1fr; }
+  .pagina { height: auto; }
+  .corpo { display: flex; flex-direction: column; }
+  .mappa { height: 55vh; order: 1; }
+  .pannello { order: 2; max-height: none; }
+  .sinistra { order: 3; }
+  .tab-giri { height: 60vh; flex: none; }
+  .tab-comuni { height: 40vh; flex: none; }
 }
 .allinea { display: flex; flex-direction: column; gap: .3rem; border: 1px dashed var(--p-surface-300); border-radius: 6px; padding: .4rem .5rem; }
 .allinea > label { font-size: .8rem; font-weight: 600; color: #555; }
