@@ -1,4 +1,4 @@
-using System.Data;
+﻿using System.Data;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -267,6 +267,14 @@ public static class Esecutore
                 }
                 await cn.ExecuteAsync("dbo.WF_usp_Esecuzione_Avanzamento",
                     new { IdEsecuzione = idEsecuzione, Avanzamento = (int)Math.Round((i + 1) * 100.0 / radici.Count) }, commandType: CommandType.StoredProcedure);
+            }
+            if (await Annullata(cn, idEsecuzione))
+            {
+                // annullata dalla pagina o dallo schedulatore mentre uno step girava (gli script lo vedono e si
+                // fermano da soli): resta ANNULLATA, non ESEGUITA
+                await cn.ExecuteAsync("dbo.WF_usp_Esecuzione_Termina", new { IdEsecuzione = idEsecuzione, Stato = 4, Esito = "Annullata durante l'esecuzione" }, commandType: CommandType.StoredProcedure);
+                await ctx.Scrivi("WARN", "Esecuzione annullata durante uno step");
+                return;
             }
             await cn.ExecuteAsync("dbo.WF_usp_Esecuzione_Termina", new { IdEsecuzione = idEsecuzione, Stato = 2, Esito = "OK" }, commandType: CommandType.StoredProcedure);
             await ctx.Scrivi("INFO", "Workflow completato");
