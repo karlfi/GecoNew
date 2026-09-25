@@ -292,12 +292,15 @@ END
 GO
 
 -- Voce di menu in fondo a "Gestione Giri Filiale" (il gruppo si cerca per nome: gli Id del DB di Ge.C.O. New sono diversi)
-DECLARE @gruppo int = (SELECT TOP 1 IdMenuElemento FROM dbo.MENU_ELEMENTI WHERE Text = 'Gestione Giri Filiale' AND ISNULL(ParentID, 0) = 0);
+-- il gruppo e' quello della voce "Giri - Ottimizza percorso" (Videata Ottimizza): in Speedy Web e' "Gestione Giri Filiale",
+-- in Ge.C.O. New le voci dei giri sono un blocco dentro "Gestione Filiale"; la voce nuova va in coda al blocco dei giri
+DECLARE @gruppo int = (SELECT TOP 1 ParentID FROM dbo.MENU_ELEMENTI WHERE Videata = 'Ottimizza' AND Link = '/piano-giornata');
 IF @gruppo IS NULL
-    RAISERROR('Manca il gruppo di menu "Gestione Giri Filiale"', 16, 1);
+    RAISERROR('Manca la voce di menu "Giri - Ottimizza percorso": non so in che gruppo mettere la voce nuova', 16, 1);
 ELSE IF NOT EXISTS (SELECT 1 FROM dbo.MENU_ELEMENTI WHERE ParentID = @gruppo AND Link = '/pianificazione-automatica')
 BEGIN
-    DECLARE @ordine int = (SELECT ISNULL(MAX(Sorting), 0) + 1 FROM dbo.MENU_ELEMENTI WHERE ParentID = @gruppo);
+    DECLARE @ordine int = (SELECT ISNULL(MAX(Sorting), 0) + 1 FROM dbo.MENU_ELEMENTI WHERE ParentID = @gruppo
+                           AND (Text LIKE 'Giri - %' OR Link IN ('/pianificazione-automatica', '/doc/Gestione_giri_guida_operatori.pdf')));
     EXEC dbo.AI_MENU_ELEMENTI_Save @ParentID = @gruppo, @Text = 'Pianificazione Automatica',
         @Descrizione = 'Divide tutte le spedizioni della filiale fra i driver scelti con HERE, ottimizzando e bilanciando il carico',
         @Link = '/pianificazione-automatica', @Sorting = @ordine;
