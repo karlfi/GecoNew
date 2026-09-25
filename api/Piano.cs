@@ -32,7 +32,7 @@ static class Piano
         {
             var idFiliale = Filiale(user);
             var giorno = Giorno(data);
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var f = await cn.QueryFirstOrDefaultAsync("SELECT FILIALE AS filiale, Latitude AS lat, Longitude AS lng FROM FILIALI WHERE IDFILIALE = @id", new { id = idFiliale });
             var giri = await cn.QueryAsync(@"
                 SELECT g.IdGiro AS idGiro, g.Giro AS giro, g.Colore AS colore, g.IdDriverDefault AS idDriverDefault, ud.Nome AS driverDefault,
@@ -79,7 +79,7 @@ static class Piano
         // giro -> driver: { data, idGiro, idDriver | null }
         app.MapPost("/api/piano/driver", (JsonElement b, ClaimsPrincipal user) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var r = await cn.QueryFirstAsync("dbo.AI_PIANO_Driver",
                 new { IdFiliale = Filiale(user), Data = Giorno(Testo(b, "data")), IdGiro = Intero(b, "idGiro") ?? throw new ErrorePiano("Giro mancante"), IdDriver = Intero(b, "idDriver"), Utente = user.Identity?.Name },
                 commandType: CommandType.StoredProcedure);
@@ -89,7 +89,7 @@ static class Piano
         // driver predefiniti sui giri del giorno ancora senza driver: { data }
         app.MapPost("/api/piano/driver-predefiniti", (JsonElement b, ClaimsPrincipal user) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var n = await cn.ExecuteScalarAsync<int>("dbo.AI_PIANO_DriverPredefiniti",
                 new { IdFiliale = Filiale(user), Data = Giorno(Testo(b, "data")), Utente = user.Identity?.Name }, commandType: CommandType.StoredProcedure);
             return Results.Ok(new { assegnati = n });
@@ -98,7 +98,7 @@ static class Piano
         // partenza/ritorno da casa o dalla filiale: { data, idDriver, partenzaCasa, ritornoCasa }
         app.MapPost("/api/piano/driver/opzioni", (JsonElement b, ClaimsPrincipal user) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var r = await cn.QueryFirstAsync("dbo.AI_PIANO_DriverOpzioni", new
             {
                 IdFiliale = Filiale(user), Data = Giorno(Testo(b, "data")), IdDriver = Intero(b, "idDriver") ?? throw new ErrorePiano("Driver mancante"),
@@ -112,7 +112,7 @@ static class Piano
         {
             var indirizzo = (Testo(b, "indirizzo") ?? "").Trim();
             if (indirizzo.Length < 5) throw new ErrorePiano("Indirizzo mancante");
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var token = await cn.ExecuteScalarAsync<string?>("SELECT Codice FROM dbo.LISTA_VALORI WHERE Lista = 'HERE' AND Valore = 'token'");
             if (string.IsNullOrWhiteSpace(token)) throw new ErrorePiano("In Lista Valori (lista HERE) manca la riga token");
             var (lat, lng, trovato) = await Geocodifica(token.Trim(), indirizzo);
@@ -125,7 +125,7 @@ static class Piano
         app.MapPost("/api/piano/ottimizza", (JsonElement b, ClaimsPrincipal user) => Prova(async () =>
         {
             var idFiliale = Filiale(user);
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var r = await cn.QueryFirstAsync("dbo.AI_HERE_RichiestaDriver",
                 new { IdFiliale = idFiliale, Data = Giorno(Testo(b, "data")), IdDriver = Intero(b, "idDriver") ?? throw new ErrorePiano("Driver mancante"), IdUtente = IdUtente(user), Utente = user.Identity?.Name },
                 commandType: CommandType.StoredProcedure);
@@ -139,7 +139,7 @@ static class Piano
             var idFiliale = Filiale(user);
             var giorno = Giorno(Testo(b, "data"));
             var soloDaFare = !(b.TryGetProperty("soloDaFare", out var s) && s.ValueKind == JsonValueKind.False);
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var driver = await cn.QueryAsync<int>(@"
                 SELECT p.IdDriver FROM GIRI_PIANO p
                 JOIN SPED_ATTIVITA s ON s.IdGiro = p.IdGiro AND s.IdFiliale = @id AND s.DataCarico >= @dal AND s.DataCarico < @al AND s.DestinazioneLatitude IS NOT NULL
@@ -169,7 +169,7 @@ static class Piano
             var idDriver = Intero(b, "idDriver") ?? throw new ErrorePiano("Driver mancante");
             var ids = b.TryGetProperty("idSpedizioni", out var v) && v.ValueKind == JsonValueKind.Array ? v.EnumerateArray().Select(x => x.GetInt32()).ToList() : new List<int>();
             if (ids.Count == 0) throw new ErrorePiano("Nessuna spedizione nel rettangolo");
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var giri = (await cn.QueryAsync(@"
                 SELECT g.IdGiro AS idGiro, g.Giro AS giro, g.SHAPE.STCentroid().STY AS lat, g.SHAPE.STCentroid().STX AS lng
                 FROM GIRI_PIANO p JOIN GEO_GIRI g ON g.IdGiro = p.IdGiro
@@ -187,7 +187,7 @@ static class Piano
         // il percorso di un driver: tappe nell'ordine di HERE (o le consegne senza ordine), partenza, ritorno, polilinea
         app.MapGet("/api/piano/driver/{id:int}/percorso", (int id, ClaimsPrincipal user) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var p = await PianoDriverDi(cn, id, Filiale(user));
             List<IDictionary<string, object?>> punti = (await Percorso(cn, (object)p)).Cast<IDictionary<string, object?>>().ToList();
             var partenza = punti.FirstOrDefault(x => (string?)x["tipo"] == "partenza");
@@ -208,7 +208,7 @@ static class Piano
         // il percorso in Excel, nell'ordine di consegna
         app.MapGet("/api/piano/driver/{id:int}/export", async (int id, ClaimsPrincipal user) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var p = await PianoDriverDi(cn, id, Filiale(user));
             List<dynamic> punti = await Percorso(cn, (object)p);
             var nome = ((string?)p.Driver ?? "driver").Replace(' ', '_');
@@ -220,7 +220,7 @@ static class Piano
         // storico di un driver nel giorno (giri presi e tolti, opzioni, ottimizzazioni)
         app.MapGet("/api/piano/driver/{id:int}/storico", (int id) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var righe = await cn.QueryAsync(@"
                 SELECT CONVERT(varchar(19), DataOra, 126) AS dataOra, Utente AS utente, Campo AS campo, Prima AS prima, Dopo AS dopo
                 FROM PIANO_DRIVER_VARIAZIONI WHERE IdPianoDriver = @id ORDER BY IdVariazione DESC", new { id });

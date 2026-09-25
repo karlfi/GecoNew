@@ -15,6 +15,13 @@ static class LogTabelle
             SELECT Id, Data, Operatore, TipoOperazione, CONVERT(varchar(max), Record) AS Xml
             FROM LOGTabelle WHERE Tabella = @tabella AND IdTabella = @id ORDER BY Id", new { tabella, id })).ToList();
         var segreti = new HashSet<string>(nascosti ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+        // Operatore: il login dell'utente del portale (Operatore.cs), che si mostra col nome dell'utente quando quel
+        // login e' di un utente solo; prima c'era sempre il login SQL dell'applicazione
+        var logins = righe.Select(r => r.Operatore).Where(o => !string.IsNullOrEmpty(o)).Distinct().ToList();
+        var nomi = logins.Count == 0 ? new Dictionary<string, string>() : (await cn.QueryAsync<(string Utente, string Nome)>(@"
+            SELECT Utente, MIN(Nome) FROM UTENTI WHERE Utente IN @logins AND Nome > ''
+            GROUP BY Utente HAVING COUNT(*) = 1", new { logins }))
+            .ToDictionary(x => x.Utente, x => x.Nome, StringComparer.OrdinalIgnoreCase);
         var modifiche = new List<object>();
         for (var i = 0; i < righe.Count; i++)
         {
@@ -36,7 +43,8 @@ static class LogTabelle
             {
                 id = righe[i].Id,
                 data = righe[i].Data,
-                operatore = righe[i].Operatore,
+                operatore = righe[i].Operatore is string op && nomi.TryGetValue(op, out var nome) ? nome : righe[i].Operatore,
+                login = righe[i].Operatore,
                 tipoOperazione = righe[i].TipoOperazione,
                 prima = prima is not null,      // false = e' la prima fotografia, non c'e' un confronto
                 campi

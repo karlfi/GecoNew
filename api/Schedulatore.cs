@@ -26,7 +26,7 @@ static class Schedulatore
         // ---- lookup ---------------------------------------------------------
         app.MapGet("/api/schedulatore/tipi", async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(await cn.QueryAsync(
                 "SELECT Codice, Descrizione, SupportaSottopassi FROM dbo.WF_TipoStep WHERE Attivo = 1 ORDER BY Codice"));
         }).RequireAuthorization();
@@ -35,7 +35,7 @@ static class Schedulatore
         // elenco con quanti step, quante pianificazioni vive e com'e' andata l'ultima volta
         app.MapGet("/api/schedulatore/workflow", async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(Utc(await cn.QueryAsync(@"
                 SELECT w.IdWorkflow, w.Nome, w.Descrizione, w.NStepDichiarati, w.DirectoryOutput, w.Attivo,
                        w.FileOrigine, w.DataCreazione, w.DataModifica,
@@ -53,7 +53,7 @@ static class Schedulatore
         // testata + albero degli step (sottopassi annidati), parametri gia' come JSON
         app.MapGet("/api/schedulatore/workflow/{id:int}", async (int id) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var testa = (IDictionary<string, object?>?)await cn.QueryFirstOrDefaultAsync(
                 "SELECT * FROM dbo.WF_Workflow WHERE IdWorkflow = @id", new { id });
             if (testa is null) return Results.NotFound(new { errore = "Workflow non trovato" });
@@ -70,20 +70,20 @@ static class Schedulatore
         // testata scritta dalla pagina: nuovo workflow (vuoto, gli step si aggiungono dopo) o modifica
         app.MapPost("/api/schedulatore/workflow", (JsonElement b) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(new { idWorkflow = await SalvaWorkflow(cn, null, b) });
         })).RequireAuthorization();
 
         app.MapPut("/api/schedulatore/workflow/{id:int}", (int id, JsonElement b) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             await SalvaWorkflow(cn, id, b);
             return Results.Ok(new { ok = true });
         })).RequireAuthorization();
 
         app.MapDelete("/api/schedulatore/workflow/{id:int}", (int id) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             await cn.ExecuteAsync("dbo.WF_usp_Workflow_Delete", new { IdWorkflow = id }, commandType: CommandType.StoredProcedure);
             return Results.Ok(new { ok = true });
         })).RequireAuthorization();
@@ -91,7 +91,7 @@ static class Schedulatore
         // ---- step -------------------------------------------------------------
         app.MapPut("/api/schedulatore/step/{id:int}", (int id, JsonElement b) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             await cn.ExecuteAsync("dbo.WF_usp_Step_UpdateParametri", new
             {
                 IdStep = id,
@@ -107,7 +107,7 @@ static class Schedulatore
 
         app.MapPost("/api/schedulatore/workflow/{id:int}/step", (int id, JsonElement b) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var p = new DynamicParameters(new
             {
                 IdWorkflow = id, IdStepPadre = Int(b, "idStepPadre"),
@@ -120,14 +120,14 @@ static class Schedulatore
 
         app.MapDelete("/api/schedulatore/step/{id:int}", (int id) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             await cn.ExecuteAsync("dbo.WF_usp_Step_Delete", new { IdStep = id }, commandType: CommandType.StoredProcedure);
             return Results.Ok(new { ok = true });
         })).RequireAuthorization();
 
         app.MapPost("/api/schedulatore/step/{id:int}/sposta", (int id, JsonElement b) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             await cn.ExecuteAsync("dbo.WF_usp_Step_Sposta",
                 new { IdStep = id, Direzione = Str(b, "direzione") == "su" ? "su" : "giu" }, commandType: CommandType.StoredProcedure);
             return Results.Ok(new { ok = true });
@@ -141,7 +141,7 @@ static class Schedulatore
             var esiti = new List<object>();
             if (!b.TryGetProperty("file", out var file) || file.ValueKind != JsonValueKind.Array)
                 return Results.BadRequest(new { errore = "Nessun file" });
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             foreach (var f in file.EnumerateArray())
             {
                 var nomeFile = Str(f, "nome") ?? "senza_nome.stp";
@@ -164,7 +164,7 @@ static class Schedulatore
         // "esegui ora": in coda con la data di adesso, la pesca il motore
         app.MapPost("/api/schedulatore/workflow/{id:int}/esegui", (int id, JsonElement b, ClaimsPrincipal user) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var p = new DynamicParameters(new
             {
                 IdWorkflow = id, Origine = "MANUALE", Parametri = Json(b, "parametri"),
@@ -178,7 +178,7 @@ static class Schedulatore
 
         app.MapPost("/api/schedulatore/esecuzione/{id:int}/annulla", (int id, ClaimsPrincipal user) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             await cn.ExecuteAsync("dbo.WF_usp_Esecuzione_Annulla", new { IdEsecuzione = id, NomeUtente = user.Identity?.Name },
                 commandType: CommandType.StoredProcedure);
             return Results.Ok(new { ok = true });
@@ -190,7 +190,7 @@ static class Schedulatore
         // parte da ieri e le pianificate future stanno in fondo (richiesta di Carlo, 2026-09-18)
         app.MapGet("/api/schedulatore/esecuzioni", async (int? idWorkflow, int? stato, int? top, DateTime? dal, DateTime? al, bool? crescente) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var ordine = crescente == true ? "ORDER BY COALESCE(InizioUtc, DataOraPrevista), IdEsecuzione" : "ORDER BY IdEsecuzione DESC";
             return Results.Ok(Utc(await cn.QueryAsync($@"
                 SELECT TOP {Math.Clamp(top ?? 200, 1, 2000)}
@@ -206,7 +206,7 @@ static class Schedulatore
         // una esecuzione col suo log: una chiamata sola, la pagina la ripete finche' e' in corso
         app.MapGet("/api/schedulatore/esecuzione/{id:int}", async (int id) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var e = (IDictionary<string, object?>?)await cn.QueryFirstOrDefaultAsync(
                 "SELECT * FROM dbo.WF_vw_Esecuzione WHERE IdEsecuzione = @id", new { id });
             if (e is null) return Results.NotFound(new { errore = "Esecuzione non trovata" });
@@ -228,7 +228,7 @@ static class Schedulatore
         // vede subito se un cron fa quel che si voleva
         app.MapGet("/api/schedulatore/workflow/{id:int}/pianificazioni", async (int id) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var masters = Utc(await cn.QueryAsync(@"
                 SELECT IdPianificazione, IdWorkflow, Descrizione, Parametri, GruppoConcorrenza, Note,
                        OrizzonteGiorni, DataOraFinale, Sospesa, Attiva, DataCreazione, DataModifica
@@ -251,13 +251,13 @@ static class Schedulatore
 
         app.MapPost("/api/schedulatore/workflow/{id:int}/pianificazioni", (int id, JsonElement b) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(new { idPianificazione = await SalvaPianificazione(cn, null, id, b) });
         })).RequireAuthorization();
 
         app.MapPut("/api/schedulatore/pianificazione/{id:int}", (int id, JsonElement b) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var idWorkflow = Int(b, "idWorkflow")
                 ?? await cn.ExecuteScalarAsync<int>("SELECT IdWorkflow FROM dbo.WF_PianificazioneMaster WHERE IdPianificazione = @id", new { id });
             await SalvaPianificazione(cn, id, idWorkflow, b);
@@ -266,20 +266,20 @@ static class Schedulatore
 
         app.MapDelete("/api/schedulatore/pianificazione/{id:int}", (int id) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             await cn.ExecuteAsync("dbo.WF_usp_Pianificazione_Elimina", new { IdPianificazione = id }, commandType: CommandType.StoredProcedure);
             return Results.Ok(new { ok = true });
         })).RequireAuthorization();
 
         app.MapPost("/api/schedulatore/pianificazione/{id:int}/dettagli", (int id, JsonElement b) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(new { idDettaglio = await SalvaDettaglio(cn, null, id, b) });
         })).RequireAuthorization();
 
         app.MapPut("/api/schedulatore/dettaglio/{id:int}", (int id, JsonElement b) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var idPian = await cn.ExecuteScalarAsync<int>("SELECT IdPianificazione FROM dbo.WF_PianificazioneDettaglio WHERE IdDettaglio = @id", new { id });
             await SalvaDettaglio(cn, id, idPian, b);
             return Results.Ok(new { ok = true });
@@ -287,7 +287,7 @@ static class Schedulatore
 
         app.MapDelete("/api/schedulatore/dettaglio/{id:int}", (int id) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             await cn.ExecuteAsync("dbo.WF_usp_Dettaglio_Elimina", new { IdDettaglio = id }, commandType: CommandType.StoredProcedure);
             return Results.Ok(new { ok = true });
         })).RequireAuthorization();
@@ -313,7 +313,7 @@ static class Schedulatore
         app.MapGet("/api/schedulatore/prossime", async (int? giorni) =>
         {
             var fine = DateTime.UtcNow.AddDays(Math.Clamp(giorni ?? 7, 1, 90));
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var righe = new List<RigaProssima>();
             var dettagli = Utc(await cn.QueryAsync(@"
                 SELECT d.IdDettaglio, d.IdPianificazione, d.TipoRicorrenza, d.CronExpr, d.DataOraSingola, d.Priorita, d.Attiva,

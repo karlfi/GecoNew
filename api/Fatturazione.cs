@@ -42,7 +42,7 @@ static class Fatturazione
         {
             if (!Profili.TryGetValue(profilo, out var p)) return ProfiloIgnoto(profilo);
             var data = PrimoDelMese(dataFattura);
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var (daFatturare, fatture) = await Elenchi(cn, p, data, null, genera: false);
             var (cartella, avviso) = await CartellaScrivibile(cn);
             return Results.Ok(new
@@ -62,7 +62,7 @@ static class Fatturazione
         {
             if (!Profili.TryGetValue(profilo, out var p)) return ProfiloIgnoto(profilo);
             var data = PrimoDelMese(dataFattura);
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             using var multi = await cn.QueryMultipleAsync("dbo.FATT_TIPO_Previsione",
                 new { CodTipoVendita = p.TipoVendita, DataFattura = data, IdCliente = idCliente },
                 commandType: CommandType.StoredProcedure, commandTimeout: 900);
@@ -96,7 +96,7 @@ static class Fatturazione
         {
             if (!Profili.TryGetValue(profilo, out var p)) return ProfiloIgnoto(profilo);
             var data = PrimoDelMese(req.DataFattura);
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var (cartella, avvisoCartella) = await CartellaScrivibile(cn);
 
             var (daFatturare, fatture) = await Elenchi(cn, p, data, req.IdCliente, req.Genera);
@@ -189,7 +189,7 @@ static class Fatturazione
             if (!Profili.ContainsKey(profilo)) return ProfiloIgnoto(profilo);
             if (!Regex.IsMatch(nome ?? "", @"^FAT_[\w\-]+\.xlsx$"))
                 return Results.BadRequest(new { errore = "Nome file non valido" });
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var (cartella, _) = await CartellaScrivibile(cn);
             var percorso = Path.Combine(cartella, nome!);
             if (!File.Exists(percorso)) return Results.NotFound(new { errore = "File non trovato" });

@@ -19,7 +19,7 @@ static class Mezzi
         // elenco per la navigazione: filtri e testo libero (targa, telaio, modello, assegnatario)
         app.MapGet("/api/mezzi", async (string? testo, int? idFiliale, string? tipo, string? stato) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(await cn.QueryAsync(@"
                 SELECT m.idMezzo, m.targa, m.codTipoMezzo, t.tipoMezzo AS Tipo, m.marca, m.modello, m.telaio, m.dataImmatricolazione, m.dataDismissione,
                        m.DataRevisione, m.DataBollo, m.DataScadenzaNoleggio, m.idFiliale, f.FILIALE AS Filiale, m.IdUtente, u.Nome AS Assegnatario,
@@ -41,7 +41,7 @@ static class Mezzi
 
         app.MapGet("/api/mezzi/lookup", async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(new
             {
                 tipi = (await cn.QueryAsync("SELECT RTRIM(codTipoMezzo) AS Codice, tipoMezzo AS Descrizione FROM dbo.MEZZI_TIPI ORDER BY codTipoMezzo")).ToList(),
@@ -56,7 +56,7 @@ static class Mezzi
         // una scheda: tutta la riga di MEZZI piu' i nomi
         app.MapGet("/api/mezzi/{id:int}", async (int id) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var m = (IDictionary<string, object?>?)await cn.QueryFirstOrDefaultAsync(@"
                 SELECT m.*, m.[Proprietà] AS Proprieta, t.tipoMezzo AS Tipo, f.FILIALE AS Filiale, u.Nome AS Assegnatario, u.Matricola,
                        k.km AS UltimiKm, k.data AS DataUltimiKm, ud.Nome AS DriverAttuale,
@@ -80,14 +80,14 @@ static class Mezzi
         // dalla griglia legacy si arriva con la targa
         app.MapGet("/api/mezzi/targa/{targa}", async (string targa) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var id = await cn.ExecuteScalarAsync<int?>("SELECT idMezzo FROM dbo.MEZZI WHERE targa = @targa", new { targa = targa.Trim().ToUpperInvariant() });
             return id is null ? Results.NotFound(new { errore = $"Nessun mezzo con targa {targa}" }) : Results.Ok(new { idMezzo = id });
         }).RequireAuthorization();
 
         app.MapPost("/api/mezzi", (JsonElement b) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var p = new DynamicParameters(new
             {
                 targa = Str(b, "targa"), codTipoMezzo = Str(b, "codTipoMezzo"), modello = Str(b, "modello"), marca = Str(b, "marca"), telaio = Str(b, "telaio"),
@@ -108,7 +108,7 @@ static class Mezzi
         // km: ogni rilevazione dell'app con driver, filiale, foto e posizione (ultimi due anni, o l'anno chiesto)
         app.MapGet("/api/mezzi/{id:int}/km", async (int id, int? anno, int? top) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(await cn.QueryAsync($@"
                 SELECT TOP {Math.Clamp(top ?? 2000, 1, 20000)} k.IdMezziKM, k.data AS Data, k.km AS Km, ISNULL(u.Nome, k.utente) AS Driver, f.FILIALE AS Filiale,
                        k.foto AS Foto, k.latitude AS Latitude, k.longitude AS Longitude, k.idpalmraw AS IdPalmRaw,
@@ -127,7 +127,7 @@ static class Mezzi
         {
             var km = Num(b, "km");
             if (km is null || km < 0) return Results.BadRequest(new { errore = "Km non validi" });
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             await cn.ExecuteAsync("dbo.AI_MEZZI_KM_Correggi", new { IdMezziKM = idKm, Km = km, Utente = user.Identity?.Name, Note = Str(b, "note") }, commandType: CommandType.StoredProcedure);
             return Results.Ok(new { idMezziKM = idKm, km });
         })).RequireAuthorization();
@@ -135,14 +135,14 @@ static class Mezzi
         // log delle modifiche alla riga di MEZZI (trigger TR_INSUP_MEZZI -> LOGTabelle)
         app.MapGet("/api/mezzi/{id:int}/modifiche", async (int id) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(await LogTabelle.Modifiche(cn, "MEZZI", id));
         }).RequireAuthorization();
 
         // gli anni in cui ci sono km, per il filtro
         app.MapGet("/api/mezzi/{id:int}/km/anni", async (int id) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(await cn.QueryAsync(@"
                 SELECT YEAR(k.data) AS Anno, COUNT(*) AS Righe, MIN(k.km) AS KmMin, MAX(k.km) AS KmMax
                 FROM dbo.MEZZI m JOIN dbo.MEZZI_KM k ON k.targa = m.targa WHERE m.idMezzo = @id
@@ -151,7 +151,7 @@ static class Mezzi
 
         app.MapGet("/api/mezzi/{id:int}/foto", async (int id) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(await cn.QueryAsync(@"
                 SELECT x.IdMezziFOTO, x.TipoFoto, x.data AS Data, x.foto AS Foto, x.latitude AS Latitude, x.longitude AS Longitude, u.Nome AS Utente, f.FILIALE AS Filiale
                 FROM dbo.MEZZI m JOIN dbo.MEZZI_FOTO x ON x.idMezzo = m.idMezzo OR x.targa = m.targa
@@ -161,7 +161,7 @@ static class Mezzi
 
         app.MapGet("/api/mezzi/{id:int}/costi", async (int id, int? anno) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var righe = (await cn.QueryAsync(@"
                 SELECT TOP 3000 c.IdCosti, c.DataDoc, c.Tipo, c.Quantita, c.PrezzoUnitario, c.Totale, c.TotaleFinale, RTRIM(c.Fornitore) AS Fornitore, RTRIM(c.NDoc) AS NDoc, c.CDC, c.Noleggio, c.Seriale
                 FROM dbo.MEZZI m JOIN dbo.COSTI c ON c.Targa = m.targa
@@ -176,7 +176,7 @@ static class Mezzi
 
         app.MapGet("/api/mezzi/{id:int}/altri-costi", async (int id) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(new
             {
                 rifornimenti = (await cn.QueryAsync(@"
@@ -191,7 +191,7 @@ static class Mezzi
 
         app.MapGet("/api/mezzi/{id:int}/sinistri", async (int id) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(await cn.QueryAsync(@"
                 SELECT s.*, u.Nome AS Utente, d.Nome AS Dipendente, fo.Fornitore AS NomeFornitore
                 FROM dbo.MEZZI_SINISTRI s
@@ -203,7 +203,7 @@ static class Mezzi
 
         app.MapGet("/api/mezzi/{id:int}/note", async (int id) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(await cn.QueryAsync(@"
                 SELECT n.*, u.Nome AS NomeUtente, d.Nome AS Dipendente, fo.Fornitore AS NomeFornitore
                 FROM dbo.MEZZI_NOTE n
@@ -216,7 +216,7 @@ static class Mezzi
         // una nota / manutenzione: la stored esistente (tutti i campi)
         app.MapPost("/api/mezzi/{id:int}/note", (int id, JsonElement b, System.Security.Claims.ClaimsPrincipal user) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var p = new DynamicParameters(new
             {
                 IdMezzo = id, IdUtente = Int(b, "IdUtente"), IdDipendenteSpeedy = Int(b, "IdDipendenteSpeedy"), data = DataOra(b, "data"),
@@ -232,7 +232,7 @@ static class Mezzi
         // dipendenti per l'assegnatario
         app.MapGet("/api/mezzi/dipendenti", async (string? testo) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(await cn.QueryAsync(@"SELECT TOP 30 IdUtente, Nome, Matricola FROM dbo.UTENTI
                 WHERE Nome LIKE @like OR Matricola LIKE @like ORDER BY Nome", new { like = "%" + (testo ?? "").Trim() + "%" }));
         }).RequireAuthorization();
@@ -245,7 +245,7 @@ static class Mezzi
             var radice = cfg["Percorsi:FotoPalmare"];
             if (string.IsNullOrWhiteSpace(radice))
             {
-                await using var cn = new SqlConnection(connString());
+                await using var cn = Operatore.Connessione(connString());
                 radice = await cn.ExecuteScalarAsync<string?>("SELECT Valore FROM dbo.PARAMETRI WHERE Nome = 'PercorsoFotoPalmare'") ?? @"C:\inetpub\speedyapp\Palm_images";
             }
             var file = TrovaFoto(radice, Path.GetFileNameWithoutExtension(nome));

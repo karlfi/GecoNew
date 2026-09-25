@@ -47,6 +47,8 @@ app.UseStaticFiles();
 app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
+// chi fa la richiesta, per l'Operatore dello storico delle modifiche (Operatore.cs)
+app.Use(async (ctx, next) => { Operatore.DaRichiesta(ctx.User); await next(); });
 
 string ConnString() => app.Configuration.GetConnectionString("DeliveryDB")
     ?? throw new InvalidOperationException("Connection string DeliveryDB mancante");
@@ -161,7 +163,7 @@ app.MapPost("/api/auth/login", async (LoginRequest req) =>
     if (string.IsNullOrWhiteSpace(req.Utente) || string.IsNullOrWhiteSpace(req.Password))
         return Results.BadRequest(new { errore = "Utente e password sono obbligatori" });
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     using var multi = await cn.QueryMultipleAsync(
         "dbo.AI_AuthLogin",
         new { Utente = req.Utente, Pwd = req.Password },
@@ -224,7 +226,7 @@ app.MapPost("/api/auth/login", async (LoginRequest req) =>
 app.MapGet("/api/me/filiali", async (ClaimsPrincipal user) =>
 {
     var idUtente = int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     try
     {
         var filiali = (await cn.QueryAsync(
@@ -251,7 +253,7 @@ app.MapGet("/api/me/filiali", async (ClaimsPrincipal user) =>
 app.MapPost("/api/me/filiale", async (CambiaFilialeRequest req, ClaimsPrincipal user) =>
 {
     var idUtente = int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     try
     {
         var ammesse = (await cn.QueryAsync(
@@ -306,7 +308,7 @@ app.MapGet("/api/dashboard/punteggi", async (ClaimsPrincipal user) =>
 
     try
     {
-        await using var cn = new SqlConnection(ConnString());
+        await using var cn = Operatore.Connessione(ConnString());
 
         // Stessa logica delle viste legacy V_DW_punteggiMese / V_DW_punteggiGiorno (giornata = riga driver/giorno
         // con punteggio > 0, media = punteggio / giornate), piu' i PEZZI: la somma di tutto cio' che il driver ha
@@ -400,7 +402,7 @@ app.MapGet("/api/me/menu", async (ClaimsPrincipal user) =>
 
     try
     {
-        await using var cn = new SqlConnection(ConnString());
+        await using var cn = Operatore.Connessione(ConnString());
         IEnumerable<dynamic> voci;
         try
         {
@@ -434,7 +436,7 @@ app.MapPost("/api/log/videata", async (LogVideataRequest req, ClaimsPrincipal us
     if (videata.Length == 0) return Results.NoContent();
     try
     {
-        await using var cn = new SqlConnection(ConnString());
+        await using var cn = Operatore.Connessione(ConnString());
         await cn.ExecuteAsync("dbo.LOG_AddCall", new
         {
             Videata = Tronca(videata, 500),                 // lunghezze della tabella
@@ -459,7 +461,7 @@ static string? Tronca(string? v, int max) =>
 // Le variabili globali @[Nome] sono risolte dai claims del token, MAI da input del client.
 app.MapPost("/api/interrogazioni/esegui", async (EseguiInterrogazioneRequest req, ClaimsPrincipal user) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
 
     var q = (await cn.QueryFirstOrDefaultAsync(
         "SELECT Titolo, Descrizione, SqlSelect, SqlFrom, SqlWhere, SqlGroup, SqlOrder FROM INTERROGAZIONI WHERE IdQuery = @id",
@@ -564,7 +566,7 @@ app.MapPost("/api/hr/utente-stato", async (UtenteStatoRequest req) =>
 {
     if (req.IdUtente <= 0)
         return Results.BadRequest(new { errore = "Utente non indicato" });
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     try
     {
         var r = await cn.QueryFirstOrDefaultAsync("dbo.AI_UTENTI_Stato_Save",
@@ -585,7 +587,7 @@ app.MapPost("/api/hr/utente-stato", async (UtenteStatoRequest req) =>
 //   "Ricerca con parametri", con le opzioni delle lookup gia' risolte
 app.MapGet("/api/interrogazioni/{id:int}/ricerca-info", async (int id, ClaimsPrincipal user) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var q = (await cn.QueryFirstOrDefaultAsync(
         "SELECT Titolo, Descrizione, SqlSelect, SqlFrom, SqlWhere, SqlGroup, SqlOrder FROM INTERROGAZIONI WHERE IdQuery = @id",
         new { id })) as IDictionary<string, object>;
@@ -713,7 +715,7 @@ app.MapGet("/api/report", async (string? src) =>
 
     if (reportServerCache is null)
     {
-        await using var cn = new SqlConnection(ConnString());
+        await using var cn = Operatore.Connessione(ConnString());
         reportServerCache = await cn.ExecuteScalarAsync<string>(
             "SELECT Valore FROM PARAMETRI WHERE Nome = 'ReportServer'");
         if (string.IsNullOrWhiteSpace(reportServerCache))
@@ -741,7 +743,7 @@ app.MapGet("/api/config/{key}/schema", async (string key) =>
     if (!ConfigTabelle.TryGetValue(key, out var tabella))
         return Results.NotFound(new { errore = $"Tabella di configurazione '{key}' non gestita" });
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var cols = await LoadColonne(cn, tabella);
     var pk = cols.FirstOrDefault(c => c.Pk)?.Col ?? cols[0].Col;
 
@@ -774,7 +776,7 @@ app.MapGet("/api/config/{key}", async (string key, HttpRequest req, ClaimsPrinci
     if (!ConfigTabelle.TryGetValue(key, out var tabella))
         return Results.NotFound(new { errore = $"Tabella di configurazione '{key}' non gestita" });
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var cols = await LoadColonne(cn, tabella);
     var pk = cols.FirstOrDefault(c => c.Pk)?.Col ?? cols[0].Col;
     var leggibili = cols.Where(c => !TipoBinario(c.Tipo)).Select(c => c.Col).ToList();
@@ -819,7 +821,7 @@ app.MapPost("/api/config/{key}", async (string key, JsonElement body) =>
     if (!ConfigTabelle.TryGetValue(key, out var tabella))
         return Results.NotFound(new { errore = $"Tabella di configurazione '{key}' non gestita" });
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var cols = await LoadColonne(cn, tabella);
     var validi = cols.Where(c => !TipoBinario(c.Tipo))
         .ToDictionary(c => c.Col, StringComparer.OrdinalIgnoreCase);
@@ -861,7 +863,7 @@ app.MapPost("/api/config/{key}", async (string key, JsonElement body) =>
 // Albero completo del menu (per l'editor: tutte le righe, senza paginazione)
 app.MapGet("/api/menu/all", async () =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var righe = await cn.QueryAsync(@"
         SELECT IdMenuElemento, ParentID, Text, Descrizione, Videata, Link, Parametri,
                NavigateUrl, Sorting, ToolTip, Disabled, Icon, Popup, CodFamiglia
@@ -873,7 +875,7 @@ app.MapGet("/api/menu/all", async () =>
 // la stored elimina anche i permessi di visibilita' collegati
 app.MapDelete("/api/menu/{id:int}", async (int id) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var r = (await cn.QueryFirstAsync("dbo.AI_MENU_Del", new { IdMenuElemento = id },
         commandType: CommandType.StoredProcedure)) as IDictionary<string, object>;
     if (r!.TryGetValue("Errore", out var err) && err is string msg)
@@ -886,7 +888,7 @@ app.MapDelete("/api/menu/{id:int}", async (int id) =>
 app.MapPost("/api/menu/duplica", async (MenuDuplicaRequest req) =>
 {
     if (req.IdMenuElemento <= 0) return Results.BadRequest(new { errore = "Voce di menu mancante" });
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var r = (await cn.QueryFirstAsync("dbo.AI_MENU_Duplica",
         new { req.IdMenuElemento, ConFoglie = req.ConFoglie ? 1 : 0 },
         commandType: CommandType.StoredProcedure)) as IDictionary<string, object>;
@@ -900,7 +902,7 @@ app.MapPost("/api/menu/duplica", async (MenuDuplicaRequest req) =>
 // Elenco gruppi con i conteggi delle relazioni
 app.MapGet("/api/gruppi", async () =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var gruppi = await cn.QueryAsync(@"
         SELECT g.IdGruppo, g.Gruppo,
                (SELECT COUNT(*) FROM MENU_ELEMENTIGRUPPI mg WHERE mg.IdGruppo = g.IdGruppo) AS nMenu,
@@ -912,7 +914,7 @@ app.MapGet("/api/gruppi", async () =>
 // Dettaglio: radici di menu collegate, utenti relazionati, radici ancora collegabili
 app.MapGet("/api/gruppi/{id:int}", async (int id) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var gruppo = await cn.QueryFirstOrDefaultAsync(
         "SELECT IdGruppo, Gruppo FROM GRUPPI WHERE IdGruppo = @id", new { id });
     if (gruppo is null) return Results.NotFound(new { errore = "Gruppo inesistente" });
@@ -953,7 +955,7 @@ app.MapDelete("/api/gruppi/utenti/{relId:int}", (int relId) =>
 // Elenco processi (per la tendina iniziale)
 app.MapGet("/api/workflow/processi", async () =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var p = await cn.QueryAsync(
         "SELECT IdProcesso AS idProcesso, Processo AS processo, GiorniSLA AS giorniSLA, CodFamiglia AS codFamiglia FROM PROCESSI ORDER BY Processo");
     return Results.Ok(p);
@@ -962,7 +964,7 @@ app.MapGet("/api/workflow/processi", async () =>
 // Grafo di un processo: nodi (stati), archi (transizioni), azioni (per il filtro)
 app.MapGet("/api/workflow/{idProcesso:int}", async (int idProcesso) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
 
     var archi = await cn.QueryAsync(@"
         SELECT w.IdWorkflow AS idWorkflow, w.IdAzione AS idAzione, a.Azione AS azione,
@@ -995,7 +997,7 @@ app.MapGet("/api/workflow/{idProcesso:int}", async (int idProcesso) =>
 // Tutti gli stati (per le tendine inizio/fine quando si crea una transizione)
 app.MapGet("/api/workflow/stati", async () =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var s = await cn.QueryAsync(
         "SELECT STATO AS stato, Descrizione AS descrizione FROM SPED_STATI ORDER BY STATO");
     return Results.Ok(s);
@@ -1004,7 +1006,7 @@ app.MapGet("/api/workflow/stati", async () =>
 // Dettaglio completo di un'azione (tutti i parametri Chiedi_* ecc.)
 app.MapGet("/api/workflow/azione/{idAzione:int}", async (int idAzione) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var a = await cn.QueryFirstOrDefaultAsync(
         "SELECT * FROM SPED_AZIONI WHERE IdAzione = @id", new { id = idAzione });
     return a is null ? Results.NotFound() : Results.Ok(a);
@@ -1013,7 +1015,7 @@ app.MapGet("/api/workflow/azione/{idAzione:int}", async (int idAzione) =>
 // Salvataggio transizione (arco) via SP
 app.MapPost("/api/workflow/transizione", async (JsonElement body) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var par = new DynamicParameters();
     foreach (var prop in body.EnumerateObject()) par.Add(prop.Name, JsonToClr(prop.Value));
     try
@@ -1031,7 +1033,7 @@ app.MapPost("/api/workflow/transizione", async (JsonElement body) =>
 // Salvataggio parametri azione via SP
 app.MapPost("/api/workflow/azione", async (JsonElement body) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var par = new DynamicParameters();
     foreach (var prop in body.EnumerateObject()) par.Add(prop.Name, JsonToClr(prop.Value));
     try
@@ -1051,7 +1053,7 @@ app.MapPost("/api/workflow/azione", async (JsonElement body) =>
 // Tutte le azioni del processo, con TUTTE le colonne di SPED_AZIONI
 app.MapGet("/api/azioni/processo/{idProcesso:int}", async (int idProcesso) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var righe = await cn.QueryAsync(@"
         SELECT a.*
         FROM SPED_AZIONI a
@@ -1063,7 +1065,7 @@ app.MapGet("/api/azioni/processo/{idProcesso:int}", async (int idProcesso) =>
 // Workflow dell'azione, con gli stati decodificati da SPED_STATI
 app.MapGet("/api/azioni/{idAzione:int}/workflow", async (int idAzione) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var righe = await cn.QueryAsync(@"
         SELECT w.IdWorkflow AS idWorkflow,
                w.Stato_Inizio AS statoInizio, si.Descrizione AS descInizio,
@@ -1081,7 +1083,7 @@ app.MapGet("/api/azioni/{idAzione:int}/workflow", async (int idAzione) =>
 // decodificato dalla vista PALM_TIPOEVENTO
 app.MapGet("/api/azioni/{idAzione:int}/processi", async (int idAzione) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var righe = await cn.QueryAsync(@"
         SELECT pa.IdProcessoAzione AS idProcessoAzione,
                pa.IdProcesso AS idProcesso, p.Processo AS processo,
@@ -1097,7 +1099,7 @@ app.MapGet("/api/azioni/{idAzione:int}/processi", async (int idAzione) =>
 // Lookup della pagina Azioni: famiglie azione (FK), tipi evento palmare, stati
 app.MapGet("/api/azioni/lookups", async () =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var famiglie = await cn.QueryAsync(
         "SELECT CodFamigliaAzione AS codFamigliaAzione, FamigliaAzione AS famigliaAzione FROM SIST_FAMIGLIAAZIONI ORDER BY CodFamigliaAzione");
     var tipiEventi = await cn.QueryAsync(
@@ -1111,7 +1113,7 @@ app.MapGet("/api/azioni/lookups", async () =>
 // In insert @IdProcesso (opzionale) collega subito l'azione al processo.
 app.MapPost("/api/azioni/azione", async (JsonElement body) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var colonne = await LoadColonne(cn, "SPED_AZIONI");
     var tipi = colonne.ToDictionary(c => c.Col, c => c.Tipo, StringComparer.OrdinalIgnoreCase);
     var validi = colonne.Select(c => c.Col)
@@ -1139,7 +1141,7 @@ app.MapPost("/api/azioni/azione", async (JsonElement body) =>
 // Salvataggio transizione di workflow via SP AI_Azioni_SaveWorkflow
 app.MapPost("/api/azioni/workflow", async (SalvaWorkflowRequest req) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     try
     {
         var id = await cn.QueryFirstOrDefaultAsync<int?>(
@@ -1157,7 +1159,7 @@ app.MapPost("/api/azioni/workflow", async (SalvaWorkflowRequest req) =>
 // Salvataggio collegamento processo-azione via SP AI_Azioni_SaveProcessoAzione
 app.MapPost("/api/azioni/processo-azione", async (SalvaProcessoAzioneRequest req) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     try
     {
         var id = await cn.QueryFirstOrDefaultAsync<int?>(
@@ -1181,7 +1183,7 @@ app.MapGet("/api/tracking", async (string? barcode, ClaimsPrincipal user) =>
 
     int? idCliente = int.TryParse(user.FindFirstValue("idCliente"), out var cli) ? cli : null;
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     try
     {
         var dest = (await cn.QueryFirstOrDefaultAsync(
@@ -1225,7 +1227,7 @@ app.MapGet("/api/attivita-filiali", async (ClaimsPrincipal user) =>
     if (!int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale))
         return Results.BadRequest(new { errore = "Filiale non disponibile nel profilo" });
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var righe = await cn.QueryAsync(@"
         SELECT idAttivita, CONVERT(varchar(10), data, 23) AS data,
                ParamI01, ParamI02, ParamI03, ParamI04, ParamI05, ParamI06,
@@ -1242,7 +1244,7 @@ app.MapPost("/api/attivita-filiali", async (SalvaAttivitaFilialeRequest req, Cla
     if (!int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale))
         return Results.BadRequest(new { errore = "Filiale non disponibile nel profilo" });
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var par = new DynamicParameters(new { IdAttivita = req.IdAttivita, IdFiliale = idFiliale, Data = req.Data });
     for (var i = 0; i < 18; i++)
         par.Add($"ParamI{i + 1:00}", req.Contatori is { } c && c.Length > i ? c[i] : (short)0);
@@ -1270,7 +1272,7 @@ app.MapGet("/api/attivita-dipendenti", async (string? data, int? idFiliale, Clai
     if (!DateTime.TryParse(data, out var giorno))
         return Results.BadRequest(new { errore = "Data non valida" });
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
 
     // filiale richiesta diversa da quella corrente: deve essere tra quelle
     // consentite all'utente (SP legacy ElencoFiliali = diritti per utente)
@@ -1323,7 +1325,7 @@ app.MapPost("/api/attivita-dipendenti", async (JsonElement body) =>
     foreach (var prop in body.EnumerateObject())
         if (validi.Contains(prop.Name)) par.Add(prop.Name, JsonToClr(prop.Value));
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     try
     {
         var id = await cn.QueryFirstOrDefaultAsync<long?>(
@@ -1345,7 +1347,7 @@ app.MapGet("/api/ddt/lookups", async (ClaimsPrincipal user) =>
     if (!int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale))
         return Results.BadRequest(new { errore = "Filiale non disponibile nel profilo" });
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var mittenti = await cn.QueryAsync("dbo.ElencoFiliali",
         new { idtipo = 11, IdFiliale = idFiliale, IdUtente = idUtente }, commandType: CommandType.StoredProcedure);
     var destinazioni = await cn.QueryAsync("dbo.ElencoFiliali",
@@ -1372,7 +1374,7 @@ app.MapPost("/api/ddt", async (CreaDdtRequest req, ClaimsPrincipal user) =>
         return Results.BadRequest(new { errore = "Mittente e destinazione devono essere filiali diverse" });
 
     var idUtente = int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     try
     {
         var r = await cn.QueryFirstOrDefaultAsync("dbo.SPED_BOLLA", new
@@ -1414,7 +1416,7 @@ app.MapGet("/api/spedinterna/lookups", async (ClaimsPrincipal user) =>
     var idUtente = int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
     if (!int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale))
         return Results.BadRequest(new { errore = "Filiale non disponibile nel profilo" });
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var destinazioni = await cn.QueryAsync("dbo.ElencoFiliali",
         new { idtipo = 10, IdFiliale = idFiliale, IdUtente = idUtente }, commandType: CommandType.StoredProcedure);
     return Results.Ok(new { destinazioni });
@@ -1426,7 +1428,7 @@ app.MapPost("/api/spedinterna", async (SpedInternaRequest req, ClaimsPrincipal u
         return Results.BadRequest(new { errore = "La filiale di destinazione è obbligatoria" });
     var idUtente = int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     try
     {
         var r = await cn.QueryFirstOrDefaultAsync("dbo.SPED_INTERNA", new
@@ -1455,7 +1457,7 @@ app.MapGet("/api/spedinterna/elenco", async (string? dal, string? al, bool? tutt
     var dDal = DateTime.TryParse(dal, out var d1) ? d1.Date : DateTime.Today.AddDays(-15);
     var dAl = (DateTime.TryParse(al, out var d2) ? d2.Date : DateTime.Today).AddDays(1);
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var righe = await cn.QueryAsync(@"
         SELECT sa.IdSpedizione AS idSpedizione, sa.Barcode AS barcode,
                CONVERT(varchar(16), sa.DataInserimento, 120) AS inserita,
@@ -1487,7 +1489,7 @@ app.MapGet("/api/distintariepilogativa/elenco", async (string? dal, string? al, 
     var dDal = DateTime.TryParse(dal, out var d1) ? d1.Date : DateTime.Today.AddDays(-7);
     var dAl = (DateTime.TryParse(al, out var d2) ? d2.Date : DateTime.Today).AddDays(1);
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var righe = await cn.QueryAsync(@"
         SELECT d.IdDistinta AS idDistinta, d.Barcode AS barcode,
                CONVERT(varchar(16), d.Data, 120) AS data,
@@ -1533,7 +1535,7 @@ app.MapPost("/api/comando/sql", async (ComandoSqlRequest req) =>
 
     try
     {
-        await using var cn = new SqlConnection(ConnString());
+        await using var cn = Operatore.Connessione(ConnString());
         await cn.OpenAsync();
         await using var cmd = new SqlCommand(sql, cn) { CommandTimeout = 90 };
         await using var rd = await cmd.ExecuteReaderAsync();
@@ -1575,7 +1577,7 @@ app.MapPost("/api/comando/esiti", async (ComandoEsitiRequest req, ClaimsPrincipa
         return Results.BadRequest(new { errore = "Nessun barcode indicato" });
 
     var idUtente = int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     try
     {
         foreach (var bc in barcodes)
@@ -1647,7 +1649,7 @@ async Task<IDictionary<string, object>?> CaricaAzione(SqlConnection cn, int idAz
 // bug con gli utenti multi-profilo)
 app.MapGet("/api/esiti/processi", async (string? codFamiglia) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var p = await cn.QueryAsync("dbo.ElencoProcessi",
         new { CodFamiglia = string.IsNullOrEmpty(codFamiglia) ? null : codFamiglia },
         commandType: CommandType.StoredProcedure);
@@ -1658,7 +1660,7 @@ app.MapGet("/api/esiti/processi", async (string? codFamiglia) =>
 // Combo azioni del processo (ElencoAzioni)
 app.MapGet("/api/esiti/azioni", async (int idProcesso, string? codFamigliaAzione) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var a = await cn.QueryAsync("dbo.ElencoAzioni",
         new { IdProcesso = idProcesso, CodFamigliaAzione = string.IsNullOrEmpty(codFamigliaAzione) ? null : codFamigliaAzione },
         commandType: CommandType.StoredProcedure);
@@ -1673,7 +1675,7 @@ app.MapGet("/api/esiti/azione/{idAzione:int}", async (int idAzione, int idProces
     if (!int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale))
         return Results.BadRequest(new { errore = "Filiale non disponibile nel profilo" });
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var az = await CaricaAzione(cn, idAzione);
     if (az is null) return Results.NotFound(new { errore = $"Azione {idAzione} inesistente" });
 
@@ -1753,7 +1755,7 @@ app.MapPost("/api/esiti/verifica", async (EsitiVerificaRequest req, ClaimsPrinci
     if (!int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale))
         return Results.BadRequest(new { errore = "Filiale non disponibile" });
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var az = await CaricaAzione(cn, req.IdAzione);
     if (az is null) return Results.BadRequest(new { errore = "Azione inesistente" });
 
@@ -1801,7 +1803,7 @@ app.MapPost("/api/esiti/conferma", async (EsitiConfermaRequest req, ClaimsPrinci
     if (string.IsNullOrWhiteSpace(req.ElencoBarcode))
         return Results.BadRequest(new { errore = "Nessun barcode da confermare" });
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var az = await CaricaAzione(cn, req.IdAzione);
     if (az is null) return Results.BadRequest(new { errore = "Azione inesistente" });
 
@@ -1862,7 +1864,7 @@ app.MapGet("/api/utenti", async (HttpRequest req) =>
     par.Add("off", page * size);
     par.Add("size", size);
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var total = await cn.ExecuteScalarAsync<int>($"SELECT COUNT(*) FROM UTENTI u{where}", par);
     var rows = await cn.QueryAsync($@"
         SELECT u.IdUtente, u.Utente, u.Nome, u.Email, u.IdRuolo, r.Ruolo,
@@ -1883,7 +1885,7 @@ app.MapGet("/api/utenti", async (HttpRequest req) =>
 // Dettaglio completo (tutti i campi tranne la password)
 app.MapGet("/api/utenti/{id:int}", async (int id) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var cols = (await LoadColonne(cn, "UTENTI")).Where(c => c.Col != "Pass").Select(c => $"[{c.Col}]");
     var u = await cn.QueryFirstOrDefaultAsync(
         $"SELECT {string.Join(",", cols)} FROM UTENTI WHERE IdUtente = @id", new { id });
@@ -1893,7 +1895,7 @@ app.MapGet("/api/utenti/{id:int}", async (int id) =>
 // Lookup per le tendine del form
 app.MapGet("/api/utenti/lookups", async () =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var ruoli = await cn.QueryAsync("SELECT IdRuolo AS idRuolo, Ruolo AS ruolo FROM RUOLI ORDER BY Ruolo");
     var filiali = await cn.QueryAsync("SELECT IDFILIALE AS idFiliale, FILIALE AS filiale FROM FILIALI WHERE DataChiusura IS NULL ORDER BY FILIALE");
     var clienti = await cn.QueryAsync("SELECT IdCliente AS idCliente, RagioneSociale AS ragioneSociale FROM CLIENTI ORDER BY RagioneSociale");
@@ -1908,7 +1910,7 @@ app.MapGet("/api/utenti/lookups", async () =>
 // Comuni (lookup pesante, caricato a richiesta per il Belfiore dei processi)
 app.MapGet("/api/utenti/comuni", async () =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var comuni = await cn.QueryAsync(
         @"SELECT BELFIORE AS belfiore, DENOMINAZIONE + ' (' + ISNULL(SIGLAPROV,'') + ')' AS label
           FROM GEO_Comune WHERE DataFine IS NULL ORDER BY DENOMINAZIONE");
@@ -1918,7 +1920,7 @@ app.MapGet("/api/utenti/comuni", async () =>
 // Tutte le associazioni N:N dell'utente
 app.MapGet("/api/utenti/{id:int}/relazioni", async (int id) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var gruppi = await cn.QueryAsync(@"
         SELECT ug.IdUtenteGruppo AS id, ug.IdGruppo AS idGruppo, g.Gruppo AS gruppo
         FROM UTENTI_GRUPPI ug JOIN GRUPPI g ON g.IdGruppo = ug.IdGruppo
@@ -1943,7 +1945,7 @@ app.MapGet("/api/utenti/{id:int}/relazioni", async (int id) =>
 // Add/Del per ciascuna collezione (tramite SP AI_)
 async Task<IResult> EseguiRelazione(string sp, object par)
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     try
     {
         await cn.ExecuteAsync(sp, par, commandType: CommandType.StoredProcedure);
@@ -1980,13 +1982,13 @@ app.MapDelete("/api/utenti/filiali/{relId:int}", (int relId) =>
 // confronto fra fotografie in LogTabelle.cs). La password non si mostra mai.
 app.MapGet("/api/utenti/{id:int}/modifiche", async (int id) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     return Results.Ok(await LogTabelle.Modifiche(cn, "UTENTI", id, new[] { "Pass" }));
 }).RequireAuthorization();
 
 app.MapPost("/api/utenti", async (JsonElement body) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var colonne = await LoadColonne(cn, "UTENTI");
     var tipi = colonne.ToDictionary(c => c.Col, c => c.Tipo, StringComparer.OrdinalIgnoreCase);
     var validi = colonne
@@ -2024,7 +2026,7 @@ app.MapGet("/api/hr/anagrafica", async (HttpRequest req) =>
     string azienda = string.IsNullOrWhiteSpace(req.Query["azienda"]) ? "574" : ((string)req.Query["azienda"]!).Trim();
 
     var dal = new DateTime(anno, mese, 1);
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var dip = (await cn.QueryAsync(@"
         SELECT u.IdUtente, u.Nome, u.CodiceFiscale, u.Matricola, u.DataInizio, u.DataFine, u.DataNascita,
                u.IndirizzoRes, u.CapRes, u.ComuneRes, u.ProvRes, u.Email, u.Telefono,
@@ -2534,7 +2536,7 @@ app.MapPost("/api/hr/unilav/parse", async (UnilavParseRequest req) =>
         : null;
 
     // provincia del comune di domicilio: dal Belfiore (se il tracciato lo da') o dal nome
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     string? provDom = null;
     if (belfioreDom is { Length: > 0 })
         provDom = await cn.ExecuteScalarAsync<string?>(@"
@@ -2850,7 +2852,7 @@ app.MapPost("/api/hr/unilav/applica", async (UnilavApplicaRequest req) =>
         // i campi scelti a video (date e contratto dall'UNILAV, matricola, login).
         // Quello che appartiene al vecchio rapporto (matricola, chiusura, UNILAV,
         // accessi) non si porta dietro.
-        await using var cnN = new SqlConnection(ConnString());
+        await using var cnN = Operatore.Connessione(ConnString());
         var vecchia = (await cnN.QueryFirstOrDefaultAsync("SELECT * FROM UTENTI WHERE IdUtente = @id",
             new { id = req.IdUtente })) as IDictionary<string, object>;
         if (vecchia is null)
@@ -2943,7 +2945,7 @@ app.MapPost("/api/hr/unilav/applica", async (UnilavApplicaRequest req) =>
         }
         else par.Add(k, v.Trim());
     }
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     try
     {
         var righe = par.ParameterNames.Count() > 1
@@ -2975,7 +2977,7 @@ app.MapGet("/api/sped/init", async (ClaimsPrincipal user) =>
 {
     if (!int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda))
         return Results.BadRequest(new { errore = "Azienda non disponibile" });
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var clienti = await cn.QueryAsync(@"
         SELECT c.IdCliente AS idCliente, c.RagioneSociale AS ragioneSociale
         FROM CLIENTI c
@@ -2989,7 +2991,7 @@ app.MapGet("/api/sped/init", async (ClaimsPrincipal user) =>
 // Prodotti abilitati, listini validi e mittenti del cliente scelto
 app.MapGet("/api/sped/cliente/{idCliente:int}", async (int idCliente) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var prodotti = await cn.QueryAsync(@"
         SELECT p.IdProdotto AS idProdotto, p.Prodotto AS prodotto
         FROM PRODOTTI p
@@ -3020,7 +3022,7 @@ app.MapGet("/api/sped/cliente/{idCliente:int}", async (int idCliente) =>
 app.MapGet("/api/sped/rubrica", async (int idCliente, string tipo, string? q) =>
 {
     var pre = tipo == "ritiro" ? "Ritiro" : "Destinazione";
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var righe = await cn.QueryAsync($@"
         SELECT TOP 12 s.RagioneSociale AS ragioneSociale, s.Indirizzo AS indirizzo,
                s.NumeroCivico AS numeroCivico, s.Cap AS cap, s.Localita AS localita,
@@ -3045,7 +3047,7 @@ app.MapGet("/api/sped/rubrica", async (int idCliente, string tipo, string? q) =>
 // Sigle provincia esistenti (per la compilazione guidata in ordine inverso)
 app.MapGet("/api/sped/province", async () =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var province = await cn.QueryAsync<string>(@"
         SELECT DISTINCT SIGLAPROV FROM GEO_COMUNE
         WHERE ISNULL(SIGLAPROV, '') <> '' ORDER BY SIGLAPROV");
@@ -3056,7 +3058,7 @@ app.MapGet("/api/sped/province", async () =>
 app.MapGet("/api/sped/comuni", async (string q, string? prov) =>
 {
     if (string.IsNullOrWhiteSpace(q) || q.Trim().Length < 2) return Results.Ok(Array.Empty<object>());
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var comuni = await cn.QueryAsync(@"
         SELECT DISTINCT TOP 15 DENOMINAZIONE AS comune, CAP AS cap, SIGLAPROV AS provincia
         FROM GEO_COMUNE
@@ -3070,7 +3072,7 @@ app.MapGet("/api/sped/comuni", async (string q, string? prov) =>
 // Copertura del CAP di destinazione per il prodotto (GetCoperture legacy)
 app.MapGet("/api/sped/copertura", async (int idProdotto, string cap) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var r = (await cn.QueryFirstOrDefaultAsync(
         "dbo.GetCoperture", new { Cap = cap, IdProdotto = idProdotto },
         commandType: CommandType.StoredProcedure)) as IDictionary<string, object>;
@@ -3209,7 +3211,7 @@ app.MapPost("/api/sped/nuova", async (SpedNuovaRequest req, ClaimsPrincipal user
         Nota = req.Nota
     });
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     try
     {
         // la catena SPED_INSERIMENTO/GetCoperture emette piu' result set:
@@ -3252,7 +3254,7 @@ var reportTempDir = Path.Combine(Path.GetTempPath(), "geconew-report");
 
 app.MapGet("/api/sped/ldv/{id:int}", async (int id) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var basis = await cn.ExecuteScalarAsync<string>(
         "SELECT Valore FROM PARAMETRI WHERE Nome = 'ReportServer'");
     if (string.IsNullOrWhiteSpace(basis))
@@ -3293,7 +3295,7 @@ app.MapGet("/api/clienti", async (bool? anchecessati, ClaimsPrincipal user) =>
 {
     if (!int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda))
         return Results.BadRequest(new { errore = "Azienda non disponibile" });
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var clienti = await cn.QueryAsync(@"
         SELECT c.IdCliente, c.RagioneSociale, c.PartitaIva, c.CodiceCliente,
                c.Comune, c.Prov, CONVERT(varchar(10), c.DataFine, 120) AS DataFine,
@@ -3310,7 +3312,7 @@ app.MapGet("/api/clienti", async (bool? anchecessati, ClaimsPrincipal user) =>
 app.MapGet("/api/clienti/lookup", async (ClaimsPrincipal user) =>
 {
     int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda);
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var famiglie = await cn.QueryAsync(
         "SELECT CodFamiglia, FamigliaDiProdotto FROM PROD_FAMIGLIE ORDER BY FamigliaDiProdotto");
     var prodotti = await cn.QueryAsync(@"
@@ -3331,7 +3333,7 @@ app.MapGet("/api/clienti/{idCliente:int}", async (int idCliente, ClaimsPrincipal
 {
     if (!int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda))
         return Results.BadRequest(new { errore = "Azienda non disponibile" });
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var anagrafica = (await cn.QueryFirstOrDefaultAsync(@"
         SELECT IdCliente, IdAzienda, RagioneSociale, CIG, Descrizione, PartitaIva, CodSDI, PEC,
                Indirizzo, CAP, Comune, Prov, Nazione, Telefono, Email,
@@ -3373,7 +3375,7 @@ app.MapPost("/api/clienti", async (ClienteSaveRequest req, ClaimsPrincipal user)
         return Results.BadRequest(new { errore = "Azienda non disponibile" });
     if (string.IsNullOrWhiteSpace(req.RagioneSociale))
         return Results.BadRequest(new { errore = "La ragione sociale è obbligatoria" });
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     if (req.IdCliente is > 0 && !await ClienteDellAzienda(cn, req.IdCliente.Value, idAzienda))
         return Results.NotFound(new { errore = "Cliente non trovato in questa azienda" });
     try
@@ -3397,7 +3399,7 @@ app.MapPost("/api/clienti/{idCliente:int}/condizioni", async (int idCliente, Con
 {
     if (!int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda))
         return Results.BadRequest(new { errore = "Azienda non disponibile" });
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     if (!await ClienteDellAzienda(cn, idCliente, idAzienda))
         return Results.NotFound(new { errore = "Cliente non trovato in questa azienda" });
     try
@@ -3420,7 +3422,7 @@ app.MapDelete("/api/clienti/condizioni/{idCondizione:int}", async (int idCondizi
 {
     if (!int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda))
         return Results.BadRequest(new { errore = "Azienda non disponibile" });
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var ok = await cn.ExecuteScalarAsync<int?>(@"
         SELECT 1 FROM CLIENTI_CONDIZIONI cc JOIN CLIENTI c ON c.IdCliente = cc.IdCliente
         WHERE cc.IdClienteCondizione = @idCondizione AND c.IdAzienda = @idAzienda",
@@ -3436,7 +3438,7 @@ app.MapPost("/api/clienti/{idCliente:int}/listini", async (int idCliente, Listin
 {
     if (!int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda))
         return Results.BadRequest(new { errore = "Azienda non disponibile" });
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     if (!await ClienteDellAzienda(cn, idCliente, idAzienda))
         return Results.NotFound(new { errore = "Cliente non trovato in questa azienda" });
     try
@@ -3460,7 +3462,7 @@ app.MapDelete("/api/clienti/listini/{idListino:int}", async (int idListino, Clai
 {
     if (!int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda))
         return Results.BadRequest(new { errore = "Azienda non disponibile" });
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var ok = await cn.ExecuteScalarAsync<int?>(@"
         SELECT 1 FROM FATT_LISTINI l JOIN CLIENTI c ON c.IdCliente = l.IdCliente
         WHERE l.IdListino = @idListino AND c.IdAzienda = @idAzienda",
@@ -3481,7 +3483,7 @@ static DateTime? ParseData(string? s) =>
 app.MapGet("/api/accettazione/init", async (string? codFamiglia, ClaimsPrincipal user) =>
 {
     int.TryParse(user.FindFirstValue(ClaimTypes.NameIdentifier), out var idUtente);
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var clienti = await cn.QueryAsync("dbo.ElencoClienti",
         new { CodFamiglia = codFamiglia ?? "", IdUtente = idUtente },
         commandType: CommandType.StoredProcedure);
@@ -3497,7 +3499,7 @@ app.MapGet("/api/accettazione/init", async (string? codFamiglia, ClaimsPrincipal
 // Famiglie abilitate per il cliente (stored ElencoFamiglie)
 app.MapGet("/api/accettazione/famiglie", async (int idCliente) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var famiglie = await cn.QueryAsync("dbo.ElencoFamiglie",
         new { IdCliente = idCliente }, commandType: CommandType.StoredProcedure);
     return Results.Ok(famiglie);
@@ -3506,7 +3508,7 @@ app.MapGet("/api/accettazione/famiglie", async (int idCliente) =>
 // Prodotti della famiglia abilitati per il cliente (CLIENTI_CONDIZIONI)
 app.MapGet("/api/accettazione/prodotti", async (int idCliente, string codFamiglia) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var prodotti = await cn.QueryAsync(@"
         SELECT p.IdProdotto AS idProdotto, p.Prodotto AS prodotto
         FROM PRODOTTI p
@@ -3524,7 +3526,7 @@ app.MapGet("/api/accettazione/clienti-ricerca", async (string q, string? codFami
     if (string.IsNullOrWhiteSpace(q) || q.Trim().Length < 2) return Results.Ok(Array.Empty<object>());
     int.TryParse(user.FindFirstValue("idRuolo"), out var idRuolo);
     int.TryParse(user.FindFirstValue("idAzienda"), out var idAzienda);
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var clienti = await cn.QueryAsync(@"
         SELECT DISTINCT TOP 50 c.IdCliente AS idCliente, c.RagioneSociale AS ragioneSociale,
                c.PartitaIva AS partitaIva, c.CodiceCliente AS codiceCliente,
@@ -3555,7 +3557,7 @@ app.MapPost("/api/accettazione/carica", async (AccettazioneCaricaRequest req, Cl
     if (req.Righe.Count > 50000) return Results.BadRequest(new { errore = "Il file supera le 50.000 righe" });
 
     var docId = Guid.NewGuid().ToString().ToUpperInvariant();
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     try
     {
         await cn.QueryFirstAsync("dbo.AI_FILE_LOAD_Insert", new
@@ -3600,7 +3602,7 @@ app.MapPost("/api/accettazione/carica", async (AccettazioneCaricaRequest req, Cl
 // Uffici mittenti del cliente (per l'accettazione da banco "con mittenti")
 app.MapGet("/api/accettazione/mittenti", async (int idCliente) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var mittenti = await cn.QueryAsync(@"
         SELECT IdMittente AS idMittente, UFFICIOSPEDITORE AS ragioneSociale,
                INDIRIZZO AS indirizzo, CAP AS cap, COMUNE AS localita, PROV AS provincia
@@ -3626,7 +3628,7 @@ app.MapPost("/api/accettazione/banco", async (AccettazioneBancoRequest req, Clai
 
     var righeJson = System.Text.Json.JsonSerializer.Serialize(req.Righe,
         new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase });
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     try
     {
         using var multi = await cn.QueryMultipleAsync("dbo.AI_SPED_AccettazioneBanco", new
@@ -3682,7 +3684,7 @@ app.MapPost("/api/accettazione/banco", async (AccettazioneBancoRequest req, Clai
 // proxy della LDV, il report server non e' mai esposto al browser
 app.MapGet("/api/accettazione/ricevuta/{idDistinta:int}", async (int idDistinta) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var basis = await cn.ExecuteScalarAsync<string>(
         "SELECT Valore FROM PARAMETRI WHERE Nome = 'ReportServer'");
     if (string.IsNullOrWhiteSpace(basis))
@@ -3717,7 +3719,7 @@ app.MapGet("/api/accettazione/ricevuta/{idDistinta:int}", async (int idDistinta)
 app.MapGet("/api/videocodifica/lotti", async (bool? tutte, string? codFamiglia, int? idCliente, int? idProdotto, bool? conCarico, ClaimsPrincipal user) =>
 {
     int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     // conCarico: i lotti da banco (es. MGG) nascono con DataCarico valorizzata e
     // vanno comunque videocodificati; per quelli da file DataCarico NULL = pendenti
     var lotti = await cn.QueryAsync(@"
@@ -3754,7 +3756,7 @@ app.MapGet("/api/videocodifica/lotti", async (bool? tutte, string? codFamiglia, 
 // Righe del lotto da correggere a video
 app.MapGet("/api/videocodifica/lotto/{id:int}", async (int id) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var testata = await cn.QueryFirstOrDefaultAsync(@"
         SELECT l.IdLotto, l.Lotto, l.IdCliente, c.RagioneSociale AS Cliente,
                l.CodFamiglia, p.Prodotto, l.NumeroAtti,
@@ -3782,7 +3784,7 @@ app.MapGet("/api/videocodifica/lotto/{id:int}", async (int id) =>
 app.MapPost("/api/videocodifica/riga", async (VideoCodificaRigaRequest req) =>
 {
     if (req.IdSpedizione <= 0) return Results.BadRequest(new { errore = "Spedizione mancante" });
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var r = await cn.QueryFirstAsync("dbo.AI_SPED_VideoCodifica_Save", new
     {
         req.IdSpedizione,
@@ -3804,7 +3806,7 @@ app.MapPost("/api/videocodifica/riga", async (VideoCodificaRigaRequest req) =>
 app.MapPost("/api/videocodifica/chiudi", async (VideoCodificaChiudiRequest req) =>
 {
     if (req.IdLotto <= 0) return Results.BadRequest(new { errore = "Lotto mancante" });
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var r = await cn.QueryFirstAsync("dbo.Lotto_VideoCodifica",
         new { req.IdLotto }, commandType: CommandType.StoredProcedure, commandTimeout: 300);
     string result = r.result;
@@ -3818,7 +3820,7 @@ app.MapPost("/api/videocodifica/chiudi", async (VideoCodificaChiudiRequest req) 
 app.MapGet("/api/checkin/clienti", async (bool? tutte, int? idCliente, ClaimsPrincipal user) =>
 {
     int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var clienti = (await cn.QueryAsync("dbo.FORM_CHECKIN", new
     {
         Tipo = "clienti",
@@ -3850,7 +3852,7 @@ app.MapGet("/api/checkin/clienti", async (bool? tutte, int? idCliente, ClaimsPri
 app.MapGet("/api/checkin/lotti", async (int idCliente, bool? tutte, ClaimsPrincipal user) =>
 {
     int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var lotti = await cn.QueryAsync(@"
         SELECT l.IdLotto, l.Lotto, l.CodFamiglia, p.Prodotto, l.NumeroAtti,
                ISNULL(x.Righe, 0) AS Righe,
@@ -3882,7 +3884,7 @@ app.MapPost("/api/checkin", async (CheckinRequest req, ClaimsPrincipal user) =>
     if (req.IdLotti.Count > 100)
         return Results.BadRequest(new { errore = "Troppi lotti in un solo checkin (max 100)" });
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     try
     {
         var par = new DynamicParameters(new
@@ -3923,7 +3925,7 @@ app.MapPost("/api/checkin", async (CheckinRequest req, ClaimsPrincipal user) =>
 // distinta stessa (mai scelto dal client), servito col solito proxy del report server
 app.MapGet("/api/distinte/{id:int}/stampa", async (int id) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var info = await cn.QueryFirstOrDefaultAsync(
         "SELECT WebReport FROM SPED_DISTINTE WHERE IdDistinta = @id", new { id });
     string? template = info?.WebReport;
@@ -4017,7 +4019,7 @@ async Task<(dynamic? filiale, List<PresenzeDip> dipendenti, IEnumerable<dynamic>
 // filiali con il codice TeamSystem impostato (IdFiliale_HRSpeedy)
 app.MapGet("/api/presenze/init", async () =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var filiali = await cn.QueryAsync(@"
         SELECT IDFILIALE AS idFiliale, FILIALE AS filiale, IdFiliale_HRSpeedy AS codiceTs
         FROM FILIALI
@@ -4034,7 +4036,7 @@ app.MapGet("/api/presenze/riepilogo", async (int idFiliale, string mese) =>
     var al = dal.AddMonths(1);
     var ngiorni = DateTime.DaysInMonth(dal.Year, dal.Month);
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var (filiale, dipendenti, esclusi) = await PresenzeCarica(cn, idFiliale, dal, al);
     if (filiale is null) return Results.NotFound(new { errore = "Filiale inesistente" });
 
@@ -4114,7 +4116,7 @@ app.MapGet("/api/presenze/file", async (int idFiliale, string mese, bool? comple
             overrideOre[p[0].Trim()] = v;
     }
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var (filiale, dipendenti, _) = await PresenzeCarica(cn, idFiliale, dal, al);
     if (filiale is null) return Results.NotFound(new { errore = "Filiale inesistente" });
     if (filiale.IdFiliale_HRSpeedy is null)
@@ -4218,7 +4220,7 @@ app.MapGet("/api/finegita/elenco", async (string? dal, string? al, bool? tutte, 
     var dDal = DateTime.TryParse(dal, out var d1) ? d1.Date : DateTime.Today.AddDays(-7);
     var dAl = (DateTime.TryParse(al, out var d2) ? d2.Date : DateTime.Today).AddDays(1);
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var righe = await cn.QueryAsync(@"
         SELECT pa.idPalmFineGita AS idFineGita, pa.DriverAssegnato AS driver, u.Nome AS nome,
                u.IdFiliale AS idFiliale, f.FILIALE AS filiale,
@@ -4252,7 +4254,7 @@ app.MapGet("/api/finegita/elenco", async (string? dal, string? al, bool? tutte, 
 // La stored legacy per la filiale 1 (hub) aggiunge il prodotto nell'evento.
 app.MapGet("/api/finegita/{id:int}/scontrino", async (int id) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var righe = await cn.QueryAsync("ElencoFineGita",
         new { IdPalmFineGita = id },
         commandType: CommandType.StoredProcedure, commandTimeout: 90);
@@ -4262,7 +4264,7 @@ app.MapGet("/api/finegita/{id:int}/scontrino", async (int id) =>
 // Dettaglio atto per atto (barcode + destinatario) della gita.
 app.MapGet("/api/finegita/{id:int}/dettaglio", async (int id) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var righe = await cn.QueryAsync("ElencoFineGitaDettaglio",
         new { IdPalmFineGita = id },
         commandType: CommandType.StoredProcedure, commandTimeout: 90);
@@ -4275,7 +4277,7 @@ app.MapGet("/api/finegita/{id:int}/dettaglio", async (int id) =>
 app.MapGet("/api/lavorato/driver", async (ClaimsPrincipal user) =>
 {
     int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var driver = await cn.QueryAsync(@"
         SELECT u.IdUtente AS idUtente, u.Nome AS nome, u.codAppLogin AS codAppLogin
         FROM UTENTI u
@@ -4292,7 +4294,7 @@ app.MapGet("/api/lavorato", async (string idUtenti, int mese, int anno) =>
     if (!int.TryParse(idUtenti.Split(',')[0], out var idDriver) || mese is < 1 or > 12 || anno < 2000)
         return Results.BadRequest(new { errore = "Driver, mese e anno sono obbligatori" });
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var righe = await cn.QueryAsync("dbo.getLavoratoByIdUtente",
         new { idMesso = idDriver.ToString(), mese, anno },
         commandType: CommandType.StoredProcedure, commandTimeout: 180);
@@ -4303,7 +4305,7 @@ app.MapGet("/api/lavorato", async (string idUtenti, int mese, int anno) =>
 app.MapGet("/api/profilo", async (ClaimsPrincipal user) =>
 {
     var idUtente = int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var p = await cn.QueryFirstOrDefaultAsync(@"
         SELECT u.IdUtente AS idUtente, u.Utente AS utente, u.Nome AS nome, u.Email AS email,
                u.Telefono AS telefono, u.CodiceFiscale AS codiceFiscale, u.Matricola AS matricola,
@@ -4322,7 +4324,7 @@ app.MapGet("/api/profilo", async (ClaimsPrincipal user) =>
 app.MapPost("/api/profilo/password", async (CambiaPasswordRequest req, ClaimsPrincipal user) =>
 {
     var idUtente = int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var esito = await cn.ExecuteScalarAsync<int>("dbo.AI_UTENTI_CambiaPassword",
         new { IdUtente = idUtente, VecchiaPwd = req.VecchiaPwd ?? "", NuovaPwd = req.NuovaPwd ?? "" },
         commandType: CommandType.StoredProcedure);
@@ -4338,7 +4340,7 @@ app.MapPost("/api/profilo/password", async (CambiaPasswordRequest req, ClaimsPri
 // === Creazione Scatole e Ceste blu (videate legacy Scatola / Ceste) ===
 app.MapGet("/api/scatole/tipi", async () =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     // il tipo 0 e' la spedizione interna, che ha la sua pagina dedicata
     var tipi = await cn.QueryAsync(@"
         SELECT IdTipoScatola AS idTipoScatola, Descrizione AS descrizione, Prefisso AS prefisso
@@ -4353,7 +4355,7 @@ app.MapPost("/api/scatole", async (CreaScatolaRequest req, ClaimsPrincipal user)
     var idUtente = int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
     int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     try
     {
         var r = await cn.QueryFirstOrDefaultAsync("dbo.SCATOLA_Crea", new
@@ -4386,7 +4388,7 @@ app.MapPost("/api/scatole", async (CreaScatolaRequest req, ClaimsPrincipal user)
 app.MapGet("/api/scatole/aperte", async (int idTipoScatola, ClaimsPrincipal user) =>
 {
     int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var righe = await cn.QueryAsync("dbo.ElencoScatoleAperte",
         new { IdTipoScatola = idTipoScatola, IdFiliale = idFiliale },
         commandType: CommandType.StoredProcedure, commandTimeout: 90);
@@ -4398,7 +4400,7 @@ app.MapGet("/api/scatole/aperte", async (int idTipoScatola, ClaimsPrincipal user
 app.MapGet("/api/ceste", async (ClaimsPrincipal user) =>
 {
     int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var righe = await cn.QueryAsync("dbo.fndCesteBlu", new { idFiliale },
         commandType: CommandType.StoredProcedure, commandTimeout: 90);
     return Results.Ok(righe);
@@ -4409,7 +4411,7 @@ app.MapGet("/api/ceste", async (ClaimsPrincipal user) =>
 app.MapGet("/api/dipendenti-filiale", async (bool? ancheCessati, ClaimsPrincipal user) =>
 {
     int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var righe = await cn.QueryAsync(@"
         SELECT u.IdUtente AS idUtente, u.Matricola AS matricola, u.Nome AS nome,
                u.CodiceFiscale AS codiceFiscale, u.Mansione AS mansione, u.Livello AS livello,
@@ -4438,7 +4440,7 @@ app.MapGet("/api/punteggi", async (string? dal, string? al, bool? tutte, ClaimsP
     var dDal = DateTime.TryParse(dal, out var d1) ? d1.Date : DateTime.Today.AddDays(-15);
     var dAl = (DateTime.TryParse(al, out var d2) ? d2.Date : DateTime.Today).AddDays(1);
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var righe = await cn.QueryAsync(@"
         SELECT CONVERT(varchar(10), Data, 120) AS data, Driver AS driver, Filiale AS filiale,
                IDFILIALE AS idFiliale, Punteggio AS punteggio, KmPercorsi AS km,
@@ -4464,7 +4466,7 @@ app.MapGet("/api/pickup/lookups", async (ClaimsPrincipal user) =>
     var idUtente = int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
     if (!int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale))
         return Results.BadRequest(new { errore = "Filiale non disponibile nel profilo" });
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var uffici = await cn.QueryAsync(@"
         SELECT IdMggMittenti AS idMittente, UFFICIOSPEDITORE AS ufficio, COMUNE AS comune, PROV AS prov
         FROM MGG_Mittenti ORDER BY UFFICIOSPEDITORE");
@@ -4479,7 +4481,7 @@ app.MapPost("/api/pickup", async (CreaPickupRequest req, ClaimsPrincipal user) =
         return Results.BadRequest(new { errore = "Ufficio e filiale di destinazione sono obbligatori" });
     var idUtente = int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     try
     {
         var r = await cn.QueryFirstOrDefaultAsync("dbo.PICKUP_Genera", new
@@ -4511,7 +4513,7 @@ app.MapPost("/api/pickup", async (CreaPickupRequest req, ClaimsPrincipal user) =
 app.MapGet("/api/pickup/elenco", async (ClaimsPrincipal user) =>
 {
     int.TryParse(user.FindFirstValue("idFiliale"), out var idFiliale);
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var righe = await cn.QueryAsync(@"
         SELECT TOP 200 sa.IdSpedizione AS idSpedizione, sa.Barcode AS barcode,
                CONVERT(varchar(16), sa.DataInserimento, 120) AS inserita,
@@ -4533,7 +4535,7 @@ app.MapGet("/api/pickup/elenco", async (ClaimsPrincipal user) =>
 // Filiali presenti nello storico con periodo coperto e volumi (testata pagina)
 app.MapGet("/api/storici/init", async () =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var filiali = await cn.QueryAsync(@"
         SELECT Filiale AS filiale, COUNT(*) AS eventi,
                CONVERT(varchar(10), MIN(DataRecapito), 120) AS dal,
@@ -4550,7 +4552,7 @@ app.MapGet("/api/storici/init", async () =>
 // errato, ...) restano utili per ricostruire il percorso del postino.
 app.MapGet("/api/storici/consegne", async (string filiale, DateTime data) =>
 {
-    await using var cn = new SqlConnection(ConnString());
+    await using var cn = Operatore.Connessione(ConnString());
     var righe = await cn.QueryAsync(@"
         SELECT c.IdNexive AS id, c.Postino AS postino, c.barcode,
                c.TipoEvento AS esito, c.Indirizzo AS indirizzo, c.Cap AS cap,

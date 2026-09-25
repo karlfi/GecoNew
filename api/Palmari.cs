@@ -19,14 +19,14 @@ static class Palmari
     {
         app.MapGet("/api/palmari", async (string? testo, string? tag, int? idFiliale, string? modello, string? stato, bool? conSim, bool? abbinato) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(await Elenco(cn, testo, tag, idFiliale, modello, stato, conSim, abbinato));
         }).RequireAuthorization();
 
         // lo stesso elenco, con gli stessi filtri, in Excel
         app.MapGet("/api/palmari/export", async (string? testo, string? tag, int? idFiliale, string? modello, string? stato, bool? conSim, bool? abbinato) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var righe = await Elenco(cn, testo, tag, idFiliale, modello, stato, conSim, abbinato);
             return Esporta.Xlsx(righe, "Palmari", "palmari", new[] {
                 ("Filiale", "Filiale"), ("Seriale", "Seriale"), ("Nome device", "NomeDevice"), ("Modello", "Modello"), ("Android", "VersioneOS"), ("Tag Knox", "Tag"), ("Stato", "Stato"),
@@ -38,7 +38,7 @@ static class Palmari
         // tendine, riepilogo e gli Android ID visti dall'app ma non ancora abbinati a un palmare
         app.MapGet("/api/palmari/lookup", async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(new
             {
                 stati = new[] { "In uso", "Scorta", "Guasto", "Dismesso" },
@@ -66,7 +66,7 @@ static class Palmari
         // un palmare: scheda, SIM, uso quotidiano (ultimi 90 giorni), variazioni
         app.MapGet("/api/palmari/{id:int}", async (int id) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var p = (IDictionary<string, object?>?)await cn.QueryFirstOrDefaultAsync("SELECT * FROM dbo.V_Palmari WHERE IdPalmare = @id", new { id });
             if (p is null) return Results.NotFound(new { errore = "Palmare non trovato" });
             p["Sim"] = p["IdSim"] is int idSim ? await cn.QueryFirstOrDefaultAsync("SELECT * FROM dbo.V_Sim WHERE IdSim = @idSim", new { idSim }) : null;
@@ -81,7 +81,7 @@ static class Palmari
 
         app.MapPost("/api/palmari", (JsonElement b, ClaimsPrincipal user) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var p = new DynamicParameters(new
             {
                 Seriale = Str(b, "Seriale"), Imei = Str(b, "Imei"), Imei2 = Str(b, "Imei2"), Mac = Str(b, "Mac"), AndroidId = Str(b, "AndroidId"),
@@ -96,7 +96,7 @@ static class Palmari
 
         app.MapDelete("/api/palmari/{id:int}", (int id) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             await cn.ExecuteAsync("dbo.AI_PALMARI_Del", new { IdPalmare = id }, commandType: CommandType.StoredProcedure);
             return Results.Ok(new { ok = true });
         })).RequireAuthorization();
@@ -104,7 +104,7 @@ static class Palmari
         // SIM da agganciare: cerca per numero o ICCID
         app.MapGet("/api/palmari/sim", async (string? testo) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(await cn.QueryAsync(@"SELECT TOP 30 IdSim, Numero, ICCID, PianoTariffario, Stato FROM dbo.SIM
                 WHERE Numero LIKE @like OR ICCID LIKE @like ORDER BY Numero", new { like = "%" + (testo ?? "").Trim() + "%" }));
         }).RequireAuthorization();
@@ -120,7 +120,7 @@ static class Palmari
             if (!colonne.ContainsKey("seriale"))
                 return Results.BadRequest(new { errore = "Nel foglio manca la colonna del seriale (Serial Number). Colonne trovate: " + string.Join(", ", colonne.Values) });
 
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             await cn.OpenAsync();
             var filiali = (await cn.QueryAsync("SELECT IDFILIALE AS IdFiliale, FILIALE AS Filiale FROM dbo.FILIALI WHERE FILIALE IS NOT NULL"))
                 .Select(f => ((int)f.IdFiliale, (string)f.Filiale)).ToList();

@@ -206,8 +206,8 @@ async function caricaModifiche(id) {
 // una riga per campo cambiato, cosi' si legge e si cerca a colpo d'occhio
 const righeModifiche = computed(() => modifiche.value.flatMap(m =>
   m.campi.length
-    ? m.campi.map(c => ({ data: m.data, operatore: m.operatore, ...c }))
-    : [{ data: m.data, operatore: m.operatore,
+    ? m.campi.map(c => ({ data: m.data, operatore: m.operatore, login: m.login, ...c }))
+    : [{ data: m.data, operatore: m.operatore, login: m.login,
          campo: m.prima ? '(nessun campo cambiato)' : '(prima registrazione)', prima: '', dopo: '' }]))
 const dataOra = v => v ? new Date(v).toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' }) : ''
 
@@ -336,7 +336,9 @@ async function salva() {
               <Column header="Quando" style="width: 11rem">
                 <template #body="{ data }">{{ dataOra(data.data) }}</template>
               </Column>
-              <Column field="operatore" header="Operatore" style="width: 9rem" />
+              <Column header="Operatore" style="width: 9rem">
+                <template #body="{ data }"><span :title="data.login">{{ data.operatore }}</span></template>
+              </Column>
               <Column field="campo" header="Campo" style="width: 13rem" />
               <Column field="prima" header="Prima" />
               <Column field="dopo" header="Dopo" />

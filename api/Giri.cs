@@ -26,7 +26,7 @@ static class Giri
         app.MapGet("/api/giri/init", (ClaimsPrincipal user) => Prova(async () =>
         {
             var idFiliale = Filiale(user);
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var f = await cn.QueryFirstOrDefaultAsync(
                 "SELECT Latitude AS lat, Longitude AS lng, FILIALE AS filiale FROM FILIALI WHERE IDFILIALE = @id",
                 new { id = idFiliale }) as IDictionary<string, object>;
@@ -41,7 +41,7 @@ static class Giri
         app.MapGet("/api/giri/elenco", (bool? tutti, ClaimsPrincipal user) => Prova(async () =>
         {
             var idFiliale = Filiale(user);
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var g = await cn.QueryAsync(@"
                 SELECT g.IdGiro AS idGiro, g.Giro AS giro, g.CAP AS cap, g.Belfiore AS belfiore, c.DENOMINAZIONE AS comune,
                        g.Colore AS colore, g.IdDriverDefault AS idDriverDefault, u.Nome AS driverDefault,
@@ -63,7 +63,7 @@ static class Giri
         app.MapGet("/api/giri/lookup", (ClaimsPrincipal user) => Prova(async () =>
         {
             var idFiliale = Filiale(user);
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var driver = await cn.QueryAsync(@"
                 SELECT u.IdUtente AS idUtente, u.Nome AS nome, u.IdFiliale AS idFiliale
                 FROM UTENTI u
@@ -81,7 +81,7 @@ static class Giri
         // comuni coperti dalla filiale (via GEO_COPERTURE.CAP)
         app.MapGet("/api/giri/comuni", (ClaimsPrincipal user) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(await Comuni(cn, Filiale(user)));
         })).RequireAuthorization();
 
@@ -89,7 +89,7 @@ static class Giri
         app.MapGet("/api/giri/vertici", (int? idComune, int? idGiro) => Prova(async () =>
         {
             if (idComune is null && idGiro is null) throw new ErroreGiri("Specificare idComune o idGiro");
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var v = await cn.QueryAsync("dbo.Geo_GetVertici", new { IdComune = idComune, IdGiro = idGiro }, commandType: CommandType.StoredProcedure);
             // Geo_GetVertici restituisce le colonne con casing diverso fra comune e giro: lettura senza distinguere
             static object? Cerca(IDictionary<string, object> r, string nome)
@@ -111,7 +111,7 @@ static class Giri
             if (idGiro is int g && g > 0) { where += " AND IdGiro = @g"; par.Add("g", g); }
             else if (idGiro == 0) where += " AND IdGiro IS NULL";
             if (!string.IsNullOrWhiteSpace(cap) && cap.Length == 5) { where += " AND destinazionecap = @cap"; par.Add("cap", cap); }
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var s = await cn.QueryAsync($@"
                 SELECT idspedizione AS idSpedizione, barcode, latitude AS lat, longitude AS lng,
                        destinazioneindirizzo AS indirizzo, DestinazioneLocalita AS localita,
@@ -123,7 +123,7 @@ static class Giri
         // geometria (WKT) di un giro o di un comune: il rendering gestisce anche i MULTIPOLYGON
         app.MapGet("/api/giri/shape", (int? idGiro, int? idComune) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             string? wkt = (idGiro, idComune) switch
             {
                 (int g, _) => await cn.ExecuteScalarAsync<string>("SELECT SHAPE.STAsText() FROM GEO_GIRI WHERE IdGiro = @id AND SHAPE IS NOT NULL", new { id = g }),
@@ -137,7 +137,7 @@ static class Giri
         // semplice: per le aree in piu' parti il confine si rifa' dai comuni) e ultime modifiche
         app.MapGet("/api/giri/{id:int}", (int id, ClaimsPrincipal user) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var g = (IDictionary<string, object?>?)await cn.QueryFirstOrDefaultAsync(@"
                 SELECT g.IdGiro AS idGiro, g.IdFiliale AS idFiliale, g.Giro AS giro, g.CAP AS cap, g.Belfiore AS belfiore, g.Colore AS colore,
                        g.IdDriverDefault AS idDriverDefault, CASE WHEN g.DataFine IS NULL THEN 1 ELSE 0 END AS attivo,
@@ -165,7 +165,7 @@ static class Giri
             string? vertici = null;
             if (b.TryGetProperty("vertici", out var v) && v.ValueKind == JsonValueKind.Array && v.GetArrayLength() > 0)
                 vertici = JsonSerializer.Serialize(v.EnumerateArray().Select(p => new { lat = p.GetProperty("lat").GetDouble(), lng = p.GetProperty("lng").GetDouble() }));
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var r = await cn.QueryFirstOrDefaultAsync("dbo.AI_GEO_GIRO_Save", new
             {
                 IdGiro = id, Giro = Testo(b, "giro"), Colore = Testo(b, "colore"), CAP = Testo(b, "cap"), Belfiore = Testo(b, "belfiore"),
@@ -186,7 +186,7 @@ static class Giri
         {
             var attivo = !(b.TryGetProperty("attivo", out var a) && a.ValueKind == JsonValueKind.False);
             var idFiliale = Filiale(user);
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var g = await cn.QueryFirstOrDefaultAsync(
                 "SELECT Giro, Colore, CAP, Belfiore, IdDriverDefault FROM GEO_GIRI WHERE IdGiro = @id AND IdFiliale = @f",
                 new { id, f = idFiliale }) ?? throw new ErroreGiri("Giro non trovato nella filiale");
@@ -204,7 +204,7 @@ static class Giri
         {
             var ids = b.TryGetProperty("idComuni", out var c) && c.ValueKind == JsonValueKind.Array ? c.EnumerateArray().Select(x => x.GetInt32()).ToList() : new List<int>();
             if (ids.Count == 0) throw new ErroreGiri("Seleziona almeno un comune");
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             await cn.ExecuteAsync("dbo.AI_GEO_GIRO_Comuni", new { IdGiro = id, IdComuni = JsonSerializer.Serialize(ids), Utente = user.Identity?.Name },
                 commandType: CommandType.StoredProcedure);
             return Results.Ok(new { ok = true });
@@ -215,7 +215,7 @@ static class Giri
         {
             var idFiliale = Filiale(user);
             if (req.IdComuni is null || req.IdComuni.Count == 0) throw new ErroreGiri("Seleziona almeno un comune");
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var id = await cn.QueryFirstOrDefaultAsync<int?>("dbo.AI_GEO_CreaGiroDaComuni",
                 new { Giro = req.Nome, IdFiliale = idFiliale, Colore = req.Colore, IdComuni = JsonSerializer.Serialize(req.IdComuni) },
                 commandType: CommandType.StoredProcedure);
@@ -229,7 +229,7 @@ static class Giri
             var idFiliale = Filiale(user);
             if (req.Vertici is null || req.Vertici.Count < 3) throw new ErroreGiri("Servono almeno 3 punti per definire il giro");
             var json = JsonSerializer.Serialize(req.Vertici.Select(v => new { lat = v.Lat, lng = v.Lng }));
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var id = await cn.QueryFirstOrDefaultAsync<int?>("dbo.AI_GEO_CreaGiro",
                 new { Giro = req.Nome, IdFiliale = idFiliale, Colore = req.Colore, Vertici = json }, commandType: CommandType.StoredProcedure);
             if (id is int g) await Rifinisci(cn, g, req, user);
@@ -241,7 +241,7 @@ static class Giri
         app.MapPost("/api/giri/assegna", (AssegnaGiriRequest req, ClaimsPrincipal user) => Prova(async () =>
         {
             var idFiliale = Filiale(user);
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             if (req.IdGiri is { Count: > 0 })
                 foreach (var idGiro in req.IdGiri)
                     await cn.ExecuteAsync("dbo.AI_SPED_AssegnaGiri", new { IdFiliale = idFiliale, Data = DateTime.Today, IdGiro = idGiro, Forza = true, Utente = user.Identity?.Name },
@@ -259,7 +259,7 @@ static class Giri
         // le aree di tutti i giri attivi della filiale in un colpo solo (sfondo della pagina Spedizioni del giorno)
         app.MapGet("/api/giri/shapes", (ClaimsPrincipal user) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var righe = await cn.QueryAsync(@"
                 SELECT IdGiro AS idGiro, Giro AS giro, Colore AS colore, SHAPE.STAsText() AS wkt
                 FROM GEO_GIRI WHERE IdFiliale = @id AND DataFine IS NULL AND SHAPE IS NOT NULL ORDER BY Giro", new { id = Filiale(user) });

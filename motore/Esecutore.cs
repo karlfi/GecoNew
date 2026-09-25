@@ -243,6 +243,11 @@ public static class Esecutore
             var testa = await cn.QueryFirstOrDefaultAsync("SELECT * FROM dbo.WF_Workflow WHERE IdWorkflow = @id", new { id = idWorkflow })
                 ?? throw new Exception($"Workflow {idWorkflow} inesistente");
             ctx.CartellaOutput = (string?)testa.DirectoryOutput;
+            // chi scrive, per l'Operatore dello storico delle modifiche (LogTabelle, dbo.AI_Operatore()):
+            // gli step SQL usano questa connessione
+            var chi = $"motore: {(string)testa.Nome}";
+            await cn.ExecuteAsync("EXEC sys.sp_set_session_context @key = N'Operatore', @value = @chi",
+                new { chi = chi.Length > 100 ? chi[..100] : chi });
             var radici = Albero(await cn.QueryAsync(@"
                 SELECT IdStep, IdStepPadre, Ordine, NomeSezione, Tipo, EsciSuErrore, EseguiPasso, Attivo, Parametri
                 FROM dbo.WF_vw_WorkflowStepAlbero WHERE IdWorkflow = @id ORDER BY Percorso", new { id = idWorkflow }));

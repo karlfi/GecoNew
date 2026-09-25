@@ -139,8 +139,8 @@ const ETICHETTE = { targa: 'Targa', codTipoMezzo: 'Tipo mezzo', modello: 'Modell
 const etichetta = c => ETICHETTE[c] ?? c
 const righeModifiche = computed(() => modifiche.value.flatMap(m =>
   m.campi.length
-    ? m.campi.map(c => ({ data: m.data, operatore: m.operatore, operazione: m.tipoOperazione, ...c, campo: etichetta(c.campo) }))
-    : [{ data: m.data, operatore: m.operatore, operazione: m.tipoOperazione, campo: m.prima ? '(nessun campo cambiato)' : '(prima registrazione)', prima: '', dopo: '' }]))
+    ? m.campi.map(c => ({ data: m.data, operatore: m.operatore, login: m.login, operazione: m.tipoOperazione, ...c, campo: etichetta(c.campo) }))
+    : [{ data: m.data, operatore: m.operatore, login: m.login, operazione: m.tipoOperazione, campo: m.prima ? '(nessun campo cambiato)' : '(prima registrazione)', prima: '', dopo: '' }]))
 const caricate = ref({})
 watch(linguetta, l => caricaLinguetta(l))
 async function caricaLinguetta(l, forza = false) {
@@ -552,11 +552,13 @@ onMounted(async () => {
           </TabPanel>
           <!-- log: ogni modifica alla riga di MEZZI, campo per campo -->
           <TabPanel value="log">
-            <p class="nota piccola-nota">Ogni salvataggio della scheda (da qui o dal legacy) lascia una fotografia in LOGTabelle; qui il confronto fra una fotografia e la precedente. L'operatore è l'account con cui l'applicazione scrive sul database.</p>
+            <p class="nota piccola-nota">Ogni salvataggio della scheda (da qui o dal legacy) lascia una fotografia in LOGTabelle; qui il confronto fra una fotografia e la precedente. L'operatore è l'utente del portale che ha salvato (prima era sempre l'account con cui l'applicazione scrive sul database).</p>
             <DataTable :value="righeModifiche" size="small" stripedRows paginator :rows="20" class="log-modifiche">
               <Column header="Quando" style="width: 9.5rem"><template #body="{ data }">{{ dataOra(data.data) }}</template></Column>
               <Column field="operazione" header="Operazione" style="width: 6.5rem" />
-              <Column field="operatore" header="Operatore" style="width: 9rem" />
+              <Column header="Operatore" style="width: 9rem">
+                <template #body="{ data }"><span :title="data.login">{{ data.operatore }}</span></template>
+              </Column>
               <Column field="campo" header="Campo" style="width: 16rem" />
               <Column field="prima" header="Prima" />
               <Column field="dopo" header="Dopo" />

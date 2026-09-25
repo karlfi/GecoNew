@@ -22,14 +22,14 @@ static class Sim
         // elenco (vista V_Sim), con i filtri della pagina
         app.MapGet("/api/sim", async (string? testo, string? stato, int? idFiliale, string? piano, string? assegnazione) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(await Elenco(cn, testo, stato, idFiliale, piano, assegnazione));
         }).RequireAuthorization();
 
         // lo stesso elenco, con gli stessi filtri, in Excel
         app.MapGet("/api/sim/export", async (string? testo, string? stato, int? idFiliale, string? piano, string? assegnazione) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var righe = await Elenco(cn, testo, stato, idFiliale, piano, assegnazione);
             return Esporta.Xlsx(righe, "SIM", "sim", new[] {
                 ("Filiale", "FilialeEffettiva"), ("Numero", "Numero"), ("ICCID", "ICCID"), ("Stato", "Stato"), ("Piano", "PianoTariffario"), ("Prodotto", "Prodotto"), ("Operatore", "Operatore"),
@@ -41,7 +41,7 @@ static class Sim
         // tendine: stati e piani presenti, filiali, riepilogo
         app.MapGet("/api/sim/lookup", async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(new
             {
                 stati = new[] { "Attiva", "Sospesa", "Cessata" },
@@ -58,7 +58,7 @@ static class Sim
         // dipendenti per l'assegnazione: cerca per nome o matricola
         app.MapGet("/api/sim/dipendenti", async (string? testo) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             return Results.Ok(await cn.QueryAsync(@"
                 SELECT TOP 30 u.IdUtente, u.Nome, u.Matricola, u.IdFiliale, f.FILIALE AS Filiale FROM dbo.UTENTI u
                 LEFT JOIN dbo.FILIALI f ON f.IDFILIALE = u.IdFiliale
@@ -68,7 +68,7 @@ static class Sim
         // una SIM: anagrafica, variazioni e ultime rilevazioni
         app.MapGet("/api/sim/{id:int}", async (int id) =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var s = (IDictionary<string, object?>?)await cn.QueryFirstOrDefaultAsync("SELECT * FROM dbo.V_Sim WHERE IdSim = @id", new { id });
             if (s is null) return Results.NotFound(new { errore = "SIM non trovata" });
             s["Variazioni"] = (await cn.QueryAsync("SELECT * FROM dbo.SIM_VARIAZIONI WHERE IdSim = @id ORDER BY Data DESC, IdVariazione DESC", new { id })).ToList();
@@ -79,7 +79,7 @@ static class Sim
         // salvataggio dalla scheda (nuova o modifica)
         app.MapPost("/api/sim", (JsonElement b, ClaimsPrincipal user) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var p = new DynamicParameters(new
             {
                 Numero = Str(b, "Numero"), ICCID = Str(b, "ICCID"), Operatore = Str(b, "Operatore"), Prodotto = Str(b, "Prodotto"),
@@ -95,7 +95,7 @@ static class Sim
 
         app.MapDelete("/api/sim/{id:int}", (int id) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             await cn.ExecuteAsync("dbo.AI_SIM_Del", new { IdSim = id }, commandType: CommandType.StoredProcedure);
             return Results.Ok(new { ok = true });
         })).RequireAuthorization();
@@ -117,7 +117,7 @@ static class Sim
             int nuove = 0, aggiornate = 0, invariate = 0, rilevazioni = 0;
             var errori = new List<string>();
             var utente = user.Identity?.Name;
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             await cn.OpenAsync();
             foreach (var (r, i) in righe.Select((r, i) => (r, i)))
             {

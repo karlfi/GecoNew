@@ -75,6 +75,10 @@ def connessione():
                                'SQL Server Native Client 11.0', 'SQL Server') if x in presenti), 'SQL Server')
     odbc = f"DRIVER={{{driver}}};SERVER={server};DATABASE={db};UID={uid};PWD={pwd};TrustServerCertificate=yes;MARS_Connection=yes"
     cn = pyodbc.connect(odbc, autocommit=False)
+    # chi scrive, per l'Operatore dello storico delle modifiche (LogTabelle, dbo.AI_Operatore())
+    cn.execute("EXEC sys.sp_set_session_context @key = N'Operatore', @value = ?",
+               f"script {os.path.basename(sys.argv[0])}"[:100])
+    cn.commit()
     print(f"DB: {server}/{db} come {uid} (driver {driver})")
     return cn
 

@@ -27,7 +27,7 @@ static class SpedGiri
         {
             var idFiliale = Filiale(user);
             var giorno = Giorno(data);
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var f = await cn.QueryFirstOrDefaultAsync(
                 "SELECT FILIALE AS filiale, Latitude AS lat, Longitude AS lng, ISNULL(GeoNormalizza, 0) AS geo FROM FILIALI WHERE IDFILIALE = @id", new { id = idFiliale });
             var sped = await cn.QueryAsync(@"
@@ -58,7 +58,7 @@ static class SpedGiri
         // assegnazione automatica: { data, idCliente?, idGiro?, forza }
         app.MapPost("/api/sped-giri/assegna-auto", (JsonElement b, ClaimsPrincipal user) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var r = await cn.QueryFirstAsync("dbo.AI_SPED_AssegnaGiri", new
             {
                 IdFiliale = Filiale(user), Data = Giorno(Testo(b, "data")), IdCliente = Intero(b, "idCliente"), IdGiro = Intero(b, "idGiro"),
@@ -72,7 +72,7 @@ static class SpedGiri
         {
             var ids = b.TryGetProperty("idSpedizioni", out var v) && v.ValueKind == JsonValueKind.Array ? v.EnumerateArray().Select(x => x.GetInt32()).ToList() : new List<int>();
             if (ids.Count == 0) throw new ErroreSped("Nessuna spedizione selezionata");
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var cambiate = await cn.ExecuteScalarAsync<int>("dbo.AI_SPED_Giro",
                 new { IdFiliale = Filiale(user), IdSpedizioni = JsonSerializer.Serialize(ids), IdGiro = Intero(b, "idGiro"), Utente = user.Identity?.Name },
                 commandType: CommandType.StoredProcedure);
@@ -84,7 +84,7 @@ static class SpedGiri
         {
             if (!b.TryGetProperty("lat", out var la) || !b.TryGetProperty("lng", out var lo) || la.ValueKind != JsonValueKind.Number || lo.ValueKind != JsonValueKind.Number)
                 throw new ErroreSped("Coordinate mancanti");
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var appartiene = await cn.ExecuteScalarAsync<int?>("SELECT IdFiliale FROM SPED_ATTIVITA WHERE IdSpedizione = @id", new { id });
             if (appartiene != Filiale(user)) throw new ErroreSped("La spedizione non e' della filiale");
             var r = await cn.QueryFirstAsync("dbo.AI_SPED_Posizione", new
@@ -98,7 +98,7 @@ static class SpedGiri
         // storico di una spedizione (giro e posizione)
         app.MapGet("/api/sped-giri/{id:int}/variazioni", (int id) => Prova(async () =>
         {
-            await using var cn = new SqlConnection(connString());
+            await using var cn = Operatore.Connessione(connString());
             var righe = await cn.QueryAsync(@"
                 SELECT CONVERT(varchar(19), v.DataOra, 126) AS dataOra, v.Utente AS utente, v.Origine AS origine, v.Campo AS campo,
                        CASE WHEN v.Campo = 'Giro' THEN ISNULL(gp.Giro, v.Prima) ELSE v.Prima END AS prima,
