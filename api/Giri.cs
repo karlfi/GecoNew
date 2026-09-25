@@ -159,20 +159,44 @@ static class Giri
             return Results.Ok(g);
         })).RequireAuthorization();
 
-        // modifica del giro (campi, chiusura, confine se arrivano i vertici)
+        // modifica del giro (campi, chiusura, confine se arrivano i vertici). Con "vicini": [{ idGiro, vertici }] salva
+        // anche il confine dei giri vicini spostato insieme (confine condiviso trascinato nell'editor): tutto in una
+        // transazione, cosi' i confini restano combacianti o non cambia niente; degli altri campi dei vicini resta tutto com'e'.
         app.MapPut("/api/giri/{id:int}", (int id, JsonElement b, ClaimsPrincipal user) => Prova(async () =>
         {
+            static string Punti(JsonElement v) =>
+                JsonSerializer.Serialize(v.EnumerateArray().Select(p => new { lat = p.GetProperty("lat").GetDouble(), lng = p.GetProperty("lng").GetDouble() }));
             string? vertici = null;
             if (b.TryGetProperty("vertici", out var v) && v.ValueKind == JsonValueKind.Array && v.GetArrayLength() > 0)
-                vertici = JsonSerializer.Serialize(v.EnumerateArray().Select(p => new { lat = p.GetProperty("lat").GetDouble(), lng = p.GetProperty("lng").GetDouble() }));
+                vertici = Punti(v);
+            var vicini = b.TryGetProperty("vicini", out var vv) && vv.ValueKind == JsonValueKind.Array
+                ? vv.EnumerateArray().Where(x => x.TryGetProperty("idGiro", out _) && x.TryGetProperty("vertici", out var xv) && xv.ValueKind == JsonValueKind.Array && xv.GetArrayLength() >= 3)
+                    .Select(x => (idGiro: x.GetProperty("idGiro").GetInt32(), vertici: Punti(x.GetProperty("vertici")))).ToList()
+                : new List<(int idGiro, string vertici)>();
+            var idFiliale = Filiale(user);
             await using var cn = Operatore.Connessione(connString());
+            await cn.OpenAsync();
+            await using var tx = await cn.BeginTransactionAsync();
             var r = await cn.QueryFirstOrDefaultAsync("dbo.AI_GEO_GIRO_Save", new
             {
                 IdGiro = id, Giro = Testo(b, "giro"), Colore = Testo(b, "colore"), CAP = Testo(b, "cap"), Belfiore = Testo(b, "belfiore"),
                 IdDriverDefault = Intero(b, "idDriverDefault"),
                 Attivo = !(b.TryGetProperty("attivo", out var a) && a.ValueKind == JsonValueKind.False),
                 Vertici = vertici, Utente = user.Identity?.Name,
-            }, commandType: CommandType.StoredProcedure);
+            }, tx, commandType: CommandType.StoredProcedure);
+            foreach (var (idVicino, vert) in vicini.Where(x => x.idGiro != id))
+            {
+                var g = await cn.QueryFirstOrDefaultAsync(
+                    "SELECT Giro, Colore, CAP, Belfiore, IdDriverDefault, IdFiliale, CASE WHEN DataFine IS NULL THEN 1 ELSE 0 END AS Attivo FROM GEO_GIRI WHERE IdGiro = @idVicino",
+                    new { idVicino }, tx);
+                if (g is null || (int)g.IdFiliale != idFiliale) throw new ErroreGiri($"Il giro vicino {idVicino} non e' di questa filiale");
+                await cn.QueryFirstOrDefaultAsync("dbo.AI_GEO_GIRO_Save", new
+                {
+                    IdGiro = idVicino, Giro = (string)g.Giro, Colore = (string?)g.Colore, CAP = (string?)g.CAP, Belfiore = (string?)g.Belfiore,
+                    IdDriverDefault = (int?)g.IdDriverDefault, Attivo = (int)g.Attivo == 1, Vertici = vert, Utente = user.Identity?.Name,
+                }, tx, commandType: CommandType.StoredProcedure);
+            }
+            await tx.CommitAsync();
             if (b.TryGetProperty("attivo", out var att) && att.ValueKind == JsonValueKind.False)
                 await ScollegaDaiPiani(cn, id, Filiale(user), user);
             return Results.Ok(r);

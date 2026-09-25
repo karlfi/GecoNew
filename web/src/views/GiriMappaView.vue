@@ -8,6 +8,9 @@
 // Confini che combaciano: "Allinea al giro vicino" sostituisce i tratti del confine in modifica che corrono entro N
 // metri da quello di un giro visibile con il pezzo corrispondente del suo confine (vertici compresi, con anteprima);
 // e un vertice rilasciato a pochi pixel dal confine di un giro o comune visibile ci si aggancia.
+// Confine condiviso: i vertici del confine in modifica che coincidono (entro mezzo metro) con quelli di un giro visibile
+// si spostano insieme nei due giri (anche aggiungendo o togliendo punti sul tratto comune); Salva salva il giro e i
+// vicini cambiati in una transazione sola.
 // Flag "Attivo" (interruttore nell'elenco e nell'editor, DataFine vuota in GEO_GIRI): qui si vedono
 // tutti i giri, con il filtro; le pagine di assegnazione (Spedizioni del giorno, Piano della giornata)
 // e le stored vedono solo quelli attivi. Disattivare toglie il giro dai piani di oggi e dei giorni dopo.
@@ -202,7 +205,10 @@ async function toggleGiri() {
   for (const g of giriSel.value) {
     if (giriDisegnati.has(g.idGiro)) continue
     await disegnaGiro(g)
+    const vic = viciniInModifica.get(g.idGiro)
+    if (vic?.modificato) ridisegnaVicino(vic)
   }
+  if (confineInModifica.value) collegaCondivisi()
 }
 async function disegnaGiro(g) {
   try {
@@ -289,8 +295,8 @@ function aggiornaAnteprima() {
 }
 
 // --- vertici sulla mappa: pin numerati trascinabili, punti intermedi per aggiungerne, tasto destro per togliere ---
-function iconaNum(n) {
-  return L.divIcon({ className: 'vertice-num', html: `<span style="background:${coloreHex.value}">${n}</span>`, iconSize: [24, 24], iconAnchor: [12, 12] })
+function iconaNum(n, condiviso = false) {
+  return L.divIcon({ className: 'vertice-num' + (condiviso ? ' condiviso' : ''), html: `<span style="background:${coloreHex.value}">${n}</span>`, iconSize: [24, 24], iconAnchor: [12, 12] })
 }
 function onMapClick(e) { if (attivoDisegno.value) aggiungiVertice(e.latlng.lat, e.latlng.lng) }
 function onRefClick(e) {
@@ -300,8 +306,11 @@ function onRefClick(e) {
 }
 function creaMarker(v, n) {
   const marker = L.marker([v.lat, v.lng], { draggable: true, icon: iconaNum(n) })
-  marker.on('drag', ev => { const ll = ev.target.getLatLng(); v.lat = ll.lat; v.lng = ll.lng; ridisegnaBozza(false) })
-  marker.on('dragend', () => { agganciaVertice(v); ridisegnaBozza(true); aggiornaAnteprima(); if (vicino.value) calcolaAllineamento() })
+  marker.on('drag', ev => { const ll = ev.target.getLatLng(); v.lat = ll.lat; v.lng = ll.lng; seguiVicini(v); ridisegnaBozza(false) })
+  marker.on('dragend', () => {
+    agganciaVertice(v); seguiVicini(v); collegaCondivisi()
+    ridisegnaBozza(true); aggiornaAnteprima(); if (vicino.value) calcolaAllineamento()
+  })
   marker.on('contextmenu', ev => { L.DomEvent.stopPropagation(ev); rimuoviVertice(v) })
   marker.bindTooltip('trascina per spostare, tasto destro per togliere', { direction: 'top', offset: [0, -10] })
   v.marker = marker
@@ -338,11 +347,16 @@ function ridisegnaIntermedi() {
       icon: L.divIcon({ className: 'vertice-mezzo', html: '<span>+</span>', iconSize: [16, 16], iconAnchor: [8, 8] }),
       keyboard: false, zIndexOffset: -100
     }).bindTooltip('clic per aggiungere un punto qui', { direction: 'top', offset: [0, -8] })
-    m.on('click', ev => { L.DomEvent.stopPropagation(ev); aggiungiVertice(ev.latlng.lat, ev.latlng.lng, i + 1) })
+    m.on('click', ev => {
+      L.DomEvent.stopPropagation(ev)
+      inserisciNeiVicini(a, b, ev.latlng.lat, ev.latlng.lng)
+      aggiungiVertice(ev.latlng.lat, ev.latlng.lng, i + 1)
+      collegaCondivisi()
+    })
     intermediLayer.addLayer(m)
   }
 }
-function refreshNumeri() { bordi.value.forEach((v, i) => v.marker && v.marker.setIcon(iconaNum(i + 1))) }
+function refreshNumeri() { bordi.value.forEach((v, i) => v.marker && v.marker.setIcon(iconaNum(i + 1, !!v.condivisi?.length))) }
 function sposta(i, dir) {
   const j = i + dir
   if (j < 0 || j >= bordi.value.length) return
@@ -352,6 +366,9 @@ function sposta(i, dir) {
   refreshNumeri(); ridisegnaBozza(true); aggiornaAnteprima()
 }
 function rimuoviVertice(v) {
+  for (const { vic, p } of v.condivisi ?? []) {
+    if (vic.pts.length > 3) { vic.pts = vic.pts.filter(x => x !== p); vic.modificato = true; ridisegnaVicino(vic) }
+  }
   if (v.marker) disegnoLayer.removeLayer(v.marker)
   bordi.value = bordi.value.filter(x => x !== v)
   refreshNumeri(); ridisegnaBozza(true); aggiornaAnteprima()
@@ -380,7 +397,8 @@ function agganciaVertice(v) {
   const intorno = L.latLngBounds(map.layerPointToLatLng(pv.subtract([SOGLIA_AGGANCIO, SOGLIA_AGGANCIO])),
     map.layerPointToLatLng(pv.add([SOGLIA_AGGANCIO, SOGLIA_AGGANCIO])))
   let vertice = null, lato = null
-  const candidati = [...[...anelliGiri].filter(([id]) => id !== form.value.idGiro).map(([, a]) => a), ...anelliComuni.values()].flat()
+  const legati = new Set((v.condivisi ?? []).map(c => c.vic.idGiro))
+  const candidati = [...[...anelliGiri.keys()].filter(id => id !== form.value.idGiro && !legati.has(id)).map(anelliDi), ...anelliComuni.values()].flat()
   for (const { pts, bounds } of candidati) {
     if (!bounds.intersects(intorno)) continue
     const px = pts.map(p => map.latLngToLayerPoint(p))
@@ -436,7 +454,7 @@ function proiezioni(PX, RX) {
   return { proj, cum, L: cum[RX.length] }
 }
 function puntiVicini(idGiro) {
-  const rings = anelliGiri.get(idGiro)
+  const rings = anelliDi(idGiro)
   if (!rings || bordi.value.length < 3) return 0
   const m = metrico(bordi.value[0].lat)
   const PX = bordi.value.map(v => m.xy([v.lat, v.lng]))
@@ -450,7 +468,7 @@ function puntiVicini(idGiro) {
 function calcolaAllineamento() {
   allineaLayer && allineaLayer.clearLayers()
   allineamento.value = null
-  const rings = anelliGiri.get(vicino.value)
+  const rings = anelliDi(vicino.value)
   if (!rings || bordi.value.length < 3) return
   const tol = tolleranzaAllinea.value || 50
   const P = bordi.value.map(v => [v.lat, v.lng])
@@ -510,11 +528,103 @@ function applicaAllineamento() {
   svuotaDisegno()
   for (const [lat, lng] of a.anello) bordi.value.push({ lat, lng, marker: null })
   bordi.value.forEach((v, i) => creaMarker(v, i + 1))
+  collegaCondivisi()
   ridisegnaBozza(true); aggiornaAnteprima()
   allineaLayer.clearLayers(); allineamento.value = null; vicino.value = null
   avviso('success', 'Confine', `Allineato a ${nome}: ${a.tratti} ${a.tratti === 1 ? 'tratto' : 'tratti'}. Controlla e salva.`)
 }
 function annullaAllineamento() { allineaLayer && allineaLayer.clearLayers(); allineamento.value = null; vicino.value = null }
+
+// --- confine condiviso: i vertici in comune con i giri visibili si spostano nei due giri ---
+const confineCondiviso = ref(true)
+const viciniInModifica = new Map()    // idGiro -> { idGiro, giro, pts: [{lat, lng}], modificato }
+const statoCondivisi = ref({ punti: 0, giri: [], modificati: [] })
+// gli anelli di un giro: quello aggiornato se lo si sta spostando insieme, altrimenti quello del database
+function anelliDi(idGiro) {
+  const vic = viciniInModifica.get(idGiro)
+  if (vic?.modificato) { const pts = vic.pts.map(q => [q.lat, q.lng]); return [{ pts, bounds: L.latLngBounds(pts) }] }
+  return anelliGiri.get(idGiro) ?? []
+}
+function collegaCondivisi() {
+  for (const v of bordi.value) v.condivisi = []
+  if (confineCondiviso.value && bordi.value.length >= 3 && map) {
+    const m = metrico(bordi.value[0].lat)
+    const vicino05 = (a, b) => { const x = m.xy(a), y = m.xy(b); return Math.hypot(x[0] - y[0], x[1] - y[1]) <= 0.5 }
+    for (const [idGiro, rings] of anelliGiri) {
+      if (idGiro === form.value.idGiro || rings.length !== 1) continue      // solo giri a un anello (niente buchi o piu' parti)
+      let vic = viciniInModifica.get(idGiro)
+      if (!vic) {
+        vic = { idGiro, giro: giri.value.find(x => x.idGiro === idGiro)?.giro ?? String(idGiro), pts: rings[0].pts.map(([lat, lng]) => ({ lat, lng })), modificato: false }
+        viciniInModifica.set(idGiro, vic)
+      }
+      const riquadro = L.latLngBounds(vic.pts.map(q => [q.lat, q.lng])).pad(0.02)
+      for (const v of bordi.value) {
+        if (!riquadro.contains([v.lat, v.lng])) continue
+        const p = vic.pts.find(q => vicino05([q.lat, q.lng], [v.lat, v.lng]))
+        if (p) v.condivisi.push({ vic, p })
+      }
+      // gli estremi di un tratto comune stanno spesso a meta' di un lato del vicino (es. dopo l'allineamento):
+      // il lato si spezza li', cosi' il tratto ha gli stessi vertici nei due giri
+      const n = bordi.value.length
+      bordi.value.forEach((v, i) => {
+        if (v.condivisi.some(c => c.vic === vic)) return
+        const accanto = [bordi.value[(i - 1 + n) % n], bordi.value[(i + 1) % n]].some(w => w.condivisi.some(c => c.vic === vic))
+        if (!accanto) return
+        const q = m.xy([v.lat, v.lng])
+        for (let k = 0; k < vic.pts.length; k++) {
+          const a = m.xy([vic.pts[k].lat, vic.pts[k].lng]), b = m.xy([vic.pts[(k + 1) % vic.pts.length].lat, vic.pts[(k + 1) % vic.pts.length].lng])
+          const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy
+          const t = l2 ? ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / l2 : -1
+          if (t <= 0 || t >= 1 || Math.hypot(q[0] - (a[0] + t * dx), q[1] - (a[1] + t * dy)) > 0.5) continue
+          const nuovo = { lat: v.lat, lng: v.lng }
+          vic.pts.splice(k + 1, 0, nuovo)
+          v.condivisi.push({ vic, p: nuovo })
+          break
+        }
+      })
+    }
+  }
+  const legati = new Set(bordi.value.flatMap(v => (v.condivisi ?? []).map(c => c.vic.idGiro)))
+  statoCondivisi.value = {
+    punti: bordi.value.filter(v => v.condivisi?.length).length,
+    giri: [...viciniInModifica.values()].filter(x => legati.has(x.idGiro)).map(x => x.giro),
+    modificati: [...viciniInModifica.values()].filter(x => x.modificato).map(x => x.giro),
+  }
+  refreshNumeri()
+}
+function seguiVicini(v) {
+  if (!v.condivisi?.length) return
+  for (const { vic, p } of v.condivisi) {
+    p.lat = v.lat; p.lng = v.lng
+    if (!vic.modificato) { vic.modificato = true; statoCondivisi.value = { ...statoCondivisi.value, modificati: [...statoCondivisi.value.modificati, vic.giro] } }
+    ridisegnaVicino(vic)
+  }
+}
+// un punto aggiunto a meta' di un lato comune va anche nel vicino, fra i due vertici corrispondenti
+function inserisciNeiVicini(a, b, lat, lng) {
+  for (const ca of a.condivisi ?? []) {
+    const cb = (b.condivisi ?? []).find(c => c.vic === ca.vic)
+    if (!cb) continue
+    const pts = ca.vic.pts, ia = pts.indexOf(ca.p), ib = pts.indexOf(cb.p), n = pts.length
+    if (ia < 0 || ib < 0) continue
+    if ((ia + 1) % n === ib) pts.splice(ia + 1, 0, { lat, lng })
+    else if ((ib + 1) % n === ia) pts.splice(ib + 1, 0, { lat, lng })
+    else continue
+    ca.vic.modificato = true
+    ridisegnaVicino(ca.vic)
+  }
+}
+function ridisegnaVicino(vic) {
+  const grp = giriDisegnati.get(vic.idGiro)
+  if (!grp) return
+  grp.eachLayer(l => { if (l.setLatLngs) { l.setLatLngs(vic.pts.map(q => [q.lat, q.lng])); l.setStyle({ dashArray: '4,4', weight: 3 }) } })
+}
+function scartaVicini() {
+  const modificati = [...viciniInModifica.values()].filter(x => x.modificato).map(x => x.idGiro)
+  viciniInModifica.clear()
+  statoCondivisi.value = { punti: 0, giri: [], modificati: [] }
+  return modificati
+}
 
 // --- semplificazione (Douglas-Peucker) per i confini con troppi punti ---
 function semplifica(punti, tol) {
@@ -579,10 +689,13 @@ function modificaConfine() {
   const grp = giriDisegnati.get(d.idGiro)
   if (grp) grp.setStyle({ fillOpacity: 0.05, dashArray: '2,6' })
   confineInModifica.value = true
+  collegaCondivisi()
   ridisegnaBozza(true); aggiornaAnteprima()
 }
 function chiudiConfine() {
   annullaAllineamento()
+  // i vicini spostati e non salvati tornano come sono nel database
+  for (const id of scartaVicini()) ridisegnaGiro(id)
   svuotaDisegno()
   attivoDisegno.value = false
   if (confineInModifica.value && dettaglio.value) {
@@ -625,8 +738,10 @@ async function salvaModifica() {
   try {
     const corpo = { ...corpoForm(), attivo: form.value.attivo }
     if (confineInModifica.value) corpo.vertici = bordi.value.map(v => ({ lat: v.lat, lng: v.lng }))
+    const vicini = confineInModifica.value ? [...viciniInModifica.values()].filter(x => x.modificato) : []
+    if (vicini.length) corpo.vicini = vicini.map(x => ({ idGiro: x.idGiro, vertici: x.pts.map(q => ({ lat: q.lat, lng: q.lng })) }))
     await api.put(`/giri/${form.value.idGiro}`, corpo)
-    avviso('success', 'Giro salvato', form.value.giro)
+    avviso('success', 'Giro salvato', form.value.giro + (vicini.length ? ` e il confine di ${vicini.map(x => x.giro).join(', ')}` : ''))
     const id = form.value.idGiro
     chiudiConfine()
     await ricaricaGiri()
@@ -769,6 +884,12 @@ const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfi
               <label class="chk"><Checkbox v-model="attivoDisegno" binary /> Aggiungi punti col clic sulla mappa</label>
               <label class="chk" title="Un punto rilasciato a pochi pixel dal confine di un giro o comune visibile ci si attacca">
                 <Checkbox v-model="aggancio" binary /> Aggancia ai confini visibili</label>
+              <label class="chk" title="I punti in comune con un giro visibile (bordo doppio) si spostano anche nel vicino; Salva salva tutti e due">
+                <Checkbox v-model="confineCondiviso" binary @change="collegaCondivisi" /> Sposta insieme il confine dei giri vicini</label>
+              <small v-if="confineCondiviso && statoCondivisi.punti" class="hint">
+                {{ statoCondivisi.punti }} punti in comune con {{ statoCondivisi.giri.join(', ') }} (bordo doppio)</small>
+              <small v-if="statoCondivisi.modificati.length" class="attenzione">
+                Salva salvera' anche il confine di {{ statoCondivisi.modificati.join(', ') }}</small>
               <div class="allinea">
                 <label>Allinea al giro vicino</label>
                 <div class="riga-allinea">
@@ -976,4 +1097,5 @@ const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfi
   border: 1px solid rgba(0,0,0,.4);
 }
 .sped-dot.senza-giro span { border: 2px solid #c62828; width: 10px; height: 10px; }
+.vertice-num.condiviso span { box-shadow: 0 0 0 2px #fff, 0 0 0 4px #111; }
 </style>
