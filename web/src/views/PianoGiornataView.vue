@@ -198,8 +198,12 @@ function disegnaTutto(inquadra) {
   }
   disegnaEtichette(); disegnaPunti()
   if (inquadra) {
-    const b = puntiCluster.getBounds()
-    if (b.isValid()) map.fitBounds(b, { padding: [20, 20] })
+    // punti liberi e aree dei giri del giorno: con tutti i giri assegnati resta magari un punto solo, e
+    // inquadrare solo quello portava la mappa allo zoom massimo su un dettaglio senza senso
+    const b = L.latLngBounds([])
+    if (puntiCluster.getLayers().length) b.extend(puntiCluster.getBounds())
+    if (areeLayer.getLayers().length) b.extend(L.featureGroup(areeLayer.getLayers()).getBounds())
+    if (b.isValid()) map.fitBounds(b, { padding: [20, 20], maxZoom: 14 })
     else if (filialeCoord.value) map.setView([filialeCoord.value.lat, filialeCoord.value.lng], 11)
   }
 }
