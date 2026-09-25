@@ -15,6 +15,14 @@ export const useAuthStore = defineStore('auth', {
   actions: {
     async login(utente, password) {
       const { data } = await api.post('/auth/login', { utente, password })
+      this.salvaAccesso(data)
+    },
+    // solo in sviluppo (npm run dev): entra con l'utente di prova di api/appsettings.Development.json
+    async accessoSviluppo() {
+      const { data } = await api.post('/auth/dev-login')
+      this.salvaAccesso(data)
+    },
+    salvaAccesso(data) {
       this.token = data.token
       this.utente = data.utente
       localStorage.setItem('token', data.token)

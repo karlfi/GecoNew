@@ -61,6 +61,13 @@ Apri **http://localhost:5173** e accedi con un utente Ge.C.O. che abbia la passw
 utenti solo-palmare, senza password, non possono entrare). In sviluppo il frontend fa da proxy
 `/api` -> `5180`, quindi niente problemi di CORS.
 
+**Accesso di sviluppo (prove automatiche).** Con `"DevLogin": { "Utente": "<login>" }` in
+`api/appsettings.Development.json` (non va in git ne' nelle release) la pagina di login in `npm run dev` entra da
+sola con quell'utente, senza password: serve alle prove fatte da Claude nel browser integrato o con Playwright.
+L'endpoint `POST /api/auth/dev-login` risponde solo in ambiente Development, con la chiave valorizzata e a chiamate
+dalla macchina stessa; altrimenti 404. Attenzione: il database resta quello di `appsettings.Development.json` /
+`appsettings.json`, cioe' produzione, e le prove che scrivono si decidono ogni volta.
+
 > **Se `dotnet build/run` dice "file locked":** c'è un `GecoApi.exe` ancora vivo.
 > `Stop-Process -Name GecoApi` e ripeti.
 

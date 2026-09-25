@@ -182,7 +182,38 @@ app.MapPost("/api/auth/login", async (LoginRequest req) =>
     }
 
     var gruppi = (await multi.ReadAsync()).Select(g => (string)g.Gruppo).ToList();
+    return Results.Ok(await RispostaAccesso(cn, (object)prima, gruppi));
+});
 
+// Accesso di sviluppo, solo sul PC di sviluppo: entra senza password con l'utente scritto in
+// api/appsettings.Development.json ("DevLogin": { "Utente": "..." }), per le prove automatiche (browser
+// integrato, Playwright) senza maneggiare password o token. Risponde solo se l'ambiente e' Development, la chiave e'
+// valorizzata e la chiamata arriva dalla macchina stessa (anche tramite il proxy di Vite): in produzione non esiste,
+// perche' appsettings.Development.json non va in git ne' nelle release. L'utente dev'essere attivo e con password,
+// come per il login normale; non si aggiornano ultimo accesso ne' tentativi.
+app.MapPost("/api/auth/dev-login", async (HttpContext ctx) =>
+{
+    var utenteDev = app.Configuration["DevLogin:Utente"];
+    if (!app.Environment.IsDevelopment() || string.IsNullOrWhiteSpace(utenteDev)
+        || ctx.Connection.RemoteIpAddress is not { } ip || !System.Net.IPAddress.IsLoopback(ip))
+        return Results.NotFound();
+    await using var cn = Operatore.Connessione(ConnString());
+    var prima = await cn.QueryFirstOrDefaultAsync(@"
+        SELECT u.IdUtente, u.Utente, u.Nome, u.Email, u.IdRuolo, r.Ruolo, u.IdFiliale, u.IdCliente
+        FROM UTENTI u LEFT JOIN RUOLI r ON r.IdRuolo = u.IdRuolo
+        WHERE u.Utente = @utente AND (u.DataFine IS NULL OR u.DataFine >= CONVERT(date, GETDATE())) AND ISNULL(u.Pass, '') <> ''",
+        new { utente = utenteDev.Trim() });
+    if (prima is null)
+        return Results.Json(new { errore = $"Utente di sviluppo '{utenteDev}' inesistente, disattivato o senza password" }, statusCode: StatusCodes.Status401Unauthorized);
+    var gruppi = (await cn.QueryAsync<string>(
+        "SELECT g.Gruppo FROM UTENTI_GRUPPI ug JOIN GRUPPI g ON g.IdGruppo = ug.IdGruppo WHERE ug.IdUtente = @id",
+        new { id = (int)prima.IdUtente })).ToList();
+    return Results.Ok(await RispostaAccesso(cn, (object)prima, gruppi));
+});
+
+// token e profilo dopo un accesso riuscito (login normale o di sviluppo)
+async Task<object> RispostaAccesso(SqlConnection cn, dynamic prima, List<string> gruppi)
+{
     // variabile globale @[IdAzienda]: azienda della filiale dell'utente
     int? idAzienda = null;
     if ((int?)prima.IdFiliale is int idFil)
@@ -202,7 +233,7 @@ app.MapPost("/api/auth/login", async (LoginRequest req) =>
     };
     claims.AddRange(gruppi.Select(g => new Claim("gruppo", g)));
 
-    return Results.Ok(new
+    return new
     {
         token = EmettiToken(claims),
         utente = new
@@ -219,8 +250,8 @@ app.MapPost("/api/auth/login", async (LoginRequest req) =>
             filiale = await InfoFiliale(cn, (int?)prima.IdFiliale),
             gruppi
         }
-    });
-});
+    };
+}
 
 // Filiali tra cui l'utente puo' scegliere (SP legacy ElencoFiliali, tipo 3)
 app.MapGet("/api/me/filiali", async (ClaimsPrincipal user) =>

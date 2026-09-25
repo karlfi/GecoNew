@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import InputText from 'primevue/inputtext'
@@ -13,6 +13,15 @@ const utente = ref('')
 const password = ref('')
 const errore = ref('')
 const inCorso = ref(false)
+
+// in sviluppo (npm run dev) si entra da soli con l'utente di prova, se l'API locale ne ha uno (DevLogin:Utente)
+onMounted(async () => {
+  if (!import.meta.env.DEV) return
+  try {
+    await auth.accessoSviluppo()
+    router.push('/')
+  } catch { /* nessun accesso di sviluppo: login normale */ }
+})
 
 async function accedi() {
   errore.value = ''
