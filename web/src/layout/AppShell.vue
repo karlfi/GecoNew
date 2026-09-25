@@ -40,6 +40,7 @@ import GiriMappaView from '../views/GiriMappaView.vue'
 import SpedizioniGiornoView from '../views/SpedizioniGiornoView.vue'
 import PianoGiornataView from '../views/PianoGiornataView.vue'
 import PianificazioneAutoView from '../views/PianificazioneAutoView.vue'
+import DocumentoView from '../views/DocumentoView.vue'
 import ExportHrView from '../views/ExportHrView.vue'
 import UnilavView from '../views/UnilavView.vue'
 import StoriciView from '../views/StoriciView.vue'
@@ -338,6 +339,12 @@ const chiavePagina = computed(() =>
         <PianificazioneAutoView
           v-else-if="nav.corrente.tipo === 'pianificazione-auto'"
           :key="chiavePagina"
+        />
+        <DocumentoView
+          v-else-if="nav.corrente.tipo === 'documento'"
+          :key="chiavePagina"
+          :url="nav.corrente.url"
+          :titolo="nav.corrente.titolo"
         />
         <ExportHrView
           v-else-if="nav.corrente.tipo === 'export-hr'"

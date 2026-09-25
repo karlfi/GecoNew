@@ -274,6 +274,8 @@ export function navDaVideata(videata, parametri = '') {
 export function navDaLink(voce) {
   const link = (voce.Link ?? '').trim()
   if (!link) return null
+  // un PDF (es. /doc/Gestione_giri_guida_operatori.pdf, in web/public/doc): si legge dentro il portale
+  if (/\.pdf$/i.test(link)) return { tipo: 'documento', url: link, titolo: voce.Text ?? 'Documento' }
 
   if (link === '/dashboard') return { tipo: 'dashboard' }
   if (link === '/utenti') return { tipo: 'utenti' }
