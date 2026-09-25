@@ -5,6 +5,9 @@
 // numerati, trascinabili, con i punti intermedi cliccabili) o si crea come unione di comuni; un giro
 // esistente si modifica da qui (nome, colore, CAP e comune fissi, driver predefinito, attivo) e il
 // suo confine si ritocca trascinando i vertici o si rifa' dai comuni. Ogni modifica resta nello storico.
+// Confini che combaciano: "Allinea al giro vicino" sostituisce i tratti del confine in modifica che corrono entro N
+// metri da quello di un giro visibile con il pezzo corrispondente del suo confine (vertici compresi, con anteprima);
+// e un vertice rilasciato a pochi pixel dal confine di un giro o comune visibile ci si aggancia.
 // Flag "Attivo" (interruttore nell'elenco e nell'editor, DataFine vuota in GEO_GIRI): qui si vedono
 // tutti i giri, con il filtro; le pagine di assegnazione (Spedizioni del giorno, Piano della giornata)
 // e le stored vedono solo quelli attivi. Disattivare toglie il giro dai piani di oggi e dei giorni dopo.
@@ -28,6 +31,7 @@ import Tag from 'primevue/tag'
 import ToggleSwitch from 'primevue/toggleswitch'
 import SelectButton from 'primevue/selectbutton'
 import Message from 'primevue/message'
+import InputNumber from 'primevue/inputnumber'
 
 const toast = useToast()
 const errore = ref('')
@@ -41,6 +45,9 @@ let map = null, resizeObs = null
 let comuniLayer, giriLayer, spedizioniCluster, anteprimaLayer, disegnoLayer, intermediLayer
 const comuniDisegnati = new Map()   // idComune -> L.featureGroup
 const giriDisegnati = new Map()     // idGiro   -> L.featureGroup
+const anelliGiri = new Map()        // idGiro   -> [{ pts: [[lat,lng],...], bounds }]: per allineare e agganciare
+const anelliComuni = new Map()      // idComune -> idem (solo aggancio)
+let allineaLayer = null
 const mapEl = ref(null)
 const filiale = ref('')
 
@@ -138,6 +145,7 @@ onMounted(async () => {
     anteprimaLayer = L.layerGroup().addTo(map)
     disegnoLayer = L.layerGroup().addTo(map)
     intermediLayer = L.layerGroup().addTo(map)
+    allineaLayer = L.layerGroup().addTo(map)
     map.on('click', onMapClick)
     resizeObs = new ResizeObserver(() => map && map.invalidateSize())
     resizeObs.observe(mapEl.value)
@@ -173,14 +181,14 @@ async function ricaricaGiri() {
 async function toggleComuni() {
   const selIds = new Set(comuniSel.value.map(c => c.idComune))
   for (const [id, grp] of comuniDisegnati) {
-    if (!selIds.has(id)) { comuniLayer.removeLayer(grp); comuniDisegnati.delete(id) }
+    if (!selIds.has(id)) { comuniLayer.removeLayer(grp); comuniDisegnati.delete(id); anelliComuni.delete(id) }
   }
   for (const com of comuniSel.value) {
     if (comuniDisegnati.has(com.idComune)) continue
     try {
       const { data } = await api.get('/giri/shape', { params: { idComune: com.idComune } })
       const grp = disegnaShape(data.wkt, '#223344', 0.12, com.denominazione)
-      if (grp) { comuniLayer.addLayer(grp); comuniDisegnati.set(com.idComune, grp) }
+      if (grp) { comuniLayer.addLayer(grp); comuniDisegnati.set(com.idComune, grp); anelliComuni.set(com.idComune, anelli(data.wkt)) }
     } catch { /* comune senza geometria */ }
   }
 }
@@ -189,7 +197,7 @@ async function toggleComuni() {
 async function toggleGiri() {
   const selIds = new Set(giriSel.value.map(g => g.idGiro))
   for (const [id, grp] of giriDisegnati) {
-    if (!selIds.has(id)) { giriLayer.removeLayer(grp); giriDisegnati.delete(id) }
+    if (!selIds.has(id)) { giriLayer.removeLayer(grp); giriDisegnati.delete(id); anelliGiri.delete(id) }
   }
   for (const g of giriSel.value) {
     if (giriDisegnati.has(g.idGiro)) continue
@@ -201,13 +209,13 @@ async function disegnaGiro(g) {
     const { data } = await api.get('/giri/shape', { params: { idGiro: g.idGiro } })
     const grp = disegnaShape(data.wkt, g.colore || '#3388ff', g.attivo ? 0.25 : 0.12,
       `${g.giro}${g.attivo ? '' : ' · non attivo'}${g.nSped ? ' · ' + g.nSped + ' sped.' : ''}`, !g.attivo)
-    if (grp) { giriLayer.addLayer(grp); giriDisegnati.set(g.idGiro, grp) }
+    if (grp) { giriLayer.addLayer(grp); giriDisegnati.set(g.idGiro, grp); anelliGiri.set(g.idGiro, anelli(data.wkt)) }
     return grp
   } catch { return null }
 }
 async function ridisegnaGiro(idGiro) {
   const grp = giriDisegnati.get(idGiro)
-  if (grp) { giriLayer.removeLayer(grp); giriDisegnati.delete(idGiro) }
+  if (grp) { giriLayer.removeLayer(grp); giriDisegnati.delete(idGiro); anelliGiri.delete(idGiro) }
   const g = giri.value.find(x => x.idGiro === idGiro)
   if (g && giriSel.value.some(x => x.idGiro === idGiro)) await disegnaGiro(g)
 }
@@ -293,7 +301,7 @@ function onRefClick(e) {
 function creaMarker(v, n) {
   const marker = L.marker([v.lat, v.lng], { draggable: true, icon: iconaNum(n) })
   marker.on('drag', ev => { const ll = ev.target.getLatLng(); v.lat = ll.lat; v.lng = ll.lng; ridisegnaBozza(false) })
-  marker.on('dragend', () => { ridisegnaBozza(true); aggiornaAnteprima() })
+  marker.on('dragend', () => { agganciaVertice(v); ridisegnaBozza(true); aggiornaAnteprima(); if (vicino.value) calcolaAllineamento() })
   marker.on('contextmenu', ev => { L.DomEvent.stopPropagation(ev); rimuoviVertice(v) })
   marker.bindTooltip('trascina per spostare, tasto destro per togliere', { direction: 'top', offset: [0, -10] })
   v.marker = marker
@@ -355,6 +363,158 @@ function svuotaDisegno() {
   ridisegnaBozza(false); aggiornaAnteprima()
 }
 function centraSuVertice(v) { map.panTo([v.lat, v.lng]) }
+
+// --- confini che combaciano: aggancio dei vertici e allineamento al giro vicino ---
+// anelli di una geometria WKT senza il punto di chiusura ripetuto, con il loro riquadro
+function anelli(wkt) {
+  return wktToRings(wkt).map(r => {
+    const pts = r.length > 1 && r[0][0] === r[r.length - 1][0] && r[0][1] === r[r.length - 1][1] ? r.slice(0, -1) : r
+    return { pts, bounds: L.latLngBounds(pts) }
+  })
+}
+const aggancio = ref(true)            // un vertice rilasciato vicino al confine di un giro/comune visibile ci si attacca
+const SOGLIA_AGGANCIO = 14            // pixel
+function agganciaVertice(v) {
+  if (!aggancio.value || !map) return
+  const pv = map.latLngToLayerPoint([v.lat, v.lng])
+  const intorno = L.latLngBounds(map.layerPointToLatLng(pv.subtract([SOGLIA_AGGANCIO, SOGLIA_AGGANCIO])),
+    map.layerPointToLatLng(pv.add([SOGLIA_AGGANCIO, SOGLIA_AGGANCIO])))
+  let vertice = null, lato = null
+  const candidati = [...[...anelliGiri].filter(([id]) => id !== form.value.idGiro).map(([, a]) => a), ...anelliComuni.values()].flat()
+  for (const { pts, bounds } of candidati) {
+    if (!bounds.intersects(intorno)) continue
+    const px = pts.map(p => map.latLngToLayerPoint(p))
+    for (let i = 0; i < px.length; i++) {
+      const d = pv.distanceTo(px[i])
+      if (d <= SOGLIA_AGGANCIO && (!vertice || d < vertice.d)) vertice = { d, ll: pts[i] }
+      const a = px[i], b = px[(i + 1) % px.length]
+      const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy
+      const t = l2 ? Math.max(0, Math.min(1, ((pv.x - a.x) * dx + (pv.y - a.y) * dy) / l2)) : 0
+      const q = L.point(a.x + t * dx, a.y + t * dy)
+      const dq = pv.distanceTo(q)
+      if (dq <= SOGLIA_AGGANCIO && (!lato || dq < lato.d)) lato = { d: dq, q }
+    }
+  }
+  // un vertice del confine vicino vince sul punto a meta' lato: cosi' i due confini hanno gli stessi punti
+  const ll = vertice ? L.latLng(vertice.ll[0], vertice.ll[1]) : lato ? map.layerPointToLatLng(lato.q) : null
+  if (!ll) return
+  v.lat = ll.lat; v.lng = ll.lng
+  v.marker && v.marker.setLatLng(ll)
+}
+
+// allineamento: i tratti del confine in modifica entro "tolleranza" metri dal confine del giro vicino diventano il
+// pezzo corrispondente di quel confine (i suoi vertici fra le proiezioni del primo e dell'ultimo punto del tratto)
+const vicino = ref(null)
+const tolleranzaAllinea = ref(50)
+const allineamento = ref(null)        // { anello, tratti, sostituiti, aggiunti } oppure { messaggio }
+const viciniPossibili = computed(() => {
+  void bordi.value.length
+  return giriSel.value.filter(g => g.idGiro !== form.value.idGiro && anelliGiri.has(g.idGiro))
+    .map(g => ({ idGiro: g.idGiro, etichetta: `${g.giro}${puntiVicini(g.idGiro) ? ` (${puntiVicini(g.idGiro)} punti vicini)` : ''}`, n: puntiVicini(g.idGiro) }))
+    .sort((a, b) => b.n - a.n || a.etichetta.localeCompare(b.etichetta, 'it', { numeric: true }))
+})
+function metrico(lat0) {
+  const kx = 111320 * Math.cos(lat0 * Math.PI / 180), ky = 110540
+  return { xy: p => [p[1] * kx, p[0] * ky], ll: q => [q[1] / ky, q[0] / kx] }
+}
+function proiezioni(PX, RX) {
+  // per ogni punto: il punto piu' vicino dell'anello RX (chiuso), con la sua ascissa lungo l'anello
+  const cum = [0]
+  for (let i = 0; i < RX.length; i++) { const a = RX[i], b = RX[(i + 1) % RX.length]; cum.push(cum[i] + Math.hypot(b[0] - a[0], b[1] - a[1])) }
+  const proj = PX.map(p => {
+    let best = null
+    for (let i = 0; i < RX.length; i++) {
+      const a = RX[i], b = RX[(i + 1) % RX.length]
+      const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy
+      const t = l2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0
+      const x = a[0] + t * dx, y = a[1] + t * dy
+      const d = Math.hypot(p[0] - x, p[1] - y)
+      if (!best || d < best.d) best = { d, xy: [x, y], s: cum[i] + t * Math.sqrt(l2) }
+    }
+    return best
+  })
+  return { proj, cum, L: cum[RX.length] }
+}
+function puntiVicini(idGiro) {
+  const rings = anelliGiri.get(idGiro)
+  if (!rings || bordi.value.length < 3) return 0
+  const m = metrico(bordi.value[0].lat)
+  const PX = bordi.value.map(v => m.xy([v.lat, v.lng]))
+  let n = 0
+  for (const r of rings) {
+    const RX = r.pts.map(m.xy)
+    n = Math.max(n, proiezioni(PX, RX).proj.filter(p => p.d <= tolleranzaAllinea.value).length)
+  }
+  return n
+}
+function calcolaAllineamento() {
+  allineaLayer && allineaLayer.clearLayers()
+  allineamento.value = null
+  const rings = anelliGiri.get(vicino.value)
+  if (!rings || bordi.value.length < 3) return
+  const tol = tolleranzaAllinea.value || 50
+  const P = bordi.value.map(v => [v.lat, v.lng])
+  const m = metrico(P[0][0])
+  const PX = P.map(m.xy)
+  let mig = null
+  for (const r of rings) {
+    const RX = r.pts.map(m.xy)
+    const pr = proiezioni(PX, RX)
+    const n = pr.proj.filter(p => p.d <= tol).length
+    if (!mig || n > mig.n) mig = { R: r.pts, RX, ...pr, n }
+  }
+  if (!mig || !mig.n) { allineamento.value = { messaggio: `Nessun punto del confine entro ${tol} m da quello del giro scelto` }; return }
+  if (mig.n === P.length) { allineamento.value = { messaggio: 'Tutto il confine e\' vicino a quello del giro scelto: abbassa la distanza' }; return }
+  const vic = mig.proj.map(p => p.d <= tol)
+  const inizio = vic.findIndex(x => !x)
+  const ordine = P.map((_, k) => (inizio + k) % P.length)
+  const fra = (s0, lunghezza, avanti) => mig.RX.map((_, k) => k)
+    .map(k => ({ k, o: avanti ? (mig.cum[k] - s0 + mig.L) % mig.L : (s0 - mig.cum[k] + mig.L) % mig.L }))
+    .filter(x => x.o > 0.01 && x.o < lunghezza - 0.01).sort((a, b) => a.o - b.o).map(x => mig.R[x.k])
+  const nuovo = [], cambiati = []
+  let tratti = 0, sostituiti = 0, aggiunti = 0
+  for (let k = 0; k < ordine.length;) {
+    const i = ordine[k]
+    if (!vic[i]) { nuovo.push(P[i]); k++; continue }
+    let j = k
+    while (j + 1 < ordine.length && vic[ordine[j + 1]]) j++
+    const run = ordine.slice(k, j + 1)
+    const p0 = mig.proj[run[0]], p1 = mig.proj[run[run.length - 1]]
+    let tratto
+    if (run.length === 1) tratto = [m.ll(p0.xy)]
+    else {
+      let lung = 0
+      for (let q = 0; q + 1 < run.length; q++) lung += Math.hypot(PX[run[q + 1]][0] - PX[run[q]][0], PX[run[q + 1]][1] - PX[run[q]][1])
+      const avanti = (p1.s - p0.s + mig.L) % mig.L, indietro = mig.L - avanti
+      const versoAvanti = Math.abs(avanti - lung) <= Math.abs(indietro - lung)
+      tratto = [m.ll(p0.xy), ...fra(p0.s, versoAvanti ? avanti : indietro, versoAvanti), m.ll(p1.xy)]
+    }
+    tratti++; sostituiti += run.length; aggiunti += tratto.length
+    nuovo.push(...tratto); cambiati.push(tratto)
+    k = j + 1
+  }
+  // niente punti doppi (meno di mezzo metro dal precedente)
+  const anello = nuovo.filter((p, i) => {
+    const q = nuovo[(i - 1 + nuovo.length) % nuovo.length]
+    const a = m.xy(p), b = m.xy(q)
+    return i === 0 || Math.hypot(a[0] - b[0], a[1] - b[1]) > 0.5
+  })
+  allineamento.value = { anello, tratti, sostituiti, aggiunti }
+  L.polygon(anello, { color: '#111', weight: 2, dashArray: '4,4', fill: false }).addTo(allineaLayer)
+  for (const t of cambiati) L.polyline(t, { color: '#00c853', weight: 6, opacity: 0.75 }).addTo(allineaLayer)
+}
+function applicaAllineamento() {
+  const a = allineamento.value
+  if (!a?.anello) return
+  const nome = giri.value.find(g => g.idGiro === vicino.value)?.giro ?? ''
+  svuotaDisegno()
+  for (const [lat, lng] of a.anello) bordi.value.push({ lat, lng, marker: null })
+  bordi.value.forEach((v, i) => creaMarker(v, i + 1))
+  ridisegnaBozza(true); aggiornaAnteprima()
+  allineaLayer.clearLayers(); allineamento.value = null; vicino.value = null
+  avviso('success', 'Confine', `Allineato a ${nome}: ${a.tratti} ${a.tratti === 1 ? 'tratto' : 'tratti'}. Controlla e salva.`)
+}
+function annullaAllineamento() { allineaLayer && allineaLayer.clearLayers(); allineamento.value = null; vicino.value = null }
 
 // --- semplificazione (Douglas-Peucker) per i confini con troppi punti ---
 function semplifica(punti, tol) {
@@ -422,6 +582,7 @@ function modificaConfine() {
   ridisegnaBozza(true); aggiornaAnteprima()
 }
 function chiudiConfine() {
+  annullaAllineamento()
   svuotaDisegno()
   attivoDisegno.value = false
   if (confineInModifica.value && dettaglio.value) {
@@ -606,6 +767,27 @@ const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfi
             </template>
             <template v-else>
               <label class="chk"><Checkbox v-model="attivoDisegno" binary /> Aggiungi punti col clic sulla mappa</label>
+              <label class="chk" title="Un punto rilasciato a pochi pixel dal confine di un giro o comune visibile ci si attacca">
+                <Checkbox v-model="aggancio" binary /> Aggancia ai confini visibili</label>
+              <div class="allinea">
+                <label>Allinea al giro vicino</label>
+                <div class="riga-allinea">
+                  <Select v-model="vicino" :options="viciniPossibili" optionLabel="etichetta" optionValue="idGiro" size="small"
+                    placeholder="giro visibile sulla mappa" showClear class="vicino" @change="calcolaAllineamento" />
+                  <InputNumber v-model="tolleranzaAllinea" :min="5" :max="500" suffix=" m" size="small" inputClass="tolleranza"
+                    title="Distanza massima dal confine del giro vicino" @update:modelValue="calcolaAllineamento" />
+                </div>
+                <small v-if="!viciniPossibili.length" class="hint">Spunta nell'elenco in basso il giro vicino per vederlo sulla mappa.</small>
+                <small v-else-if="allineamento?.messaggio" class="attenzione">{{ allineamento.messaggio }}</small>
+                <template v-else-if="allineamento">
+                  <small class="hint">{{ allineamento.tratti }} {{ allineamento.tratti === 1 ? 'tratto' : 'tratti' }} (in verde):
+                    {{ allineamento.sostituiti }} punti sostituiti da {{ allineamento.aggiunti }} del confine vicino</small>
+                  <div class="riga-allinea">
+                    <Button label="Applica" icon="pi pi-check" size="small" severity="success" @click="applicaAllineamento" />
+                    <Button label="Annulla" size="small" text @click="annullaAllineamento" />
+                  </div>
+                </template>
+              </div>
               <Button label="Annulla modifica confine" icon="pi pi-undo" size="small" text @click="chiudiConfine" />
             </template>
             <Button label="Sostituisci con i comuni selezionati" icon="pi pi-clone" severity="help" size="small" :disabled="!comuniSel.length" :loading="salvataggio" @click="sostituisciDaComuni" />
@@ -768,6 +950,11 @@ const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfi
   .pannello { flex: none; max-height: none; }
   .tabelle { grid-template-columns: 1fr; }
 }
+.allinea { display: flex; flex-direction: column; gap: .3rem; border: 1px dashed var(--p-surface-300); border-radius: 6px; padding: .4rem .5rem; }
+.allinea > label { font-size: .8rem; font-weight: 600; color: #555; }
+.riga-allinea { display: flex; align-items: center; gap: .4rem; }
+.vicino { flex: 1; min-width: 0; }
+:deep(.tolleranza) { width: 4.6rem; padding: .3rem .4rem; }
 </style>
 
 <style>
