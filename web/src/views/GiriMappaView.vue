@@ -50,6 +50,7 @@ const comuniDisegnati = new Map()   // idComune -> L.featureGroup
 const giriDisegnati = new Map()     // idGiro   -> L.featureGroup
 const anelliGiri = new Map()        // idGiro   -> [{ pts: [[lat,lng],...], bounds }]: per allineare e agganciare
 const anelliComuni = new Map()      // idComune -> idem (solo aggancio)
+const versioneAnelli = ref(0)       // cambia quando arriva o sparisce un confine: l'elenco dei vicini da allineare si aggiorna
 let allineaLayer = null
 const mapEl = ref(null)
 const filiale = ref('')
@@ -200,7 +201,7 @@ async function toggleComuni() {
 async function toggleGiri() {
   const selIds = new Set(giriSel.value.map(g => g.idGiro))
   for (const [id, grp] of giriDisegnati) {
-    if (!selIds.has(id)) { giriLayer.removeLayer(grp); giriDisegnati.delete(id); anelliGiri.delete(id) }
+    if (!selIds.has(id)) { giriLayer.removeLayer(grp); giriDisegnati.delete(id); anelliGiri.delete(id); versioneAnelli.value++ }
   }
   for (const g of giriSel.value) {
     if (giriDisegnati.has(g.idGiro)) continue
@@ -215,7 +216,7 @@ async function disegnaGiro(g) {
     const { data } = await api.get('/giri/shape', { params: { idGiro: g.idGiro } })
     const grp = disegnaShape(data.wkt, g.colore || '#3388ff', g.attivo ? 0.25 : 0.12,
       `${g.giro}${g.attivo ? '' : ' · non attivo'}${g.nSped ? ' · ' + g.nSped + ' sped.' : ''}`, !g.attivo)
-    if (grp) { giriLayer.addLayer(grp); giriDisegnati.set(g.idGiro, grp); anelliGiri.set(g.idGiro, anelli(data.wkt)) }
+    if (grp) { giriLayer.addLayer(grp); giriDisegnati.set(g.idGiro, grp); anelliGiri.set(g.idGiro, anelli(data.wkt)); versioneAnelli.value++ }
     return grp
   } catch { return null }
 }
@@ -426,7 +427,7 @@ const vicino = ref(null)
 const tolleranzaAllinea = ref(50)
 const allineamento = ref(null)        // { anello, tratti, sostituiti, aggiunti } oppure { messaggio }
 const viciniPossibili = computed(() => {
-  void bordi.value.length
+  void bordi.value.length; void versioneAnelli.value
   return giriSel.value.filter(g => g.idGiro !== form.value.idGiro && anelliGiri.has(g.idGiro))
     .map(g => ({ idGiro: g.idGiro, etichetta: `${g.giro}${puntiVicini(g.idGiro) ? ` (${puntiVicini(g.idGiro)} punti vicini)` : ''}`, n: puntiVicini(g.idGiro) }))
     .sort((a, b) => b.n - a.n || a.etichetta.localeCompare(b.etichetta, 'it', { numeric: true }))
