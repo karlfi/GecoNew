@@ -873,7 +873,7 @@ const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfi
                 </div>
               </template>
             </Column>
-            <Column header="" style="width: 6.2rem">
+            <Column header="" style="width: 7.8rem">
               <template #body="{ data }">
                 <div class="giro-azioni" @click.stop>
                   <ToggleSwitch :modelValue="!!data.attivo" :title="data.attivo ? 'Attivo: clic per disattivarlo' : 'Non attivo: clic per riattivarlo'"
@@ -1055,10 +1055,10 @@ const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfi
 .cap { width: 6rem; margin-left: .3rem; }
 .spazio { flex: 1; }
 
-.corpo { display: grid; grid-template-columns: 25rem minmax(0, 1fr) 31rem; gap: .75rem; flex: 1; min-height: 0; }
+.corpo { display: grid; grid-template-columns: 27rem minmax(0, 1fr) 30rem; gap: .75rem; flex: 1; min-height: 0; }
 .sinistra { display: flex; flex-direction: column; gap: .6rem; min-height: 0; min-width: 0; }
-.tab-giri { flex: 3 1 0; }
-.tab-comuni { flex: 2 1 0; }
+.tab-giri { flex: 2 1 0; }
+.tab-comuni { flex: 1 1 0; }
 .mappa { height: 100%; min-height: 440px; border: 1px solid var(--p-surface-300); border-radius: 6px; z-index: 0; }
 .pannello { border: 1px solid var(--p-surface-200); border-radius: 6px; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
 .pannello-titolo { background: #00a5cf; color: #fff; padding: .35rem .75rem; font-weight: 600; font-size: .9rem; display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
@@ -1091,17 +1091,19 @@ const etichettaCampo = { Giro: 'nome', Colore: 'colore', CAP: 'CAP fisso', Belfi
 .griglia { flex: 1; min-height: 0; }
 .giro-cella { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
 .giro-riga1 { display: flex; align-items: center; gap: .4rem; }
-.giro-riga2 { font-size: .78rem; color: #5f6b77; display: flex; flex-wrap: wrap; gap: .3rem; padding-left: 1.3rem; }
+.giro-riga2 { font-size: .78rem; color: #5f6b77; display: flex; flex-wrap: wrap; gap: 0 .3rem; padding-left: 1.2rem; }
 .giro-riga2 .pi { font-size: .7rem; }
 .senza-driver { color: #a0a8b0; font-style: italic; }
 .sped-oggi { font-size: .75rem; color: #1a7a1a; white-space: nowrap; }
-.giro-azioni { display: flex; flex-direction: column; align-items: flex-end; gap: .1rem; }
+.giro-azioni { display: flex; align-items: center; justify-content: flex-end; gap: .1rem; flex-wrap: nowrap; }
+.giro-azioni > span { display: inline-flex; flex-wrap: nowrap; }
+.tab-giri :deep(.p-datatable-tbody > tr > td) { padding-top: .3rem; padding-bottom: .3rem; }
 :deep(.tag-piccolo) { font-size: .65rem; padding: .05rem .35rem; }
 .pallino { display: inline-block; width: 13px; height: 13px; border-radius: 50%; border: 1px solid #999; flex: none; }
 :deep(.num-col) { text-align: right; }
 :deep(.riga-in-modifica) { outline: 2px solid #00a5cf; outline-offset: -2px; }
 @media (max-width: 1500px) {
-  .corpo { grid-template-columns: 21rem minmax(0, 1fr) 26rem; }
+  .corpo { grid-template-columns: 26rem minmax(0, 1fr) 24rem; }
 }
 @media (max-width: 1100px) {
   .pagina { height: auto; }
