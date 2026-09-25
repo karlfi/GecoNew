@@ -276,7 +276,8 @@ BEGIN
 END
 GO
 
--- Workflow dello schedulatore che fa il calcolo (una volta sola)
+-- Workflow dello schedulatore che fa il calcolo (una volta sola). Sul server di Ge.C.O. New (10.1.0.8) il Python va
+-- indicato nello step (il motore ha Python='python', che li' non e' nel PATH), come per GEO-01_HERE.
 IF NOT EXISTS (SELECT 1 FROM dbo.WF_Workflow WHERE Nome = 'GEO-02_HERE_TOUR')
 BEGIN
     DECLARE @wf int = NULL, @step int;
@@ -285,7 +286,7 @@ BEGIN
         @DirectoryOutput = NULL, @NomeFileLog = NULL, @NomeFileLogResult = NULL, @PausaTraStepMS = 0,
         @ApriDirectoryFinale = 0, @LoggaInizioOperazione = 1, @VariabiliGlobali = N'[]', @Attivo = 1;
     EXEC dbo.WF_usp_Step_Insert @IdWorkflow = @wf, @IdStepPadre = NULL, @Tipo = N'ESEGUIPYTHON', @NomeSezione = N'Step1_Tour', @IdStep = @step OUTPUT;
-    EXEC dbo.WF_usp_Step_UpdateParametri @IdStep = @step, @Parametri = N'{"Script": "here/here_tour.py", "TimeoutSecondi": "1800"}',
+    EXEC dbo.WF_usp_Step_UpdateParametri @IdStep = @step, @Parametri = N'{"Script": "here/here_tour.py", "TimeoutSecondi": "1800", "Python": "C:/Program Files/Python39/python.exe"}',
         @EsciSuErrore = 1, @EseguiPasso = 1, @Attivo = 1, @Tipo = N'ESEGUIPYTHON', @NomeSezione = N'Step1_Tour';
 END
 GO
