@@ -28,3 +28,18 @@ tracciato stradale (polilinea flessibile decodificata dallo script), poi scrive 
 Il workflow si crea dalla pagina Schedulatore: un solo step ESEGUIPYTHON con Parametri
 `{"Script": "here\\here_sequenza.py", "TimeoutSecondi": "900"}`, nome **GEO-01_HERE** (la pagina lo
 cerca per nome), nessuna pianificazione.
+
+`here_tour.py` (2026-09-25) serve la pagina **Pianificazione automatica** (menu Gestione Giri Filiale): divide tutte
+le spedizioni geolocalizzate della filiale nel giorno fra i driver scelti con **HERE Tour Planning v3** (problema
+asincrono: invio, attesa dello stato, soluzione). La pagina crea la richiesta con `AI_PIANO_AUTO_Richiesta`
+(`PIANO_AUTO`, `PIANO_AUTO_DRIVER`: turno, partenza/ritorno da casa o filiale, max pezzi, zone preferite) e mette in
+coda il workflow **GEO-02_HERE_TOUR** con `WF_PARAMETRI` `{"IdPianoAuto": n}`; lo script scrive driver, fermata,
+sequenza e arrivo di ogni spedizione con `AI_PIANO_AUTO_Risposta` (`PIANO_AUTO_SPED`). Come imposta il problema:
+spedizioni con le stesse coordinate = una fermata (domanda = pezzi); il giro della fermata e' il suo territorio e i
+giri abituali del driver sono territori preferiti non esclusivi (zone "ibride"); equilibrio con un tetto di pezzi
+(media + tolleranza %) e un minimo di fermate (media - tolleranza %, funzione sperimentale `minStops`); obiettivo
+`optimizeTourCount maximize` per far lavorare tutti i driver scelti. Le posizioni sospette (oltre 30 km e oltre il
+doppio del 95esimo percentile dalla filiale, quasi sempre geolocalizzate male) restano non assegnate col motivo.
+Il calcolo di 300 consegne dura 2-3 minuti; le chiamate asincrone non hanno l'intestazione `Usage`, quindi le
+transazioni HERE si stimano (fermate + driver). Tabelle e stored in `sql-nuove/PIANO_AUTO.sql`. Prova a mano:
+`here_tour.py --id N --prova [--problema file.json]`. Il workflow **GEO-02_HERE_TOUR** lo crea lo script SQL.

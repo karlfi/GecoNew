@@ -558,6 +558,7 @@ Palmari.Map(app, ConnString);
 Giri.Map(app, ConnString);
 SpedGiri.Map(app, ConnString);
 Piano.Map(app, ConnString);
+PianoAuto.Map(app, ConnString);
 Mezzi.Map(app, ConnString);
 
 // Stato di archiviazione del dipendente, modificabile dalla griglia "Elenco

@@ -290,6 +290,7 @@ export function navDaLink(voce) {
   if (link === '/giri-mappa') return { tipo: 'giri-mappa' }
   if (link === '/spedizioni-giorno') return { tipo: 'sped-giorno' }
   if (link === '/piano-giornata') return { tipo: 'piano-giornata' }
+  if (link === '/pianificazione-automatica') return { tipo: 'pianificazione-auto' }
   if (link === '/export-hr') return { tipo: 'export-hr' }
   if (link === '/presenze-ts') return { tipo: 'presenze-ts' }
   if (link === '/unilav') return { tipo: 'unilav' }

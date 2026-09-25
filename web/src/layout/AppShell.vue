@@ -39,6 +39,7 @@ import EsitiView from '../views/EsitiView.vue'
 import GiriMappaView from '../views/GiriMappaView.vue'
 import SpedizioniGiornoView from '../views/SpedizioniGiornoView.vue'
 import PianoGiornataView from '../views/PianoGiornataView.vue'
+import PianificazioneAutoView from '../views/PianificazioneAutoView.vue'
 import ExportHrView from '../views/ExportHrView.vue'
 import UnilavView from '../views/UnilavView.vue'
 import StoriciView from '../views/StoriciView.vue'
@@ -332,6 +333,10 @@ const chiavePagina = computed(() =>
         />
         <PianoGiornataView
           v-else-if="nav.corrente.tipo === 'piano-giornata'"
+          :key="chiavePagina"
+        />
+        <PianificazioneAutoView
+          v-else-if="nav.corrente.tipo === 'pianificazione-auto'"
           :key="chiavePagina"
         />
         <ExportHrView
